@@ -1,0 +1,16 @@
+# Secrets: never commit these
+.env
+
+# Virtual environment
+venv/
+
+# Saved API responses (can be large, and may contain your prompts)
+data/cache/
+
+# Python junk
+__pycache__/
+*.pyc
+
+# Editor and OS files
+.vscode/
+.DS_Store
