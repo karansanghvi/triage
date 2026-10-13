@@ -45,6 +45,8 @@ class Response:
     tokens_estimated: bool = False
     finish_reason: Optional[str] = None
     time_to_first_token_ms: Optional[float] = None   # streaming only
+    cached: bool = False             # True if this answer came from the cache
+    cache_saved_cost: float = 0.0    # on a cache hit, the reported cost we didn't pay
 
 
 def _estimate_tokens(text: str) -> int:

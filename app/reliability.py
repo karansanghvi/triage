@@ -319,8 +319,10 @@ class ReliableClient:
                 self._sleep(delay)
                 continue
 
-            self.breaker.record_success(model.provider)
-            self.breaker.record_success(_model_key(model))
+            # A cache hit says nothing about whether the provider is healthy right now
+            if not getattr(result, "cached", False):
+                self.breaker.record_success(model.provider)
+                self.breaker.record_success(_model_key(model))
             attempts.append(Attempt(model.name, model.provider, "success"))
             return result, None
 
