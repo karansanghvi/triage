@@ -1,0 +1,69 @@
+# Triage model registry
+# All prices are in US dollars per 1 million tokens.
+# input_price / output_price = what you actually pay (0 on free tiers and local models)
+# price_as = the realistic paid price, used for savings math on the dashboard
+# Tiers are ordered by price: low < medium < high
+
+models:
+  # ---------- Low tier: cheapest ----------
+  - name: ollama-llama
+    provider: ollama
+    model_id: llama3.2:3b
+    tier: low
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    price_as:
+      label: Groq gpt-oss-20b
+      input_price: 0.10
+      output_price: 0.50
+
+  - name: ollama-qwen
+    provider: ollama
+    model_id: qwen2.5:3b
+    tier: low
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    price_as:
+      label: Groq gpt-oss-20b
+      input_price: 0.10
+      output_price: 0.50
+
+  - name: groq-small
+    provider: groq
+    model_id: openai/gpt-oss-20b
+    tier: low
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    price_as:
+      label: Groq gpt-oss-20b (paid)
+      input_price: 0.10
+      output_price: 0.50
+
+  # ---------- Medium tier ----------
+  - name: groq-large
+    provider: groq
+    model_id: openai/gpt-oss-120b
+    tier: medium
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    price_as:
+      label: Groq gpt-oss-120b (paid)
+      input_price: 0.15
+      output_price: 0.75
+
+  # ---------- High tier: strongest and most expensive ----------
+  - name: gemini-flash
+    provider: gemini
+    model_id: models/gemini-3.8-flash
+    tier: high
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    price_as:
+      label: Gemini 3.8 Flash (paid)
+      input_price: 0.75
+      output_price: 3.75

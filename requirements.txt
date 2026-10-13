@@ -2,3 +2,5 @@ openai
 anthropic
 python-dotenv
 pyyaml
+pytest
+google-genai
