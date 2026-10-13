@@ -1,0 +1,24 @@
+# Triage routing and reliability settings
+
+# Fallback chains: for each tier, the models to try in order.
+# The first model is the primary; the rest are backups.
+# Each backup should be on a different provider than the one before it,
+# so a single provider outage can't take down a whole tier.
+fallback_chains:
+  low: [ollama-llama, groq-small, ollama-qwen]
+  medium: [groq-large, gemini-flash]   # backup steps UP a tier: costs more, never worse quality
+  high: [gemini-flash, groq-qwen]
+
+# Retries apply only to rate limits (429) and server errors (5xx).
+retry:
+  max_attempts: 3            # tries per model, including the first one
+  base_delay_seconds: 0.5    # first wait is up to 0.5s, then up to 1s, then 2s...
+  max_delay_seconds: 8       # never wait longer than this between tries
+
+# After this many failures in a row, skip that provider for a while.
+circuit_breaker:
+  failure_threshold: 3
+  cooldown_seconds: 60
+
+# No single call may take longer than this.
+timeout_seconds: 30

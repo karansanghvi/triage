@@ -67,3 +67,19 @@ models:
       label: Gemini 3.8 Flash (paid)
       input_price: 0.75
       output_price: 3.75
+
+  # Backup for the high tier, on a different provider than Gemini.
+  # Note: this is a Groq "preview" model, so Groq may remove it someday.
+  # On the free tier it can only handle about one request per minute: backup only.
+  - name: groq-qwen
+    provider: groq
+    model_id: qwen/qwen3.8-27b
+    tier: high
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    max_output_tokens: 800     # free tier allows only 1,000 output tokens per minute
+    price_as:
+      label: Groq Qwen3.8 27B (paid)
+      input_price: 0.80
+      output_price: 4.00

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from pathlib import Path 
+from pathlib import Path
 from typing import Optional
 
 import yaml
@@ -8,36 +8,39 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "models.yaml"
 
-VALID_PROVIDERS = ["groq", "gemini", "ollama", "openrouter", "openai", "anthropic"]
+VALID_PROVIDERS = {"groq", "gemini", "ollama", "openrouter", "openai", "anthropic"}
 VALID_TIERS = {"low", "medium", "high"}
 TOKENS_PER_MILLION = 1_000_000
 
+
 @dataclass(frozen=True)
 class PriceAs:
-    """the realisc paid price a free model stands in for"""
+    """The realistic paid price a free model stands in for."""
     label: str
-    input_price: float 
-    output_price: float 
+    input_price: float
+    output_price: float
+
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Everything Triage needs to know about a model, including its provider, pricing, and other metadata."""
-    name: str 
-    provider: str 
+    """Everything Triage needs to know about one model."""
+    name: str
+    provider: str
     model_id: str
-    tier: str 
-    input_price: float
-    output_price: float
-    avg_latency_ms: float = 0.0 
+    tier: str
+    input_price: float          # dollars per 1M input tokens (what you pay)
+    output_price: float         # dollars per 1M output tokens (what you pay)
+    avg_latency_ms: float = 0.0
     price_as: Optional[PriceAs] = None
-    
+    max_output_tokens: Optional[int] = None   # hard cap for this model, if it has a low limit
+
     def actual_cost(self, input_tokens: int, output_tokens: int) -> float:
-        """What this request really cost you"""
+        """What this request really cost you."""
         return (
             input_tokens * self.input_price + output_tokens * self.output_price
         ) / TOKENS_PER_MILLION
-    
-    def reported_cost(self, input_tokens:int, output_tokens:int) -> float:
+
+    def reported_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Realistic cost for savings math: uses price_as when there is one."""
         if self.price_as is None:
             return self.actual_cost(input_tokens, output_tokens)
@@ -46,7 +49,8 @@ class ModelConfig:
             + output_tokens * self.price_as.output_price
         ) / TOKENS_PER_MILLION
 
-# Validation helpers 
+
+# ---------- Validation helpers ----------
 
 def _require(entry: dict, field: str, where: str):
     """Get a required field, or raise a clear error."""
@@ -55,7 +59,8 @@ def _require(entry: dict, field: str, where: str):
     value = entry[field]
     if isinstance(value, str) and "REPLACE_ME" in value:
         raise ValueError(f"{where}: field '{field}' still says REPLACE_ME")
-    return value 
+    return value
+
 
 def _parse_price(value, field: str, where: str) -> float:
     """Prices must be numbers that are zero or more."""
@@ -67,6 +72,16 @@ def _parse_price(value, field: str, where: str) -> float:
     if value < 0:
         raise ValueError(f"{where}: '{field}' can't be negative")
     return float(value)
+
+
+def _parse_optional_whole_number(value, field: str, where: str) -> Optional[int]:
+    """Optional fields like max_output_tokens: a whole number above 0, or left out."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{where}: '{field}' must be a whole number above 0, got {value!r}")
+    return value
+
 
 def _parse_model(entry, index: int) -> ModelConfig:
     """Turn one YAML entry into a checked ModelConfig."""
@@ -116,7 +131,11 @@ def _parse_model(entry, index: int) -> ModelConfig:
         output_price=_parse_price(_require(entry, "output_price", where), "output_price", where),
         avg_latency_ms=_parse_price(entry.get("avg_latency_ms", 0), "avg_latency_ms", where),
         price_as=price_as,
+        max_output_tokens=_parse_optional_whole_number(
+            entry.get("max_output_tokens"), "max_output_tokens", where
+        ),
     )
+
 
 # ---------- Public functions ----------
 

@@ -12,9 +12,12 @@ def _convert_error(error: openai.APIError, provider: str) -> ProviderError:
     if isinstance(error, openai.APIConnectionError):
         return ProviderError(provider, "connection", "could not reach the provider")
     if isinstance(error, openai.APIStatusError):
-        return ProviderError(
-            provider, kind_from_status(error.status_code), error.message, error.status_code
-        )
+        kind = kind_from_status(error.status_code)
+        # Groq sends a 429 when one request is bigger than the per-minute limit.
+        # Waiting never fixes that, so treat it as a client error: no retries.
+        if kind == "rate_limit" and "request too large" in str(error.message).lower():
+            kind = "client"
+        return ProviderError(provider, kind, error.message, error.status_code)
     return ProviderError(provider, "client", str(error))
 
 
