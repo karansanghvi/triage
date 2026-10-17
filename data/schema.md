@@ -48,7 +48,7 @@ python scripts/validate_prompts.py data/seed_prompts.jsonl data/own_prompts.json
 | `fuzzy_fields` | list of strings | Optional, `field_check` only. Reference fields compared after normalizing case, whitespace, and punctuation. See below. |
 | `meta` | object | Required for `gsm8k`, `mmlu`, and `arena` records, where it traces the record back to its source row. See [Benchmark records](#benchmark-records). Optional for `own` records, with no required fields. |
 | `messy` | boolean | Optional. `true` when the input is messy: typos, informal writing, forwarded chains, or copy-paste artifacts (pasted tables, PDF headers, raw commit titles). |
-| `difficulty_guess` | string | `easy`, `medium`, `hard` |
+| `difficulty_guess` | string | `easy`, `medium`, `hard`. Benchmark records may also use `unrated`. |
 | `constraints` | list of strings | Explicit, checkable rules stated in the prompt (`"exactly 3 bullets"`, `"under 50 words"`, `"valid JSON"`). Empty list if none. |
 | `notes` | string | Short note on what makes the prompt easy or hard. For hard prompts, name the trap. |
 
@@ -134,6 +134,9 @@ Omit the field, or use an empty list, when everything is strict.
 Records with `source` set to `gsm8k`, `mmlu`, or `arena` follow every rule above, plus:
 
 - The ID is the source plus 4 digits, numbered within that source: `gsm8k_0001`, `mmlu_0001`, `arena_0001`.
+- `difficulty_guess` may be `unrated` (benchmark rows aren't hand-rated; their difficulty is measured by which
+  tier passes). Own records must use `easy`, `medium`, or `hard`.
+- The near-duplicate check only compares records from the same source.
 - A `meta` object records exactly where the prompt came from:
 
 | Field | Type | Rules |
@@ -159,7 +162,7 @@ GSM8K example:
   ],
   "reference": "42",
   "scoring": "final_answer",
-  "difficulty_guess": "medium",
+  "difficulty_guess": "unrated",
   "constraints": ["ends with a line 'Answer: <number>'"],
   "notes": "multi-step arithmetic word problem",
   "meta": {"dataset": "openai/gsm8k", "config": "main", "split": "test", "index": 117}
@@ -178,7 +181,7 @@ MMLU example:
   ],
   "reference": "B",
   "scoring": "exact_match",
-  "difficulty_guess": "hard",
+  "difficulty_guess": "unrated",
   "constraints": ["single letter only"],
   "notes": "factual recall with plausible distractors",
   "meta": {"dataset": "cais/mmlu", "config": "all", "split": "test", "index": 2045, "subject": "high_school_biology"}
@@ -206,4 +209,4 @@ These apply to `own` records. Benchmark records keep the benchmark's original wo
 - Vary domains, length, and tone. At least a third of prompts should have messy input (typos, informal writing, forwarded chains, copy-paste artifacts).
 - Keep each prompt under ~1,200 words.
 - Use invented names, emails, addresses, and order numbers only.
-- No near-duplicates (the validator warns when user content is more than 85% similar).
+- No near-duplicates (the validator warns when user content from the same source is more than 85% similar).

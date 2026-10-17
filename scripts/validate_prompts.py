@@ -29,6 +29,8 @@ META_STRING_FIELDS = ["dataset", "config", "split"]
 TASK_TYPES = ["extraction", "classification", "summarization", "qa", "reasoning", "creative"]
 SCORINGS = ["field_check", "label_match", "exact_match", "final_answer", "judge"]
 DIFFICULTIES = ["easy", "medium", "hard"]
+# Benchmark records may also be "unrated": their difficulty is measured later, not guessed.
+BENCHMARK_DIFFICULTIES = DIFFICULTIES + ["unrated"]
 ROLES = {"system", "user", "assistant"}
 
 # Which scoring methods each task type may use.
@@ -224,8 +226,9 @@ def check_record(location, record, errors, warnings):
 
     where = f"{location} ({record['id']})"
     ok = True
+    difficulties = BENCHMARK_DIFFICULTIES if record["source"] in BENCHMARK_SOURCES else DIFFICULTIES
     for field, allowed in [
-        ("task_type", TASK_TYPES), ("scoring", SCORINGS), ("difficulty_guess", DIFFICULTIES),
+        ("task_type", TASK_TYPES), ("scoring", SCORINGS), ("difficulty_guess", difficulties),
     ]:
         if record[field] not in allowed:
             errors.append(f"{where}: {field} {record[field]!r} not in {allowed}")
@@ -265,8 +268,21 @@ def user_text(record):
 
 
 def find_near_duplicates(records):
-    """Return (id_a, id_b, ratio) for pairs whose user content is too similar."""
-    texts = [(record["id"], user_text(record)) for record in records]
+    """Return (id_a, id_b, ratio) for pairs whose user content is too similar.
+
+    Only records from the same source are compared: benchmark prompts share boilerplate
+    instructions with each other, and checking across sources would only slow things down.
+    """
+    by_source = {}
+    for record in records:
+        by_source.setdefault(record["source"], []).append((record["id"], user_text(record)))
+    pairs = []
+    for texts in by_source.values():
+        pairs.extend(similar_pairs(texts))
+    return pairs
+
+
+def similar_pairs(texts):
     pairs = []
     for (id_a, text_a), (id_b, text_b) in combinations(texts, 2):
         matcher = difflib.SequenceMatcher(None, text_a, text_b)
@@ -284,13 +300,15 @@ def find_near_duplicates(records):
 def print_counts(records):
     counts = Counter((r["task_type"], r["difficulty_guess"]) for r in records)
     task_types = [t for t in TASK_TYPES if any(key[0] == t for key in counts)]
-    header = f"{'task_type':<16}" + "".join(f"{d:>8}" for d in DIFFICULTIES) + f"{'total':>8}"
+    # Only show the "unrated" column when some record uses it
+    columns = [d for d in BENCHMARK_DIFFICULTIES if d in DIFFICULTIES or any(key[1] == d for key in counts)]
+    header = f"{'task_type':<16}" + "".join(f"{d:>8}" for d in columns) + f"{'total':>8}"
     print(header)
     print("-" * len(header))
     for task_type in task_types:
-        row = [counts[(task_type, d)] for d in DIFFICULTIES]
+        row = [counts[(task_type, d)] for d in columns]
         print(f"{task_type:<16}" + "".join(f"{n:>8}" for n in row) + f"{sum(row):>8}")
-    totals = [sum(counts[(t, d)] for t in task_types) for d in DIFFICULTIES]
+    totals = [sum(counts[(t, d)] for t in task_types) for d in columns]
     print("-" * len(header))
     print(f"{'total':<16}" + "".join(f"{n:>8}" for n in totals) + f"{sum(totals):>8}")
 
