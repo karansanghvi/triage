@@ -98,7 +98,11 @@ Scoring (`app/verifier/scorers.py`, `score_final_answer`):
    allowing a minus sign, thousands commas, and decimals. Units and words around it are ignored. The two are
    compared as numbers, so `18`, `18.0`, `$18`, `18 apples`, and `about 18 in total` all match `"18"`, and
    `1,800` matches `"1800"`. If the value has no number, the record fails.
-3. **Other references** (for example a letter or a date): compared as text using the
+3. **Multiple-choice references** (a single letter `A`–`D`, used by MMLU): the first standalone capital `A`–`D`
+   in the value is graded, so `B`, `B)`, `(B)`, `B) Paris`, `**B**`, and `Option B` all count as `B` (the `B` in
+   `Bob` is not standalone). A lone lowercase letter such as `b` or `(b)` also counts. No letter means a fail.
+   Only the answer value is searched, never the reasoning above it.
+4. **Other references** (for example a date): compared as text using the
    [exact-match normalization](#exact-match-normalization) rules.
 
 Numbers must be equal; there is no tolerance, so `18.5` does not match `"18"`. Because the first number wins,

@@ -121,6 +121,51 @@ def test_parse_number(text, expected):
     assert parse_number(text) == expected
 
 
+@pytest.mark.parametrize("value", [
+    "B", "B)", "(B)", "B) Paris", "**B**", "B.", "Option B", "The answer is B", "[B]", "b", "(b).",
+])
+def test_choice_letter_forms_that_pass(value):
+    result = score_final_answer(f"Thinking it over.\nAnswer: {value}", "B")
+    assert result.passed, result.reason
+    assert result.extracted == "B"
+
+
+def test_choice_letter_on_the_next_line():
+    assert score_final_answer("**Answer:**\n\n(B) Paris", "B").passed
+
+
+def test_letters_in_the_reasoning_are_never_used():
+    # "A" in "A dog" appears before the Answer line; only the Answer value counts.
+    output = "A dog is a mammal, so option A looks tempting.\nAnswer: B"
+    assert score_final_answer(output, "B").passed
+    assert not score_final_answer(output, "A").passed
+
+
+def test_reasoning_letter_does_not_rescue_a_missing_answer_line():
+    assert not score_final_answer("A dog is a mammal. I pick B.", "B").passed
+
+
+@pytest.mark.parametrize("value, reason", [
+    ("Paris", "no A-D letter after 'Answer:'"),   # no letter at all
+    ("E", "no A-D letter after 'Answer:'"),       # outside A-D
+    ("Bob", "no A-D letter after 'Answer:'"),     # capital B inside a word isn't standalone
+])
+def test_choice_answers_without_a_letter_fail(value, reason):
+    result = score_final_answer(f"Answer: {value}", "B")
+    assert not result.passed
+    assert result.reason == reason
+
+
+@pytest.mark.parametrize("value", ["C", "C) Paris", "(D)"])
+def test_wrong_choice_letter_fails(value):
+    assert not score_final_answer(f"Answer: {value}", "B").passed
+
+
+def test_first_standalone_letter_wins():
+    # "I think C, not B": C is the first standalone A-D letter ("I" isn't A-D).
+    assert score_final_answer("Answer: I think C, not B", "C").passed
+
+
 @pytest.mark.parametrize("output, reference, passed", [
     ("Answer: B", "B", True),
     ("answer: b.", "B", True),

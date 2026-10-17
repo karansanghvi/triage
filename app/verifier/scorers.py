@@ -13,6 +13,9 @@ MARKDOWN_EDGES = " \t\r*_`"
 # A number, optionally negative, with optional thousands commas and decimals: -1,234.5 / 18 / .75
 NUMBER = re.compile(r"-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|-?\.\d+")
 
+# A standalone capital A-D: "B", "B)", "(B)", "**B**", "Option B", but not the B in "Bob"
+CHOICE_LETTER = re.compile(r"(?<![A-Za-z0-9])[A-D](?![A-Za-z0-9])")
+
 # Spaces around these characters are ignored when comparing text answers (exact-match rules)
 TIGHT_PUNCTUATION = re.compile(r"\s*([+:\-/,])\s*")
 
@@ -52,6 +55,22 @@ def parse_number(text: str) -> Optional[Decimal]:
         return None
 
 
+def is_choice_reference(reference: str) -> bool:
+    """True if the reference is a single multiple-choice letter A-D."""
+    return len(reference.strip()) == 1 and reference.strip().upper() in "ABCD"
+
+
+def extract_choice_letter(value: str) -> Optional[str]:
+    """The first standalone capital A-D in an answer value, else a lone letter like "b" or "(b)"."""
+    match = CHOICE_LETTER.search(value)
+    if match:
+        return match.group()
+    bare = value.strip(" .()[]")
+    if len(bare) == 1 and bare.upper() in "ABCD":
+        return bare.upper()
+    return None
+
+
 def reference_number(reference: str) -> Optional[Decimal]:
     """The reference as a number, if the whole reference is one number (with optional $ and commas)."""
     cleaned = reference.strip().replace("$", "")
@@ -71,12 +90,23 @@ def normalize_text(text: str) -> str:
 def score_final_answer(output: str, reference: str) -> ScoreResult:
     """Grade only the value on the model's last "Answer:" line.
 
+    Multiple-choice references (A-D) match the first standalone A-D letter in the value.
     Numeric references are compared as numbers, so "18", "18.0", "$18", and "18 apples" all match 18.
     Other references are compared as text using the exact-match normalization rules.
+    Only the answer value is looked at, never the reasoning before it.
     """
     answer = extract_final_answer(output)
     if answer is None:
         return ScoreResult(False, None, "no 'Answer:' line")
+
+    if is_choice_reference(reference):
+        letter = extract_choice_letter(answer)
+        if letter is None:
+            return ScoreResult(False, answer, "no A-D letter after 'Answer:'")
+        expected_letter = reference.strip().upper()
+        if letter == expected_letter:
+            return ScoreResult(True, letter, "letters match")
+        return ScoreResult(False, letter, f"expected {expected_letter}, got {letter}")
 
     expected = reference_number(reference)
     if expected is not None:
