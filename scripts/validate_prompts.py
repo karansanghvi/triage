@@ -27,7 +27,7 @@ SOURCES = ["own", "gsm8k", "mmlu", "arena"]
 BENCHMARK_SOURCES = [s for s in SOURCES if s != "own"]
 META_STRING_FIELDS = ["dataset", "config", "split"]
 TASK_TYPES = ["extraction", "classification", "summarization", "qa", "reasoning", "creative"]
-SCORINGS = ["field_check", "label_match", "exact_match", "judge"]
+SCORINGS = ["field_check", "label_match", "exact_match", "final_answer", "judge"]
 DIFFICULTIES = ["easy", "medium", "hard"]
 ROLES = {"system", "user", "assistant"}
 
@@ -36,8 +36,8 @@ ALLOWED_SCORING = {
     "extraction": {"field_check"},
     "classification": {"label_match"},
     "summarization": {"judge"},
-    "qa": {"exact_match", "judge"},
-    "reasoning": {"exact_match", "judge"},
+    "qa": {"exact_match", "final_answer", "judge"},
+    "reasoning": {"exact_match", "final_answer", "judge"},
     "creative": {"judge"},
 }
 
@@ -95,8 +95,13 @@ def check_reference(record, where, errors):
 
     if scoring == "judge" and reference is not None:
         errors.append(f"{where}: judge records must have reference null")
-    if scoring == "exact_match" and not (isinstance(reference, str) and reference.strip()):
-        errors.append(f"{where}: exact_match records need a non-empty string reference")
+    if scoring in ("exact_match", "final_answer") and not (isinstance(reference, str) and reference.strip()):
+        errors.append(f"{where}: {scoring} records need a non-empty string reference")
+    if scoring == "final_answer" and not any(
+        isinstance(m, dict) and m.get("role") == "user" and "Answer:" in str(m.get("content"))
+        for m in record["messages"]
+    ):
+        errors.append(f"{where}: final_answer records need a user message telling the model to end with 'Answer:'")
     if task_type == "extraction" and not isinstance(reference, dict):
         errors.append(f"{where}: extraction reference must be a JSON object")
     if task_type == "classification":

@@ -44,7 +44,7 @@ python scripts/validate_prompts.py data/seed_prompts.jsonl data/own_prompts.json
 | `task_type` | string | `extraction`, `classification`, `summarization`, `qa`, `reasoning`, `creative` |
 | `messages` | list | Non-empty. Each item is `{"role", "content"}` with role `system`, `user`, or `assistant` and non-empty content. An optional system message comes first (include one in roughly half the records). The last message is from the user. |
 | `reference` | varies | The expected answer, or `null`. See the per-type rules. |
-| `scoring` | string | `field_check`, `label_match`, `exact_match`, `judge` |
+| `scoring` | string | `field_check`, `label_match`, `exact_match`, `final_answer`, `judge` |
 | `fuzzy_fields` | list of strings | Optional, `field_check` only. Reference fields compared after normalizing case, whitespace, and punctuation. See below. |
 | `meta` | object | Required for `gsm8k`, `mmlu`, and `arena` records, where it traces the record back to its source row. See [Benchmark records](#benchmark-records). Optional for `own` records, with no required fields. |
 | `messy` | boolean | Optional. `true` when the input is messy: typos, informal writing, forwarded chains, or copy-paste artifacts (pasted tables, PDF headers, raw commit titles). |
@@ -59,11 +59,12 @@ python scripts/validate_prompts.py data/seed_prompts.jsonl data/own_prompts.json
 | extraction | `field_check` | The exact expected JSON object (a dict). Missing or ambiguous fields are `null`. |
 | classification | `label_match` | The correct label as a string. The prompt must list the allowed labels. |
 | summarization | `judge` | `null`. Use constraints for length, bullet counts, audience, and must-include points. |
-| qa | `exact_match` or `judge` | `exact_match`: one short, unambiguous answer as a string. `judge`: `null`. |
-| reasoning | `exact_match` (preferred) or `judge` | `exact_match`: the single numeric or short answer as a string. `judge` only when no exact answer is possible. |
+| qa | `exact_match`, `final_answer`, or `judge` | `exact_match` / `final_answer`: one short, unambiguous answer as a string. `judge`: `null`. |
+| reasoning | `exact_match` or `final_answer` (preferred), or `judge` | `exact_match` / `final_answer`: the single numeric or short answer as a string. `judge` only when no exact answer is possible. |
 | creative | `judge` | `null`. |
 
-In general: `exact_match` needs a non-null string reference, and `judge` always has a `null` reference.
+In general: `exact_match` and `final_answer` need a non-null string reference, and `judge` always has a `null`
+reference.
 
 ## Exact-match normalization
 
@@ -76,6 +77,32 @@ Before comparing an `exact_match` answer with its reference, both are normalized
 
 Nothing else is normalized. In particular, dates and times must still match the format the prompt asks
 for: `"2026-05-25"` does not match `"May 25, 2026"`, and `"08:50"` does not match `"8:50"`.
+
+## Final answer (final_answer scoring)
+
+For `final_answer`, the model may reason freely and then ends its response with a line `Answer: <value>`.
+Only that value is graded, so the working is never checked. A user message must tell the model to end this way
+and must contain the literal text `Answer:` (the validator checks this), for example:
+
+> Solve the problem step by step, then end with a final line in the form "Answer: <number>".
+
+Scoring (`app/verifier/scorers.py`, `score_final_answer`):
+
+1. **Find the answer.** Take the **last** occurrence of `Answer:` in the output, in any case (`answer:` and
+   `ANSWER:` count, and so does `Final Answer:`). The value is the rest of that line. If nothing is left on
+   that line (for example `**Answer:**` with the value below it), the value is the next non-empty line
+   instead; no later lines are searched. Markdown emphasis around the value is dropped (`**18**` reads as
+   `18`). If there is no `Answer:` at all, or nothing follows it, the record fails.
+2. **Numeric references** (the whole reference is one number, optionally with `$` and thousands commas, e.g.
+   `"18"`, `"-0.25"`, `"1,800"`, `"1545.00"`): remove `$` from the value and take the **first** number in it,
+   allowing a minus sign, thousands commas, and decimals. Units and words around it are ignored. The two are
+   compared as numbers, so `18`, `18.0`, `$18`, `18 apples`, and `about 18 in total` all match `"18"`, and
+   `1,800` matches `"1800"`. If the value has no number, the record fails.
+3. **Other references** (for example a letter or a date): compared as text using the
+   [exact-match normalization](#exact-match-normalization) rules.
+
+Numbers must be equal; there is no tolerance, so `18.5` does not match `"18"`. Because the first number wins,
+`Answer: 3 boxes, so 18` is graded as `3`.
 
 ## Fuzzy fields (field_check only)
 
@@ -128,12 +155,12 @@ GSM8K example:
   "source": "gsm8k",
   "task_type": "reasoning",
   "messages": [
-    {"role": "user", "content": "<GSM8K question text>\n\nGive only the final numeric answer."}
+    {"role": "user", "content": "<GSM8K question text>\n\nSolve the problem step by step, then end with a final line in the form \"Answer: <number>\"."}
   ],
   "reference": "42",
-  "scoring": "exact_match",
+  "scoring": "final_answer",
   "difficulty_guess": "medium",
-  "constraints": ["final numeric answer only"],
+  "constraints": ["ends with a line 'Answer: <number>'"],
   "notes": "multi-step arithmetic word problem",
   "meta": {"dataset": "openai/gsm8k", "config": "main", "split": "test", "index": 117}
 }
@@ -160,9 +187,8 @@ MMLU example:
 
 These examples are illustrative: the question text, answer, and index are placeholders, not real rows.
 
-**Coming next:** a `final_answer` scoring method for benchmark answers that need the final value pulled out
-of a longer response (for example GSM8K's worked solutions). It is not part of the schema yet; until it
-lands, benchmark records use the existing scoring methods.
+Benchmark questions that need working (such as GSM8K) use [`final_answer`](#final-answer-final_answer-scoring)
+scoring, so models can reason before answering.
 
 ## Difficulty
 
