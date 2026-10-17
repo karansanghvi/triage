@@ -22,7 +22,10 @@ REQUIRED_FIELDS = [
     "id", "source", "task_type", "messages", "reference",
     "scoring", "difficulty_guess", "constraints", "notes",
 ]
-OPTIONAL_FIELDS = ["fuzzy_fields", "messy"]
+OPTIONAL_FIELDS = ["fuzzy_fields", "messy", "meta"]
+SOURCES = ["own", "gsm8k", "mmlu", "arena"]
+BENCHMARK_SOURCES = [s for s in SOURCES if s != "own"]
+META_STRING_FIELDS = ["dataset", "config", "split"]
 TASK_TYPES = ["extraction", "classification", "summarization", "qa", "reasoning", "creative"]
 SCORINGS = ["field_check", "label_match", "exact_match", "judge"]
 DIFFICULTIES = ["easy", "medium", "hard"]
@@ -39,6 +42,7 @@ ALLOWED_SCORING = {
 }
 
 ID_PATTERN = re.compile(r"^own_(" + "|".join(TASK_TYPES) + r")_(\d{3})$")
+BENCHMARK_ID_PATTERN = re.compile(r"^(" + "|".join(BENCHMARK_SOURCES) + r")_(\d{4})$")
 DUPLICATE_THRESHOLD = 0.85
 MAX_WORDS = 1200
 
@@ -152,6 +156,58 @@ def check_fuzzy_fields(record, where, errors):
             errors.append(f"{where}: fuzzy field {path!r} must point to text, not numbers/booleans/objects")
 
 
+def check_id(record, where, errors):
+    source = record["source"]
+    if source not in SOURCES:
+        errors.append(f"{where}: source {source!r} not in {SOURCES}")
+        return
+    if source == "own":
+        match = ID_PATTERN.match(str(record["id"]))
+        if not match:
+            errors.append(f"{where}: id does not match own_<task_type>_<3 digits>")
+        elif match.group(1) != record["task_type"]:
+            errors.append(f"{where}: id says {match.group(1)!r} but task_type is {record['task_type']!r}")
+        return
+    match = BENCHMARK_ID_PATTERN.match(str(record["id"]))
+    if not match:
+        errors.append(f"{where}: id does not match {source}_<4 digits>")
+    elif match.group(1) != source:
+        errors.append(f"{where}: id prefix {match.group(1)!r} does not match source {source!r}")
+
+
+def check_meta(record, where, errors, warnings):
+    """meta is required for benchmark sources. Own records may have one, with no required fields."""
+    source = record["source"]
+    if "meta" not in record:
+        if source in BENCHMARK_SOURCES:
+            errors.append(f"{where}: {source} records need a meta object")
+        return
+    meta = record["meta"]
+    if not isinstance(meta, dict):
+        errors.append(f"{where}: meta must be an object")
+        return
+    if source == "own":
+        return
+    for field in META_STRING_FIELDS:
+        if field not in meta:
+            errors.append(f"{where}: meta.{field} is missing")
+        elif not (isinstance(meta[field], str) and meta[field].strip()):
+            errors.append(f"{where}: meta.{field} must be a non-empty string")
+    if "index" not in meta:
+        errors.append(f"{where}: meta.index is missing")
+    # bool is a subclass of int, so rule it out explicitly.
+    elif not isinstance(meta["index"], int) or isinstance(meta["index"], bool) or meta["index"] < 0:
+        errors.append(f"{where}: meta.index must be a non-negative integer")
+    if source == "mmlu":
+        if not (isinstance(meta.get("subject"), str) and meta["subject"].strip()):
+            errors.append(f"{where}: mmlu records need meta.subject as a non-empty string")
+    elif "subject" in meta:
+        errors.append(f"{where}: meta.subject is only allowed on mmlu records")
+    extra = sorted(set(meta) - set(META_STRING_FIELDS) - {"index", "subject"})
+    if extra:
+        warnings.append(f"{where}: unexpected meta fields {extra}")
+
+
 def check_record(location, record, errors, warnings):
     missing = [field for field in REQUIRED_FIELDS if field not in record]
     if missing:
@@ -172,14 +228,8 @@ def check_record(location, record, errors, warnings):
     if not ok:
         return False
 
-    match = ID_PATTERN.match(str(record["id"]))
-    if not match:
-        errors.append(f"{where}: id does not match own_<task_type>_<3 digits>")
-    elif match.group(1) != record["task_type"]:
-        errors.append(f"{where}: id says {match.group(1)!r} but task_type is {record['task_type']!r}")
-
-    if record["source"] != "own":
-        errors.append(f"{where}: source must be 'own'")
+    check_id(record, where, errors)
+    check_meta(record, where, errors, warnings)
     if not isinstance(record["constraints"], list) or not all(
         isinstance(c, str) and c.strip() for c in record["constraints"]
     ):

@@ -3,7 +3,9 @@
 Prompts for Phase 2 live in JSONL files (one JSON object per line):
 
 - `data/seed_prompts.jsonl`: hand-written examples that set the style.
-- `data/own_prompts.jsonl`: the generated dataset (~150 records).
+- `data/own_prompts.jsonl`: the custom dataset (162 records, seeds included).
+- Public benchmark prompts (GSM8K, MMLU, and later Arena) use the same format, with a few extra rules
+  described under [Benchmark records](#benchmark-records).
 
 Each prompt is later sent to cheap, medium, and strong models, and the outcomes
 (which tier passes) train the routing classifier.
@@ -37,13 +39,14 @@ python scripts/validate_prompts.py data/seed_prompts.jsonl data/own_prompts.json
 
 | Field | Type | Rules |
 |---|---|---|
-| `id` | string | `own_<task_type>_<3 digits>`, unique. The task type in the ID must match `task_type`. |
-| `source` | string | `"own"` for prompts written for this project. |
+| `id` | string | Unique. Own records: `own_<task_type>_<3 digits>`, and the task type in the ID must match `task_type`. Benchmark records: `<source>_<4 digits>` (`gsm8k_0001`, `mmlu_0001`, `arena_0001`), and the prefix must match `source`. |
+| `source` | string | `own` for prompts written for this project; `gsm8k`, `mmlu`, or `arena` for public benchmark prompts. |
 | `task_type` | string | `extraction`, `classification`, `summarization`, `qa`, `reasoning`, `creative` |
 | `messages` | list | Non-empty. Each item is `{"role", "content"}` with role `system`, `user`, or `assistant` and non-empty content. An optional system message comes first (include one in roughly half the records). The last message is from the user. |
 | `reference` | varies | The expected answer, or `null`. See the per-type rules. |
 | `scoring` | string | `field_check`, `label_match`, `exact_match`, `judge` |
 | `fuzzy_fields` | list of strings | Optional, `field_check` only. Reference fields compared after normalizing case, whitespace, and punctuation. See below. |
+| `meta` | object | Required for `gsm8k`, `mmlu`, and `arena` records, where it traces the record back to its source row. See [Benchmark records](#benchmark-records). Optional for `own` records, with no required fields. |
 | `messy` | boolean | Optional. `true` when the input is messy: typos, informal writing, forwarded chains, or copy-paste artifacts (pasted tables, PDF headers, raw commit titles). |
 | `difficulty_guess` | string | `easy`, `medium`, `hard` |
 | `constraints` | list of strings | Explicit, checkable rules stated in the prompt (`"exactly 3 bullets"`, `"under 50 words"`, `"valid JSON"`). Empty list if none. |
@@ -99,6 +102,68 @@ When a fuzzy field is a list of strings, it is compared as an unordered set afte
 Every path must exist in the reference and point to a string (or `null`), or to a list of strings.
 Omit the field, or use an empty list, when everything is strict.
 
+## Benchmark records
+
+Records with `source` set to `gsm8k`, `mmlu`, or `arena` follow every rule above, plus:
+
+- The ID is the source plus 4 digits, numbered within that source: `gsm8k_0001`, `mmlu_0001`, `arena_0001`.
+- A `meta` object records exactly where the prompt came from:
+
+| Field | Type | Rules |
+|---|---|---|
+| `dataset` | string | Hugging Face dataset name, e.g. `"openai/gsm8k"`, `"cais/mmlu"`. |
+| `config` | string | Dataset config, e.g. `"main"` for GSM8K. |
+| `split` | string | Split the row came from, e.g. `"test"`. |
+| `index` | integer | The row's original position in that split (0-based, non-negative). |
+| `subject` | string | MMLU only, and required there (e.g. `"high_school_biology"`). Not allowed on other sources. |
+
+These rules apply only to benchmark sources. An `own` record may include `meta` for its own notes; it must be an
+object, but no fields are required.
+
+GSM8K example:
+
+```json
+{
+  "id": "gsm8k_0001",
+  "source": "gsm8k",
+  "task_type": "reasoning",
+  "messages": [
+    {"role": "user", "content": "<GSM8K question text>\n\nGive only the final numeric answer."}
+  ],
+  "reference": "42",
+  "scoring": "exact_match",
+  "difficulty_guess": "medium",
+  "constraints": ["final numeric answer only"],
+  "notes": "multi-step arithmetic word problem",
+  "meta": {"dataset": "openai/gsm8k", "config": "main", "split": "test", "index": 117}
+}
+```
+
+MMLU example:
+
+```json
+{
+  "id": "mmlu_0001",
+  "source": "mmlu",
+  "task_type": "qa",
+  "messages": [
+    {"role": "user", "content": "<MMLU question text>\n\nA. ...\nB. ...\nC. ...\nD. ...\n\nAnswer with the letter only."}
+  ],
+  "reference": "B",
+  "scoring": "exact_match",
+  "difficulty_guess": "hard",
+  "constraints": ["single letter only"],
+  "notes": "factual recall with plausible distractors",
+  "meta": {"dataset": "cais/mmlu", "config": "all", "split": "test", "index": 2045, "subject": "high_school_biology"}
+}
+```
+
+These examples are illustrative: the question text, answer, and index are placeholders, not real rows.
+
+**Coming next:** a `final_answer` scoring method for benchmark answers that need the final value pulled out
+of a longer response (for example GSM8K's worked solutions). It is not part of the schema yet; until it
+lands, benchmark records use the existing scoring methods.
+
 ## Difficulty
 
 About 8 easy, 9 medium, and 8 hard per batch of 25.
@@ -108,6 +173,8 @@ About 8 easy, 9 medium, and 8 hard per batch of 25.
 - **Hard:** a specific trap that small models tend to fail, such as nested or multi-entity JSON, missing fields that must be `null`, mixed date or currency formats, distractor details, corrections later in the input, multi-step reasoning, or strict formatting combined with content rules. Describe the trap in `notes`.
 
 ## Content rules
+
+These apply to `own` records. Benchmark records keep the benchmark's original wording.
 
 - Write prompts like real app requests (an instruction plus pasted content), not quiz questions.
 - Vary domains, length, and tone. At least a third of prompts should have messy input (typos, informal writing, forwarded chains, copy-paste artifacts).
