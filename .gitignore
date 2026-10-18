@@ -18,4 +18,3 @@ __pycache__/
 data/benchmarks/arena_candidates.jsonl
 data/benchmarks/arena_review.txt
 data/benchmarks/arena_excluded.jsonl
-data/benchmarks/arena_marks.txt

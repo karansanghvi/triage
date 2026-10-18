@@ -1,0 +1,142 @@
+# Arena review marks
+#
+# Review data/benchmarks/arena_review.txt and add one line per change below, using the
+# candidate number shown there (#001 to #300):
+#
+#   131 drop          remove candidate 131
+#   261 open_ended    keep candidate 261 but change its task_type
+#
+# Allowed task types: extraction, classification, summarization, qa, reasoning, creative,
+# coding, open_ended. Candidates with no line keep their suggested task_type.
+# One change per candidate. Blank lines and anything after "#" are ignored, so you can
+# add a note:  42 drop  # asks for a PDF
+#
+# After this, the final 200 are drawn at random (seed 42) from the candidates that weren't
+# dropped and renumbered arena_0001 to arena_0200. At least 200 must remain.
+#
+# Labeling rules used for this pass:
+#   coding     = writing, explaining or debugging code, including shell/CLI command requests
+#   qa         = factual or explanatory questions, including tech questions with no code asked for
+#   open_ended = advice, opinions, recommendations, predictions, "best X" questions
+#   creative   = generating text: stories, names, prompts, talking points, copy, rewrites
+
+001 creative      # TikTok script, not code
+004 qa            # topic question, no code
+006 open_ended    # study plan, not code
+010 drop          # mental-health crisis message (paranoia, stopping medication)
+012 qa            # laptop battery question, no code
+016 qa            # asks which services exist
+018 open_ended    # suggestions of names
+024 open_ended    # business valuation advice, not computable from the prompt
+026 qa            # how-to question, no code
+027 drop          # sexual content
+031 open_ended    # market prediction, no computable answer
+032 creative      # resume writing
+036 drop          # nonsense
+040 open_ended    # opinion on a slogan
+041 coding        # relational table example
+044 open_ended    # opinion
+045 qa            # factual list
+048 qa            # factual question
+051 drop          # reverse-engineering anti-scraping protections
+054 open_ended    # thought experiment / ethics, not a story
+057 drop          # unclear, likely sexual slang
+058 open_ended    # trivial, any number is acceptable
+059 drop          # Italian
+061 classification # fallacious or valid, plus naming the fallacy
+062 qa            # explain TDD in simple English, no code
+067 drop          # instructions in Japanese
+070 qa            # how a website feature works
+073 drop          # instructions in Japanese
+074 qa            # factual lookup
+080 open_ended    # speculative question, not creative writing
+082 drop          # instruction in Vietnamese
+083 open_ended    # "best software" recommendation
+088 qa            # explanatory
+092 drop          # code pasted with no instruction
+094 open_ended    # opinion
+096 drop          # instruction in Chinese
+099 drop          # requires browsing and checking links
+100 drop          # Polish
+102 creative      # write a recipe
+105 open_ended    # speculative prediction
+106 qa            # explanatory comparison
+107 creative      # write an image-generation prompt
+110 open_ended    # design advice, not math
+111 drop          # abuse-adjacent (empty card for free trials)
+112 qa            # identify a game
+116 qa            # language pros and cons, no code
+117 qa            # history/factual, not creative writing
+119 open_ended    # career prediction
+120 open_ended    # "best" recommendation
+121 open_ended    # open-ended math discussion
+124 creative      # generate interview questions
+126 open_ended    # writing feedback
+129 qa            # photo how-to, no code
+134 creative      # write talking points
+137 qa            # airport code lookup, not programming
+138 creative      # write a question
+139 qa            # explain a formula
+141 creative      # ASCII art
+143 open_ended    # recommendations, not summarization
+144 qa            # product comparison, no code
+147 drop          # unclear trading-prediction request
+151 qa            # meaning of a Norwegian word
+155 drop          # requires live search for Instagram accounts
+156 creative      # write a table of contents
+158 open_ended    # product recommendation
+163 drop          # image generation request
+164 open_ended    # usage suggestions
+167 qa            # trends question, no code
+172 coding        # explain a YAML expression
+173 drop          # Polish
+174 drop          # unclear request
+181 drop          # depends on content not provided
+182 reasoning     # constraint puzzle
+186 coding        # Simulink implementation
+187 qa            # explanatory, no code
+188 drop          # requires browsing for latest papers and links
+191 reasoning     # physics calculation
+194 creative      # write an image prompt
+195 drop          # asks for pictures
+199 drop          # asks for a PDF file
+201 qa            # regulatory lookup
+203 drop          # image prompt involving a schoolgirl
+208 drop          # nonsense
+213 creative      # write an album review
+217 qa            # factual electrical question
+218 creative      # business name ideas
+223 open_ended    # financial strategy advice
+225 drop          # instruction in Polish
+227 qa            # factual lookup
+228 qa            # prompting question, no code
+231 drop          # depends on earlier context
+232 qa            # accounting how-to, no code
+238 qa            # explanatory, no code
+241 drop          # asks to reproduce a copyrighted recipe
+249 drop          # instruction in Polish
+252 open_ended    # "best AI model" opinion
+253 drop          # Polish
+254 open_ended    # ethics dilemma
+255 creative      # write a response in a persona
+258 open_ended    # model recommendation for hardware
+259 qa            # regulatory requirements lookup
+263 drop          # video generation prompt
+265 qa            # explanatory
+266 open_ended    # migration planning advice
+268 open_ended    # product recommendation
+271 creative      # write feedback bullet points
+273 summarization # shorten text to half, keep the message
+274 open_ended    # advice
+276 qa            # multiple-choice CS question
+277 open_ended    # speculative comparison
+283 drop          # sexual content
+285 qa            # explain a math property
+286 drop          # Russian
+289 coding        # modify a Python script
+291 drop          # instruction in Polish
+293 reasoning     # letter counting
+294 drop          # one-sided political persuasion
+295 drop          # jailbreak, asks for an API key
+299 open_ended    # opinion
+300 qa            # how to open a file type
