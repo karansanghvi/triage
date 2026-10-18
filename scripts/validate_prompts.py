@@ -26,7 +26,10 @@ OPTIONAL_FIELDS = ["fuzzy_fields", "messy", "meta"]
 SOURCES = ["own", "gsm8k", "mmlu", "arena"]
 BENCHMARK_SOURCES = [s for s in SOURCES if s != "own"]
 META_STRING_FIELDS = ["dataset", "config", "split"]
-TASK_TYPES = ["extraction", "classification", "summarization", "qa", "reasoning", "creative"]
+ARENA_META_FIELDS = ["is_code", "category_tag"]  # optional, arena only
+TASK_TYPES = [
+    "extraction", "classification", "summarization", "qa", "reasoning", "creative", "coding", "open_ended",
+]
 SCORINGS = ["field_check", "label_match", "exact_match", "final_answer", "judge"]
 DIFFICULTIES = ["easy", "medium", "hard"]
 # Benchmark records may also be "unrated": their difficulty is measured later, not guessed.
@@ -41,6 +44,8 @@ ALLOWED_SCORING = {
     "qa": {"exact_match", "final_answer", "judge"},
     "reasoning": {"exact_match", "final_answer", "judge"},
     "creative": {"judge"},
+    "coding": {"judge"},
+    "open_ended": {"judge"},
 }
 
 ID_PATTERN = re.compile(r"^own_(" + "|".join(TASK_TYPES) + r")_(\d{3})$")
@@ -210,7 +215,17 @@ def check_meta(record, where, errors, warnings):
             errors.append(f"{where}: mmlu records need meta.subject as a non-empty string")
     elif "subject" in meta:
         errors.append(f"{where}: meta.subject is only allowed on mmlu records")
-    extra = sorted(set(meta) - set(META_STRING_FIELDS) - {"index", "subject"})
+    # Arena rows may carry the dataset's own tags along
+    if source == "arena":
+        if "is_code" in meta and not isinstance(meta["is_code"], bool):
+            errors.append(f"{where}: meta.is_code must be true or false")
+        if "category_tag" in meta and not isinstance(meta["category_tag"], dict):
+            errors.append(f"{where}: meta.category_tag must be an object")
+    else:
+        for field in ARENA_META_FIELDS:
+            if field in meta:
+                errors.append(f"{where}: meta.{field} is only allowed on arena records")
+    extra = sorted(set(meta) - set(META_STRING_FIELDS) - {"index", "subject"} - set(ARENA_META_FIELDS))
     if extra:
         warnings.append(f"{where}: unexpected meta fields {extra}")
 

@@ -41,13 +41,13 @@ python scripts/validate_prompts.py data/seed_prompts.jsonl data/own_prompts.json
 |---|---|---|
 | `id` | string | Unique. Own records: `own_<task_type>_<3 digits>`, and the task type in the ID must match `task_type`. Benchmark records: `<source>_<4 digits>` (`gsm8k_0001`, `mmlu_0001`, `arena_0001`), and the prefix must match `source`. |
 | `source` | string | `own` for prompts written for this project; `gsm8k`, `mmlu`, or `arena` for public benchmark prompts. |
-| `task_type` | string | `extraction`, `classification`, `summarization`, `qa`, `reasoning`, `creative` |
+| `task_type` | string | `extraction`, `classification`, `summarization`, `qa`, `reasoning`, `creative`, `coding`, `open_ended` |
 | `messages` | list | Non-empty. Each item is `{"role", "content"}` with role `system`, `user`, or `assistant` and non-empty content. An optional system message comes first (include one in roughly half the records). The last message is from the user. |
 | `reference` | varies | The expected answer, or `null`. See the per-type rules. |
 | `scoring` | string | `field_check`, `label_match`, `exact_match`, `final_answer`, `judge` |
 | `fuzzy_fields` | list of strings | Optional, `field_check` only. Reference fields compared after normalizing case, whitespace, and punctuation. See below. |
 | `meta` | object | Required for `gsm8k`, `mmlu`, and `arena` records, where it traces the record back to its source row. See [Benchmark records](#benchmark-records). Optional for `own` records, with no required fields. |
-| `messy` | boolean | Optional. `true` when the input is messy: typos, informal writing, forwarded chains, or copy-paste artifacts (pasted tables, PDF headers, raw commit titles). |
+| `messy` | boolean | Optional. `true` when the input is messy: typos, informal writing, forwarded chains, or copy-paste artifacts (pasted tables, PDF headers, raw commit titles). Left unset on `arena` records. |
 | `difficulty_guess` | string | `easy`, `medium`, `hard`. Benchmark records may also use `unrated`. |
 | `constraints` | list of strings | Explicit, checkable rules stated in the prompt (`"exactly 3 bullets"`, `"under 50 words"`, `"valid JSON"`). Empty list if none. |
 | `notes` | string | Short note on what makes the prompt easy or hard. For hard prompts, name the trap. |
@@ -62,6 +62,8 @@ python scripts/validate_prompts.py data/seed_prompts.jsonl data/own_prompts.json
 | qa | `exact_match`, `final_answer`, or `judge` | `exact_match` / `final_answer`: one short, unambiguous answer as a string. `judge`: `null`. |
 | reasoning | `exact_match` or `final_answer` (preferred), or `judge` | `exact_match` / `final_answer`: the single numeric or short answer as a string. `judge` only when no exact answer is possible. |
 | creative | `judge` | `null`. |
+| coding | `judge` | `null`. Writing, explaining, or debugging code. |
+| open_ended | `judge` | `null`. Advice, opinions, recommendations, or casual conversation with no single correct answer. |
 
 In general: `exact_match` and `final_answer` need a non-null string reference, and `judge` always has a `null`
 reference.
@@ -149,7 +151,9 @@ Records with `source` set to `gsm8k`, `mmlu`, or `arena` follow every rule above
 | `config` | string | Dataset config, e.g. `"main"` for GSM8K. |
 | `split` | string | Split the row came from, e.g. `"test"`. |
 | `index` | integer | The row's original position in that split (0-based, non-negative). |
-| `subject` | string | MMLU only, and required there (e.g. `"high_school_biology"`). Not allowed on other sources. |
+| `subject` | string | MMLU only, and required there (e.g. `"high_school_biology"`). Not allowed on `gsm8k` or `arena`. |
+| `is_code` | boolean | Arena only, optional: the dataset's own `is_code` flag. Not allowed on `gsm8k` or `mmlu`. |
+| `category_tag` | object | Arena only, optional: the dataset's own `category_tag` annotations, copied as-is. Not allowed on `gsm8k` or `mmlu`. |
 
 These rules apply only to benchmark sources. An `own` record may include `meta` for its own notes; it must be an
 object, but no fields are required.
