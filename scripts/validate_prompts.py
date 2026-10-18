@@ -47,6 +47,8 @@ ALLOWED_SCORING = {
     "coding": {"judge"},
     "open_ended": {"judge"},
 }
+# Arena prompts have no reference answers, so these task types may also be judged there.
+ARENA_JUDGE_TASK_TYPES = {"classification", "extraction"}
 
 ID_PATTERN = re.compile(r"^own_(" + "|".join(TASK_TYPES) + r")_(\d{3})$")
 BENCHMARK_ID_PATTERN = re.compile(r"^(" + "|".join(BENCHMARK_SOURCES) + r")_(\d{4})$")
@@ -97,8 +99,13 @@ def check_reference(record, where, errors):
     scoring = record["scoring"]
     reference = record["reference"]
 
-    if scoring not in ALLOWED_SCORING.get(task_type, set()):
+    allowed = set(ALLOWED_SCORING.get(task_type, set()))
+    if record["source"] == "arena" and task_type in ARENA_JUDGE_TASK_TYPES:
+        allowed.add("judge")
+    if scoring not in allowed:
         errors.append(f"{where}: {task_type} records cannot use scoring {scoring!r}")
+    # A judged arena record has no reference, so the type-specific reference checks don't apply.
+    arena_judged = scoring == "judge" and record["source"] == "arena"
 
     if scoring == "judge" and reference is not None:
         errors.append(f"{where}: judge records must have reference null")
@@ -109,9 +116,9 @@ def check_reference(record, where, errors):
         for m in record["messages"]
     ):
         errors.append(f"{where}: final_answer records need a user message telling the model to end with 'Answer:'")
-    if task_type == "extraction" and not isinstance(reference, dict):
+    if task_type == "extraction" and not arena_judged and not isinstance(reference, dict):
         errors.append(f"{where}: extraction reference must be a JSON object")
-    if task_type == "classification":
+    if task_type == "classification" and not arena_judged:
         if not (isinstance(reference, str) and reference.strip()):
             errors.append(f"{where}: classification reference must be a non-empty string")
         else:

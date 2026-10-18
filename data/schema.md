@@ -56,8 +56,8 @@ python scripts/validate_prompts.py data/seed_prompts.jsonl data/own_prompts.json
 
 | task_type | scoring | reference |
 |---|---|---|
-| extraction | `field_check` | The exact expected JSON object (a dict). Missing or ambiguous fields are `null`. |
-| classification | `label_match` | The correct label as a string. The prompt must list the allowed labels. |
+| extraction | `field_check` (`judge` allowed for `arena`) | The exact expected JSON object (a dict). Missing or ambiguous fields are `null`. Arena records judged instead have reference `null`. |
+| classification | `label_match` (`judge` allowed for `arena`) | The correct label as a string. The prompt must list the allowed labels. Arena records judged instead have reference `null`. |
 | summarization | `judge` | `null`. Use constraints for length, bullet counts, audience, and must-include points. |
 | qa | `exact_match`, `final_answer`, or `judge` | `exact_match` / `final_answer`: one short, unambiguous answer as a string. `judge`: `null`. |
 | reasoning | `exact_match` or `final_answer` (preferred), or `judge` | `exact_match` / `final_answer`: the single numeric or short answer as a string. `judge` only when no exact answer is possible. |
@@ -143,6 +143,8 @@ Records with `source` set to `gsm8k`, `mmlu`, or `arena` follow every rule above
 - `difficulty_guess` may be `unrated` (benchmark rows aren't hand-rated; their difficulty is measured by which
   tier passes). Own records must use `easy`, `medium`, or `hard`.
 - The near-duplicate check only compares records from the same source.
+- Arena prompts come with no reference answers, so `arena` records of type `classification` or `extraction` may
+  use `judge` scoring with a `null` reference. Own records keep the stricter rules.
 - A `meta` object records exactly where the prompt came from:
 
 | Field | Type | Rules |
