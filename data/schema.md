@@ -4,8 +4,10 @@ Prompts for Phase 2 live in JSONL files (one JSON object per line):
 
 - `data/seed_prompts.jsonl`: hand-written examples that set the style.
 - `data/own_prompts.jsonl`: the custom dataset (162 records, seeds included).
-- Public benchmark prompts (GSM8K, MMLU, and later Arena) use the same format, with a few extra rules
-  described under [Benchmark records](#benchmark-records).
+- `data/benchmarks/{gsm8k,mmlu,arena}.jsonl`: public benchmark prompts, built by `python -m eval.benchmarks`.
+  They use the same format, with a few extra rules described under [Benchmark records](#benchmark-records).
+- `data/prompts.jsonl`: everything above combined (own, then GSM8K, MMLU, Arena), records unchanged. Rebuild it
+  with `python -m eval.benchmarks merge` whenever a source file changes.
 
 Each prompt is later sent to cheap, medium, and strong models, and the outcomes
 (which tier passes) train the routing classifier.

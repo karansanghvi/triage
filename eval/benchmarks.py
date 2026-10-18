@@ -4,6 +4,7 @@ Usage:
     python -m eval.benchmarks                    # GSM8K and MMLU
     python -m eval.benchmarks arena-candidates   # Arena review files (gitignored)
     python -m eval.benchmarks arena              # final Arena file, after review marks
+    python -m eval.benchmarks merge              # combine every source into data/prompts.jsonl
 
 Writes one file per source under data/benchmarks/, overwriting it each run. Rows are
 picked with a fixed seed, so rerunning produces an identical file.
@@ -58,6 +59,15 @@ ARENA_SPLIT = "train"
 ARENA_CANDIDATES = 300
 ARENA_FINAL_SIZE = 200
 ARENA_MARKS_PATH = BENCHMARKS_DIR / "arena_marks.txt"
+
+# The combined dataset, built from these files in this order
+MERGED_PATH = PROJECT_ROOT / "data" / "prompts.jsonl"
+MERGE_SOURCES = [
+    PROJECT_ROOT / "data" / "own_prompts.jsonl",
+    BENCHMARKS_DIR / "gsm8k.jsonl",
+    BENCHMARKS_DIR / "mmlu.jsonl",
+    BENCHMARKS_DIR / "arena.jsonl",
+]
 ARENA_MIN_WORDS = 5
 ARENA_MAX_WORDS = 1200
 ARENA_COLUMNS = ["conversation_a", "language", "evaluation_order", "is_code", "category_tag"]
@@ -487,10 +497,29 @@ def write_arena() -> None:
     print(f"Wrote {len(records)} Arena records to {path.relative_to(PROJECT_ROOT)}")
 
 
+def merge_prompts() -> None:
+    """Concatenate the source files into MERGED_PATH, copying each record's line unchanged."""
+    lines, ids = [], set()
+    for path in MERGE_SOURCES:
+        count = 0
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record_id = json.loads(line)["id"]  # parse only to check; the original line is what's written
+            if record_id in ids:
+                raise ValueError(f"duplicate id {record_id!r} in {path.name}")
+            ids.add(record_id)
+            lines.append(line)
+            count += 1
+        print(f"{path.relative_to(PROJECT_ROOT)}: {count} records")
+    MERGED_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Wrote {len(lines)} records to {MERGED_PATH.relative_to(PROJECT_ROOT)}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build benchmark prompt files.")
     parser.add_argument("targets", nargs="*", default=["gsm8k", "mmlu"],
-                        choices=["gsm8k", "mmlu", "arena-candidates", "arena"])
+                        choices=["gsm8k", "mmlu", "arena-candidates", "arena", "merge"])
     args = parser.parse_args()
     if "gsm8k" in args.targets:
         write_benchmark("gsm8k", "GSM8K", build_gsm8k_records)
@@ -500,6 +529,8 @@ def main():
         write_arena_candidates()
     if "arena" in args.targets:
         write_arena()
+    if "merge" in args.targets:  # last, so it picks up anything rebuilt above
+        merge_prompts()
 
 
 if __name__ == "__main__":
