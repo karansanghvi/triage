@@ -26,12 +26,14 @@ BENCHMARKS_DIR = PROJECT_ROOT / "data" / "benchmarks"
 GSM8K_DATASET = "openai/gsm8k"
 GSM8K_CONFIG = "main"
 GSM8K_SPLIT = "test"
+GSM8K_REVISION = "740312add88f781978c0658806c59bc2815b9866"  # Hub commit, pinned so rebuilds never drift
 GSM8K_SAMPLE_SIZE = 200
 SEED = 42
 
 MMLU_DATASET = "cais/mmlu"
 MMLU_CONFIG = "all"
 MMLU_SPLIT = "test"
+MMLU_REVISION = "c30699e8356da336a370243923dbaf21066bb9fe"
 MMLU_SUBJECT_COUNT = 57
 MMLU_LETTERS = "ABCD"
 # 200 questions over 57 subjects: 29 subjects get 4, the other 28 get 3
@@ -56,6 +58,7 @@ MMLU_INSTRUCTION = "End your reply with a final line in the form: Answer: <lette
 ARENA_DATASET = "lmarena-ai/arena-human-preference-140k"
 ARENA_CONFIG = "default"
 ARENA_SPLIT = "train"
+ARENA_REVISION = "6322995ab34d7c2693e3f47dd13fa5caa0789a74"
 ARENA_CANDIDATES = 300
 ARENA_FINAL_SIZE = 200
 ARENA_MARKS_PATH = BENCHMARKS_DIR / "arena_marks.txt"
@@ -185,7 +188,7 @@ def gsm8k_reference(answer: str, index: int) -> str:
 
 
 def build_gsm8k_records(sample_size: int = GSM8K_SAMPLE_SIZE, seed: int = SEED) -> list:
-    rows = load_dataset(GSM8K_DATASET, GSM8K_CONFIG, split=GSM8K_SPLIT)
+    rows = load_dataset(GSM8K_DATASET, GSM8K_CONFIG, split=GSM8K_SPLIT, revision=GSM8K_REVISION)
     # Without replacement; the records keep the order the rows were drawn in.
     indices = random.Random(seed).sample(range(len(rows)), sample_size)
     records = []
@@ -202,7 +205,8 @@ def build_gsm8k_records(sample_size: int = GSM8K_SAMPLE_SIZE, seed: int = SEED) 
             "messy": False,
             "constraints": ["ends with 'Answer: <number>'"],
             "notes": f"GSM8K ({GSM8K_DATASET}, {GSM8K_CONFIG}/{GSM8K_SPLIT}) row {index}: grade-school math word problem",
-            "meta": {"dataset": GSM8K_DATASET, "config": GSM8K_CONFIG, "split": GSM8K_SPLIT, "index": index},
+            "meta": {"dataset": GSM8K_DATASET, "config": GSM8K_CONFIG, "split": GSM8K_SPLIT, "index": index,
+                     "revision": GSM8K_REVISION},
         })
     return records
 
@@ -223,7 +227,7 @@ def mmlu_reference(row: dict, index: int) -> str:
 
 
 def build_mmlu_records(seed: int = SEED) -> list:
-    rows = load_dataset(MMLU_DATASET, MMLU_CONFIG, split=MMLU_SPLIT)
+    rows = load_dataset(MMLU_DATASET, MMLU_CONFIG, split=MMLU_SPLIT, revision=MMLU_REVISION)
     indices_by_subject = {}
     for index, subject in enumerate(rows["subject"]):
         indices_by_subject.setdefault(subject, []).append(index)
@@ -262,7 +266,7 @@ def build_mmlu_records(seed: int = SEED) -> list:
             "constraints": ["ends with 'Answer: <letter>'"],
             "notes": f"MMLU ({MMLU_DATASET}, {MMLU_CONFIG}/{MMLU_SPLIT}) row {index}: multiple choice, {subject}",
             "meta": {"dataset": MMLU_DATASET, "config": MMLU_CONFIG, "split": MMLU_SPLIT, "index": index,
-                     "subject": subject},
+                     "subject": subject, "revision": MMLU_REVISION},
         })
     return records
 
@@ -339,7 +343,8 @@ def normalize_for_dedupe(text: str) -> str:
 
 def build_arena_candidates(count: int = ARENA_CANDIDATES, seed: int = SEED) -> tuple:
     """Return (candidate records, review rows, excluded rows, stage counts)."""
-    rows = load_dataset(ARENA_DATASET, ARENA_CONFIG, split=ARENA_SPLIT, columns=ARENA_COLUMNS)
+    rows = load_dataset(ARENA_DATASET, ARENA_CONFIG, split=ARENA_SPLIT, columns=ARENA_COLUMNS,
+                        revision=ARENA_REVISION)
     stages = Counter(total=len(rows))
     passing = []  # (index, text) that survive every filter
     excluded = []
@@ -390,7 +395,8 @@ def build_arena_candidates(count: int = ARENA_CANDIDATES, seed: int = SEED) -> t
             "constraints": arena_constraints(text),
             "notes": f"Arena ({ARENA_DATASET}, {ARENA_CONFIG}/{ARENA_SPLIT}) row {index}: real first-turn user prompt",
             "meta": {"dataset": ARENA_DATASET, "config": ARENA_CONFIG, "split": ARENA_SPLIT, "index": index,
-                     "is_code": bool(row["is_code"]), "category_tag": row["category_tag"]},
+                     "is_code": bool(row["is_code"]), "category_tag": row["category_tag"],
+                     "revision": ARENA_REVISION},
         })
         review.append({"number": number, "task_type": task_type, "reason": reason, "text": text})
     return records, review, excluded, stages

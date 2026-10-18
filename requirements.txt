@@ -4,4 +4,4 @@ python-dotenv
 pyyaml
 pytest
 google-genai
-datasets
+datasets==5.1.0

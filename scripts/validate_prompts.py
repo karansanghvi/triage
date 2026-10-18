@@ -25,7 +25,7 @@ REQUIRED_FIELDS = [
 OPTIONAL_FIELDS = ["fuzzy_fields", "messy", "meta"]
 SOURCES = ["own", "gsm8k", "mmlu", "arena"]
 BENCHMARK_SOURCES = [s for s in SOURCES if s != "own"]
-META_STRING_FIELDS = ["dataset", "config", "split"]
+META_STRING_FIELDS = ["dataset", "config", "split", "revision"]
 ARENA_META_FIELDS = ["is_code", "category_tag"]  # optional, arena only
 TASK_TYPES = [
     "extraction", "classification", "summarization", "qa", "reasoning", "creative", "coding", "open_ended",

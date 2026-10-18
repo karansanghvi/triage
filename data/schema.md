@@ -155,6 +155,7 @@ Records with `source` set to `gsm8k`, `mmlu`, or `arena` follow every rule above
 | `config` | string | Dataset config, e.g. `"main"` for GSM8K. |
 | `split` | string | Split the row came from, e.g. `"test"`. |
 | `index` | integer | The row's original position in that split (0-based, non-negative). |
+| `revision` | string | The Hugging Face commit hash the row was loaded from. Loaders pin it with `load_dataset(..., revision=...)`, so rebuilds never drift if the dataset changes upstream. |
 | `subject` | string | MMLU only, and required there (e.g. `"high_school_biology"`). Not allowed on `gsm8k` or `arena`. |
 | `is_code` | boolean | Arena only, optional: the dataset's own `is_code` flag. Not allowed on `gsm8k` or `mmlu`. |
 | `category_tag` | object | Arena only, optional: the dataset's own `category_tag` annotations, copied as-is. Not allowed on `gsm8k` or `mmlu`. |
@@ -177,7 +178,8 @@ GSM8K example:
   "difficulty_guess": "unrated",
   "constraints": ["ends with a line 'Answer: <number>'"],
   "notes": "multi-step arithmetic word problem",
-  "meta": {"dataset": "openai/gsm8k", "config": "main", "split": "test", "index": 117}
+  "meta": {"dataset": "openai/gsm8k", "config": "main", "split": "test", "index": 117,
+           "revision": "740312add88f781978c0658806c59bc2815b9866"}
 }
 ```
 
@@ -196,11 +198,20 @@ MMLU example:
   "difficulty_guess": "unrated",
   "constraints": ["single letter only"],
   "notes": "factual recall with plausible distractors",
-  "meta": {"dataset": "cais/mmlu", "config": "all", "split": "test", "index": 2045, "subject": "high_school_biology"}
+  "meta": {"dataset": "cais/mmlu", "config": "all", "split": "test", "index": 2045, "subject": "high_school_biology",
+           "revision": "c30699e8356da336a370243923dbaf21066bb9fe"}
 }
 ```
 
 These examples are illustrative: the question text, answer, and index are placeholders, not real rows.
+
+Pinned revisions (set in `eval/benchmarks.py`):
+
+| Dataset | Revision |
+|---|---|
+| `openai/gsm8k` | `740312add88f781978c0658806c59bc2815b9866` |
+| `cais/mmlu` | `c30699e8356da336a370243923dbaf21066bb9fe` |
+| `lmarena-ai/arena-human-preference-140k` | `6322995ab34d7c2693e3f47dd13fa5caa0789a74` |
 
 Benchmark questions that need working (such as GSM8K) use [`final_answer`](#final-answer-final_answer-scoring)
 scoring, so models can reason before answering.
