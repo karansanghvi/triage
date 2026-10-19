@@ -24,18 +24,28 @@ def _convert_error(error: openai.APIError, provider: str) -> ProviderError:
 def _usage_from(usage) -> Usage | None:
     if usage is None:
         return None
-    return Usage(usage.prompt_tokens or 0, usage.completion_tokens or 0)
+    details = getattr(usage, "completion_tokens_details", None)
+    reasoning = getattr(details, "reasoning_tokens", None) if details else None
+    return Usage(usage.prompt_tokens or 0, usage.completion_tokens or 0, reasoning)
+
+
+def _reasoning_from(message) -> str | None:
+    """Reasoning some providers return beside the answer (Groq's gpt-oss uses a 'reasoning' field)."""
+    reasoning = getattr(message, "reasoning", None) or (message.model_extra or {}).get("reasoning")
+    return reasoning or None
 
 
 def send_openai_format(
-    messages, model_id, *, provider, base_url, api_key, stream, temperature, max_tokens, timeout
+    messages, model_id, *, provider, base_url, api_key, stream, temperature, max_tokens, timeout,
+    reasoning_effort=None,
 ):
     # max_retries=0: the library retries on its own by default.
     # Triage's reliability layer decides when to retry instead.
     client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=0)
 
+    extra = {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
     if stream:
-        return _stream(client, messages, model_id, provider, temperature, max_tokens)
+        return _stream(client, messages, model_id, provider, temperature, max_tokens, extra)
 
     try:
         completion = client.chat.completions.create(
@@ -43,6 +53,7 @@ def send_openai_format(
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            **extra,
         )
     except openai.APIError as error:
         raise _convert_error(error, provider) from error
@@ -52,10 +63,11 @@ def send_openai_format(
         text=choice.message.content or "",
         usage=_usage_from(completion.usage),
         finish_reason=choice.finish_reason,
+        reasoning=_reasoning_from(choice.message),
     )
 
 
-def _stream(client, messages, model_id, provider, temperature, max_tokens):
+def _stream(client, messages, model_id, provider, temperature, max_tokens, extra=None):
     """Yield text pieces as they arrive, then a final Usage."""
     try:
         chunks = client.chat.completions.create(
@@ -65,6 +77,7 @@ def _stream(client, messages, model_id, provider, temperature, max_tokens):
             max_tokens=max_tokens,
             stream=True,
             stream_options={"include_usage": True},  # ask for token counts at the end
+            **(extra or {}),
         )
         for chunk in chunks:
             if chunk.choices:

@@ -47,6 +47,9 @@ MMLU_EXCLUDED_ROWS = {
     # high_school_macroeconomics: option D reads "both A and D are correct", which refers to
     # itself, yet D is the official answer (almost certainly a typo for "A and C").
     3895: "self-referential option D marked as the answer",
+    # sociology: "Walt Disney, Sony and Time Warner are examples of:" A) transnational corporations
+    # (the official answer) and B) multi-media empires are both correct; every model tried picked B.
+    13567: "two correct options (A and B)",
 }
 
 GSM8K_INSTRUCTION = (

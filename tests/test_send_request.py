@@ -89,3 +89,34 @@ def test_only_rate_limits_and_server_errors_are_retryable():
     assert ProviderError("groq", "server", "oops").retryable
     assert not ProviderError("groq", "client", "bad key").retryable
     assert not ProviderError("groq", "timeout", "too slow").retryable
+
+def test_reasoning_effort_is_passed_only_when_set(monkeypatch):
+    seen = []
+
+    def recording_adapter(messages, model_id, **settings):
+        seen.append(settings)
+        return RawResult(text="ok", usage=Usage(5, 1), finish_reason="stop")
+
+    monkeypatch.setitem(base.ADAPTERS, "groq", recording_adapter)
+    base.send_request(MESSAGES, MODEL)
+    base.send_request(MESSAGES, MODEL, reasoning_effort="low")
+    assert "reasoning_effort" not in seen[0]
+    assert seen[1]["reasoning_effort"] == "low"
+
+
+def test_reasoning_effort_rejected_for_non_openai_format_providers():
+    gemini = ModelConfig(name="g", provider="gemini", model_id="m", tier="high", input_price=0, output_price=0)
+    with pytest.raises(ProviderError) as error:
+        base.send_request(MESSAGES, gemini, reasoning_effort="low")
+    assert error.value.kind == "config"
+
+
+def test_reasoning_and_reasoning_tokens_reach_the_response(monkeypatch):
+    monkeypatch.setitem(
+        base.ADAPTERS, "groq",
+        lambda *args, **kwargs: RawResult("42", Usage(5, 30, reasoning_tokens=28), "stop", reasoning="thinking..."),
+    )
+    response = base.send_request(MESSAGES, MODEL)
+    assert response.text == "42"
+    assert response.reasoning == "thinking..."
+    assert (response.output_tokens, response.reasoning_tokens) == (30, 28)

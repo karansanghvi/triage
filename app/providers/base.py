@@ -19,6 +19,9 @@ DEFAULT_TEMPERATURE = 0.0      # 0 = same question gives the same answer (needed
 DEFAULT_MAX_TOKENS = 1024      # leaves room for reasoning models to think
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
+# Providers whose adapter speaks OpenAI's format (and so accepts reasoning_effort)
+OPENAI_FORMAT_PROVIDERS = {"openai", "groq", "ollama", "openrouter"}
+
 # Which adapter handles which provider
 ADAPTERS = {
     "openai": openai_provider.send,
@@ -47,6 +50,8 @@ class Response:
     time_to_first_token_ms: Optional[float] = None   # streaming only
     cached: bool = False             # True if this answer came from the cache
     cache_saved_cost: float = 0.0    # on a cache hit, the reported cost we didn't pay
+    reasoning: Optional[str] = None          # reasoning returned separately from text, if any
+    reasoning_tokens: Optional[int] = None   # reasoning share of output_tokens, if reported
 
 
 def _estimate_tokens(text: str) -> int:
@@ -54,7 +59,8 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4) if text else 0
 
 
-def _build_response(model_config, text, usage, messages, latency_ms, finish_reason=None, ttft_ms=None):
+def _build_response(model_config, text, usage, messages, latency_ms, finish_reason=None, ttft_ms=None,
+                    reasoning=None):
     estimated = usage is None
     if estimated:
         prompt_text = " ".join(m["content"] for m in messages)
@@ -73,6 +79,8 @@ def _build_response(model_config, text, usage, messages, latency_ms, finish_reas
         tokens_estimated=estimated,
         finish_reason=finish_reason,
         time_to_first_token_ms=None if ttft_ms is None else round(ttft_ms, 1),
+        reasoning=reasoning,
+        reasoning_tokens=usage.reasoning_tokens,
     )
 
 
@@ -138,11 +146,14 @@ def send_request(
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    reasoning_effort: Optional[str] = None,
 ):
     """Send messages to any model.
 
     stream=False returns a Response.
     stream=True returns a StreamingResponse to loop over.
+    reasoning_effort ("low", "medium", "high") is passed to reasoning models on OpenAI-format
+    providers such as Groq's gpt-oss; leave it None for every other model.
     Raises ProviderError when the provider fails.
     """
     _validate_messages(messages)
@@ -161,6 +172,10 @@ def send_request(
         "max_tokens": max_tokens,
         "timeout": timeout,
     }
+    if reasoning_effort is not None:
+        if model_config.provider not in OPENAI_FORMAT_PROVIDERS:
+            raise ProviderError(model_config.provider, "config", "reasoning_effort is only supported on OpenAI-format providers")
+        settings["reasoning_effort"] = reasoning_effort
 
     if stream:
         events = adapter(messages, model_config.model_id, **settings)
@@ -169,4 +184,6 @@ def send_request(
     started_at = time.perf_counter()
     raw = adapter(messages, model_config.model_id, **settings)
     latency_ms = (time.perf_counter() - started_at) * 1000
-    return _build_response(model_config, raw.text, raw.usage, messages, latency_ms, raw.finish_reason)
+    return _build_response(
+        model_config, raw.text, raw.usage, messages, latency_ms, raw.finish_reason, reasoning=raw.reasoning,
+    )

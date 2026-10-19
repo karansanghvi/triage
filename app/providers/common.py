@@ -7,7 +7,8 @@ from typing import Optional
 class Usage:
     # token counts reported by a provider 
     input_tokens: int
-    output_tokens: int
+    output_tokens: int              # includes reasoning tokens, since providers bill them as output
+    reasoning_tokens: Optional[int] = None   # the reasoning share of output_tokens, if reported
     
 @dataclass(frozen=True)
 class RawResult:
@@ -15,6 +16,7 @@ class RawResult:
     text: str
     usage: Optional[Usage]
     finish_reason: Optional[str] = None
+    reasoning: Optional[str] = None   # reasoning returned separately from the answer (e.g. gpt-oss on Groq)
 
 class ProviderError(Exception):
     """One error type for every provider.

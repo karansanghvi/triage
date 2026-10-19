@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 import pytest
@@ -175,3 +176,231 @@ def test_first_standalone_letter_wins():
 ])
 def test_text_references_use_exact_match_normalization(output, reference, passed):
     assert score_final_answer(output, reference).passed is passed
+
+
+# ---------- exact_match ----------
+
+from app.verifier.scorers import (  # noqa: E402
+    score_exact_match, score_field_check, score_label_match, score_record,
+)
+
+
+@pytest.mark.parametrize("output, reference", [
+    ("14", "14"),
+    ("  14 \n", "14"),                          # surrounding whitespace
+    ("14.", "14"),                              # one trailing period
+    ("YES", "yes"),                             # case-insensitive
+    ("Ctrl + Shift + E", "Ctrl+Shift+E"),       # spaces around +
+    ("O-101, O-102,O-105", "O-101,O-102,O-105"),  # spaces around , and -
+    ("08 : 50", "08:50"),                       # spaces around :
+    ("2026 - 05 - 25", "2026-05-25"),
+    ("not stated", "not stated"),
+    ("DHL", "DHL"),
+    ("Not stated.", "not stated"),              # case and trailing period together
+])
+def test_exact_match_passes_after_normalization(output, reference):
+    assert score_exact_match(output, reference).passed
+
+
+@pytest.mark.parametrize("output, reference", [
+    ("May 25, 2026", "2026-05-25"),   # dates must match the requested format
+    ("8:50", "08:50"),                # so must times
+    ("14 days", "14"),                # extra words
+    ("14..", "14"),                   # only one trailing period is ignored
+    ("$60.00", "60.00"),              # no currency stripping
+    ("**14**", "14"),                 # no markdown stripping
+])
+def test_exact_match_fails_on_anything_else(output, reference):
+    assert not score_exact_match(output, reference).passed
+
+
+# ---------- label_match ----------
+
+@pytest.mark.parametrize("output, passed", [
+    ("billing", True),
+    ("Billing", True),
+    (" billing.\n", True),
+    ("open_ended", False),
+    ("billing, technical", False),
+    ("The label is billing", False),
+    ("", False),
+])
+def test_label_match(output, passed):
+    assert score_label_match(output, "billing").passed is passed
+
+
+# ---------- field_check ----------
+
+INVOICE = {
+    "invoice_number": "AN-2026-311",
+    "vendor": "Harbor Line Printing Co.",
+    "issue_date": "2026-10-05",
+    "total": 1881.0,
+    "paid": False,
+    "po": None,
+    "address": {"street": "77 Harrow Court, Unit 12", "zip": "53711"},
+    "line_items": [
+        {"description": "Window display design", "quantity": 1},
+        {"description": "Printed vinyl panels", "quantity": 8},
+    ],
+    "skills": ["Go", "PostgreSQL", "Tri-County"],
+}
+FUZZY = ["vendor", "address.street", "line_items.description", "skills"]
+
+
+def answer(**changes):
+    data = json.loads(json.dumps(INVOICE))
+    for path, value in changes.items():
+        target = data
+        *parents, last = path.split("__")
+        for key in parents:
+            target = target[int(key)] if key.isdigit() else target[key]
+        if value is DELETE:
+            del target[int(last) if last.isdigit() else last]
+        else:
+            target[int(last) if last.isdigit() else last] = value
+    return json.dumps(data)
+
+
+DELETE = object()
+
+
+def test_field_check_exact_copy_passes():
+    assert score_field_check(json.dumps(INVOICE), INVOICE, FUZZY).passed
+
+
+@pytest.mark.parametrize("changes", [
+    {"vendor": "harbor line printing co"},                  # fuzzy: case and punctuation
+    {"vendor": "  Harbor   Line Printing Co  "},            # fuzzy: whitespace
+    {"address__street": "77 harrow court unit 12"},         # fuzzy nested path
+    {"line_items__0__description": "window DISPLAY design"},  # fuzzy path through a list
+    {"skills": ["postgresql", "tri county", "GO"]},          # fuzzy list: unordered set, punctuation
+    {"total": 1881},                                         # number compared by value
+])
+def test_field_check_tolerated_differences(changes):
+    result = score_field_check(answer(**changes), INVOICE, FUZZY)
+    assert result.passed, result.reason
+
+
+@pytest.mark.parametrize("changes, reason_part", [
+    ({"invoice_number": "an-2026-311"}, "invoice_number"),        # strict ID: case matters
+    ({"issue_date": "05.10.2026"}, "issue_date"),                  # strict date
+    ({"total": 1881.01}, "total"),                                 # strict amount
+    ({"total": "1881.0"}, "total"),                                # number as string
+    ({"paid": 0}, "paid"),                                         # boolean vs number
+    ({"paid": "false"}, "paid"),                                   # boolean as string
+    ({"po": ""}, "po"),                                            # null must stay null
+    ({"address__zip": 53711}, "address.zip"),                      # strict nested field type
+    ({"line_items__1__quantity": 9}, "line_items.quantity"),       # strict field inside a list
+    ({"skills": ["Go", "PostgreSQL"]}, "skills"),                  # fuzzy set still needs every item
+    ({"vendor": "Harbour Line Printing"}, "vendor"),               # fuzzy is not spelling-tolerant
+    ({"vendor": DELETE}, "missing keys"),
+    ({"extra_field": 1}, "unexpected keys"),
+])
+def test_field_check_failures(changes, reason_part):
+    result = score_field_check(answer(**changes), INVOICE, FUZZY)
+    assert not result.passed
+    assert reason_part in result.reason
+
+
+def test_field_check_list_order_is_strict_for_objects():
+    swapped = dict(INVOICE, line_items=list(reversed(INVOICE["line_items"])))
+    assert not score_field_check(json.dumps(swapped), INVOICE, FUZZY).passed
+
+
+def test_field_check_without_fuzzy_fields_is_fully_strict():
+    assert not score_field_check(answer(vendor="harbor line printing co"), INVOICE).passed
+
+
+def test_field_check_accepts_a_json_code_fence():
+    assert score_field_check("```json\n" + json.dumps(INVOICE) + "\n```", INVOICE, FUZZY).passed
+    assert score_field_check("```\n" + json.dumps(INVOICE) + "\n```", INVOICE, FUZZY).passed
+
+
+@pytest.mark.parametrize("output", [
+    "Here is the JSON: " + json.dumps(INVOICE),   # prose around the JSON
+    "{'vendor': 'x'}",                           # Python dict, not JSON
+    "",
+    "[1, 2]",                                    # valid JSON but not the right shape
+])
+def test_field_check_rejects_non_json_or_wrong_shape(output):
+    assert not score_field_check(output, INVOICE, FUZZY).passed
+
+
+def test_field_check_fuzzy_null_must_be_null():
+    reference = {"candidate_phone": None, "name": "Rosa"}
+    assert score_field_check('{"candidate_phone": null, "name": "rosa"}', reference, ["candidate_phone", "name"]).passed
+    assert not score_field_check('{"candidate_phone": "555-0148", "name": "Rosa"}', reference, ["candidate_phone"]).passed
+
+
+# ---------- dispatch ----------
+
+def test_score_record_dispatches_by_scoring_method():
+    assert score_record({"scoring": "exact_match", "reference": "14"}, "14.").passed
+    assert score_record({"scoring": "label_match", "reference": "billing"}, "Billing").passed
+    assert score_record({"scoring": "final_answer", "reference": "18"}, "x\nAnswer: 18").passed
+    assert score_record({"scoring": "field_check", "reference": {"a": "X"}, "fuzzy_fields": ["a"]}, '{"a": "x"}').passed
+    assert score_record({"scoring": "judge", "reference": None}, "anything") is None
+
+
+# ---------- Unicode spaces and dashes ----------
+
+from app.verifier.scorers import normalize_unicode  # noqa: E402
+
+NBSP, NARROW, THIN = " ", " ", " "
+HYPHEN, NB_HYPHEN, FIGURE, EN, EM, MINUS = "‐", "‑", "‒", "–", "—", "−"
+
+
+def test_normalize_unicode_maps_every_listed_character():
+    assert normalize_unicode(f"a{NBSP}b{NARROW}c{THIN}d") == "a b c d"
+    assert normalize_unicode(f"{HYPHEN}{NB_HYPHEN}{FIGURE}{EN}{EM}{MINUS}") == "------"
+
+
+def test_normalize_unicode_leaves_other_characters_alone():
+    # horizontal bar, fullwidth hyphen-minus, ideographic space, accented letters
+    assert normalize_unicode("―－　Tomás") == "―－　Tomás"
+
+
+@pytest.mark.parametrize("output, reference", [
+    (f"2026{NB_HYPHEN}10{NB_HYPHEN}19{NARROW}15:30", "2026-10-19 15:30"),
+    (f"O{EN}101,O{EN}102", "O-101,O-102"),
+    (f"{MINUS}42", "-42"),
+    (f"Ctrl{NBSP}+{NBSP}Shift{THIN}+E", "Ctrl+Shift+E"),
+])
+def test_exact_match_normalizes_unicode(output, reference):
+    assert score_exact_match(output, reference).passed
+
+
+def test_exact_match_unicode_does_not_hide_a_wrong_value():
+    assert not score_exact_match(f"2026{NB_HYPHEN}10{NB_HYPHEN}18{NARROW}15:30", "2026-10-19 15:30").passed
+
+
+def test_label_match_normalizes_unicode():
+    assert score_label_match(f"{NBSP}wrong_item{NARROW}", "wrong_item").passed
+
+
+@pytest.mark.parametrize("output, reference", [
+    (f"Answer:{NARROW}{MINUS}18", "-18"),
+    (f"Answer: {EN}0.25", "-0.25"),
+    (f"Answer:{NBSP}$1,800", "1800"),
+    (f"Answer:{NBSP}2026{NB_HYPHEN}05{NB_HYPHEN}25", "2026-05-25"),
+    (f"Answer:{NARROW}B", "B"),
+])
+def test_final_answer_normalizes_unicode(output, reference):
+    assert score_final_answer(output, reference).passed
+
+
+def test_field_check_normalizes_unicode_in_strict_fields():
+    reference = {"tracking": "SHP-90217", "date": "2026-10-05", "range": "$112,000-$128,000", "name": "Tri-County Freight"}
+    output = json.dumps({"tracking": f"SHP{NB_HYPHEN}90217", "date": f"2026{EN}10{EN}05",
+                         "range": f"$112,000{EM}$128,000", "name": f"Tri{NB_HYPHEN}County{NBSP}Freight"})
+    assert score_field_check(output, reference, ["name"]).passed
+    # still strict: a different value fails even after normalization
+    wrong = json.dumps({"tracking": f"SHP{NB_HYPHEN}90218", "date": "2026-10-05", "range": "$112,000-$128,000",
+                        "name": "Tri-County Freight"})
+    assert not score_field_check(wrong, reference, ["name"]).passed
+
+
+def test_field_check_normalizes_unicode_in_fuzzy_lists():
+    reference = {"skills": ["A/B testing", "Go"]}
+    assert score_field_check(json.dumps({"skills": ["go", f"A/B{NBSP}testing"]}), reference, ["skills"]).passed

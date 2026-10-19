@@ -38,9 +38,27 @@ models:
     output_price: 0
     avg_latency_ms: 0
     price_as:
-      label: Groq gpt-oss-20b (paid)
-      input_price: 0.10
-      output_price: 0.50
+      label: Groq gpt-oss-20b (paid)       # console.groq.com/docs/models, checked 2026-10-19
+      input_price: 0.075
+      output_price: 0.30
+
+  # Smallest non-reasoning text model on Groq's free tier (Llama 3.1 8B was shut off for free
+  # accounts on 2026-08-16). Bilingual Arabic/English, 4,096-token context window.
+  - name: groq-allam
+    provider: groq
+    model_id: allam-2-7b
+    tier: low
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    price_as:
+      # Groq lists ALLaM 2 7B's paid price as "Pending" (2026-10-19). Until it is published, this
+      # uses Groq's last price for its deprecated small model, Llama 3.1 8B Instant ($0.05 / $0.08).
+      # Groq's own pricing page no longer shows it; the figure is from price aggregators
+      # (cloudprice.net, costbench.com), which agree.
+      label: "estimate: last Groq price of Llama 3.1 8B, allam price pending"
+      input_price: 0.05
+      output_price: 0.08
 
   # ---------- Medium tier ----------
   - name: groq-large
@@ -51,9 +69,9 @@ models:
     output_price: 0
     avg_latency_ms: 0
     price_as:
-      label: Groq gpt-oss-120b (paid)
+      label: Groq gpt-oss-120b (paid)      # console.groq.com/docs/models, checked 2026-10-19
       input_price: 0.15
-      output_price: 0.75
+      output_price: 0.60
 
   # ---------- High tier: strongest and most expensive ----------
   - name: gemini-flash

@@ -33,7 +33,8 @@ def is_cacheable(temperature: float, stream: bool) -> bool:
     return float(temperature) == 0.0 and not stream
 
 
-def make_cache_key(messages: list, model: ModelConfig, temperature: float, max_tokens: int) -> str:
+def make_cache_key(messages: list, model: ModelConfig, temperature: float, max_tokens: int,
+                   reasoning_effort: Optional[str] = None) -> str:
     """A fingerprint of everything that affects the answer.
 
     sort_keys makes the same data always produce the same text,
@@ -48,6 +49,8 @@ def make_cache_key(messages: list, model: ModelConfig, temperature: float, max_t
         "temperature": float(temperature),
         "max_tokens": int(max_tokens),
     }
+    if reasoning_effort is not None:   # only added when set, so existing keys don't change
+        payload["reasoning_effort"] = reasoning_effort
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -162,7 +165,7 @@ class CachedSender:
                 max_tokens=max_tokens, **settings,
             )
 
-        key = make_cache_key(messages, model, temperature, max_tokens)
+        key = make_cache_key(messages, model, temperature, max_tokens, settings.get("reasoning_effort"))
         started_at = time.perf_counter()
         saved = self.cache.get(key)
 

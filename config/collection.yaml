@@ -1,0 +1,69 @@
+# Phase 2 data collection: which model answers for each tier, and how fast we may call it.
+#
+# Exactly one fixed model per tier, with NO fallback: if a different model answered,
+# the pass/fail labels would no longer describe that tier. Model names refer to models.yaml.
+
+tiers:
+  low: groq-allam        # allam-2-7b: smallest non-reasoning text model on Groq's free tier
+  medium: groq-small     # openai/gpt-oss-20b
+  high: groq-large       # openai/gpt-oss-120b
+  extra: ollama-llama    # llama3.2:3b, extra free data; not part of the label definition
+
+# The tiers that define the routing labels (extra is collected but not used for labels)
+label_tiers: [low, medium, high]
+
+# Models that must never be used for data collection. gemini-flash stays in models.yaml
+# for live routing, but its free tier (5 RPM, 20 requests/day) is too slow for collection.
+blocked_models: [gemini-flash, groq-qwen, ollama-qwen]
+
+# Same settings for every tier
+generation:
+  temperature: 0
+  max_tokens: 4000
+
+# Extra request parameters per model, recorded on every saved answer.
+# reasoning_effort "low" keeps gpt-oss from spending its whole token budget on reasoning
+# (supported values on Groq: low, medium, high; console.groq.com/docs/reasoning).
+model_params:
+  groq-small:
+    reasoning_effort: low
+  groq-large:
+    reasoning_effort: low
+
+# Per call. Long reasoning answers and the local model can take well over 30s.
+timeout_seconds: 180
+
+# Retries for rate limits (429) and server errors (5xx) only. After the last try,
+# the error is saved and the pair is retried on the next run.
+retry:
+  max_attempts: 3
+  base_delay_seconds: 2
+  max_delay_seconds: 30
+
+# Free-tier limits per model. Requests are paced to stay under these.
+#   rpm / tpm: per rolling minute.  rpd / tpd: per day (see daily_reset).
+#   Leave a field out (or the whole entry) for "no limit".
+#   Token limits count input + output tokens, reasoning included.
+limits:
+  groq-allam:
+    rpd: 7000
+    tpm: 6000
+    daily_reset: rolling_24h
+    # Not in Groq's published rate-limit table. Taken from the x-ratelimit-limit-requests (7000)
+    # and x-ratelimit-limit-tokens (6000) response headers on 2026-10-19. RPM and TPD are not reported.
+    source: "Groq response headers, 2026-10-19"
+  groq-small:
+    rpm: 30
+    rpd: 1000
+    tpm: 8000
+    tpd: 200000
+    daily_reset: rolling_24h
+    source: "https://console.groq.com/docs/rate-limits (checked 2026-10-19; same row for both gpt-oss models)"
+  groq-large:
+    rpm: 30
+    rpd: 1000
+    tpm: 8000
+    tpd: 200000
+    daily_reset: rolling_24h
+    source: "https://console.groq.com/docs/rate-limits (checked 2026-10-19; same row for both gpt-oss models)"
+  ollama-llama: {}        # local model, no limits

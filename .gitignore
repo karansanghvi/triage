@@ -18,3 +18,7 @@ __pycache__/
 data/benchmarks/arena_candidates.jsonl
 data/benchmarks/arena_review.txt
 data/benchmarks/arena_excluded.jsonl
+
+# Pilot runs of the data collection (not committed)
+data/pilot/
+data/pilot2/

@@ -74,6 +74,7 @@ reference.
 
 Before comparing an `exact_match` answer with its reference, both are normalized:
 
+- Unicode spaces and dashes mapped to plain ASCII (see [Unicode normalization](#unicode-normalization))
 - compared case-insensitively
 - leading and trailing whitespace trimmed
 - one trailing period ignored (`"14."` matches `"14"`)
@@ -81,6 +82,24 @@ Before comparing an `exact_match` answer with its reference, both are normalized
 
 Nothing else is normalized. In particular, dates and times must still match the format the prompt asks
 for: `"2026-05-25"` does not match `"May 25, 2026"`, and `"08:50"` does not match `"8:50"`.
+
+The whole output is compared, so extra words, markdown (`**14**`) or currency symbols (`$60.00`) fail.
+`label_match` uses the same normalization: the output must be exactly one allowed label
+(`app/verifier/scorers.py`, `score_exact_match` and `score_label_match`).
+
+## Unicode normalization
+
+Every scorer (`exact_match`, `label_match`, `final_answer`, and `field_check`, strict and fuzzy fields alike)
+first maps these characters in both the output and the reference:
+
+| Characters | Become |
+|---|---|
+| U+00A0 no-break space, U+202F narrow no-break space, U+2009 thin space | a normal space |
+| U+2010 hyphen, U+2011 non-breaking hyphen, U+2012 figure dash, U+2013 en dash, U+2014 em dash, U+2212 minus sign | `-` |
+
+Models (gpt-oss especially) often write `2026‑10‑19 15:30` with non-breaking hyphens and a narrow space; after
+this mapping it matches `2026-10-19 15:30`. No other characters are changed, so a different value still fails
+(`app/verifier/scorers.py`, `normalize_unicode`).
 
 ## Final answer (final_answer scoring)
 
@@ -115,9 +134,19 @@ Numbers must be equal; there is no tolerance, so `18.5` does not match `"18"`. B
 ## Fuzzy fields (field_check only)
 
 By default, `field_check` compares every field strictly. `fuzzy_fields` lists the free-text fields (names,
-addresses, titles, descriptions) that should instead be compared after lowercasing, collapsing whitespace,
-and stripping punctuation, so `"Harbor Line Printing Co."` matches `"harbor line printing co"`.
-IDs, codes, flight and tracking numbers, dates, amounts, booleans, and enum values stay strict.
+addresses, titles, descriptions) that should instead be compared after lowercasing, turning punctuation into
+spaces, and collapsing whitespace, so `"Harbor Line Printing Co."` matches `"harbor line printing co"` and
+`"Tri-County"` matches `"tri county"`. IDs, codes, flight and tracking numbers, dates, amounts, booleans, and
+enum values stay strict.
+
+Scoring rules (`app/verifier/scorers.py`, `score_field_check`):
+
+- The output must be a single JSON value. One surrounding code fence (```` ```json ... ``` ````) is allowed;
+  any other text around the JSON fails.
+- Every object must have exactly the reference's keys: a missing or extra key fails.
+- Strict fields compare by type and value. Numbers compare by value (`58000` matches `58000.0`), but a
+  number never matches a string or a boolean, and `null` only matches `null`.
+- Lists must have the same length and order, except fuzzy lists of strings (unordered sets).
 
 Each entry is a dotted path into the reference. A path that passes through a list applies to every item
 in that list:

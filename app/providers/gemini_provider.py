@@ -22,8 +22,9 @@ def _usage_from(meta) -> Usage | None:
     if meta is None:
         return None
     # Thinking tokens are billed as output, so count them as output 
-    output = (meta.candidates_token_count or 0) + (meta.thoughts_token_count or 0)
-    return Usage(meta.prompt_token_count or 0, output)
+    thoughts = meta.thoughts_token_count or 0
+    output = (meta.candidates_token_count or 0) + thoughts
+    return Usage(meta.prompt_token_count or 0, output, thoughts if meta.thoughts_token_count is not None else None)
 
 def _to_contents(turns):
     return [

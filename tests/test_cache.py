@@ -73,6 +73,11 @@ def test_key_changes_with_anything_that_affects_the_answer():
     assert make_cache_key([{"role": "user", "content": "hello"}], MODEL, 0, 1024) != base
     assert make_cache_key(MESSAGES, OTHER_MODEL, 0, 1024) != base
     assert make_cache_key(MESSAGES, MODEL, 0, 500) != base
+    assert make_cache_key(MESSAGES, MODEL, 0, 1024, reasoning_effort="low") != base
+
+
+def test_unset_reasoning_effort_keeps_the_old_key():
+    assert make_cache_key(MESSAGES, MODEL, 0, 1024, reasoning_effort=None) == make_cache_key(MESSAGES, MODEL, 0, 1024)
 
 
 def test_key_ignores_dict_order_and_int_vs_float():
