@@ -3,7 +3,11 @@
 Usage:
     python -m eval.build_dataset --pilot     # 30-prompt pilot -> data/pilot/
     python -m eval.build_dataset --pilot2    # pilot 1's prompts + 30 auto-gradable own prompts -> data/pilot2/
-    python -m eval.build_dataset             # every prompt in data/prompts.jsonl -> data/collection/
+    python -m eval.build_dataset             # every prompt in data/prompts.jsonl -> data/answers/
+    python -m eval.build_dataset status      # progress of the full run, per tier
+
+The full run waits out daily limits instead of stopping, so it can be left running for days:
+    nohup caffeinate -i ./venv/bin/python -m eval.build_dataset > data/answers/run.log 2>&1 &
 
 One fixed model per tier (config/collection.yaml), with fallback off, so every label
 really describes that tier. Requests go through the Phase 1 cache and retry logic and are
@@ -37,7 +41,7 @@ from app.verifier.scorers import score_record
 
 COLLECTION_CONFIG_PATH = PROJECT_ROOT / "config" / "collection.yaml"
 PROMPTS_PATH = PROJECT_ROOT / "data" / "prompts.jsonl"
-FULL_DIR = PROJECT_ROOT / "data" / "collection"
+FULL_DIR = PROJECT_ROOT / "data" / "answers"
 PILOT_DIR = PROJECT_ROOT / "data" / "pilot"
 PILOT2_DIR = PROJECT_ROOT / "data" / "pilot2"
 API_KEY_ENV_NAMES = ["GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
@@ -53,8 +57,14 @@ OWN_TASK_TYPES = ["extraction", "classification", "summarization", "qa", "reason
 # Pilot 2 adds own prompts the scorers can grade: {task_type: (easy, medium, hard)}
 PILOT2_OWN = {"extraction": (2, 3, 3), "classification": (2, 3, 3), "qa": (2, 2, 3), "reasoning": (2, 2, 3)}
 
-# A 429 whose message mentions a daily quota: waiting a minute won't help, so stop that model for the run
+# A 429 whose message mentions a daily quota: waiting a minute won't help
 DAILY_QUOTA_HINT = re.compile(r"per ?day|perday|daily|requests_per_day|RPD", re.IGNORECASE)
+DAILY_QUOTA_BACKOFF_SECONDS = 30 * 60   # after a daily-quota 429, wait this long before trying again
+MAX_WAIT_CHUNK_SECONDS = 15 * 60        # long waits are slept in chunks, logging each one
+# Errors worth retrying later in the same run; client and config errors are not
+RETRYABLE_KINDS = {"rate_limit", "server", "timeout", "connection", "circuit_open", "unknown"}
+MAX_PASSES = 5                          # passes over a tier's failed prompts within one run
+WAITS_FILE = "waits.json"               # tier -> resume time while waiting on a daily limit
 
 
 # ---------- Config ----------
@@ -162,6 +172,25 @@ class Pacer:
             return False
         return True
 
+    def seconds_until_daily_room(self, estimate: int) -> float:
+        """How long until one more call of about `estimate` tokens fits under the daily limits."""
+        now = datetime.now(timezone.utc)
+        if self.limits.daily_reset == "midnight_pacific":
+            local = now.astimezone(PACIFIC)
+            midnight = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            return (midnight.astimezone(timezone.utc) - now).total_seconds()
+        # Rolling 24h: wait until enough of the oldest usage has aged out of the window
+        start = now - timedelta(hours=24)
+        window = sorted((when, calls, tokens) for when, calls, tokens in self._day if when >= start)
+        calls, tokens = sum(c for _, c, _ in window), sum(t for _, _, t in window)
+        for when, c, t in window:
+            calls, tokens = calls - c, tokens - t
+            fits_calls = self.limits.rpd is None or calls + 1 <= self.limits.rpd
+            fits_tokens = self.limits.tpd is None or tokens + estimate <= self.limits.tpd
+            if fits_calls and fits_tokens:
+                return max(0.0, (when + timedelta(hours=24) - now).total_seconds())
+        return 60.0
+
     def wait_for_minute_slot(self, estimate: int) -> float:
         """Sleep until one more call of about `estimate` tokens fits in the last minute. Returns seconds waited."""
         waited = 0.0
@@ -181,9 +210,12 @@ class Pacer:
             waited += pause
 
     def record(self, api_calls: int, tokens: int) -> None:
+        """Count a finished call. Cache hits and calls that never reached the provider (api_calls == 0)
+        cost no quota, so they are not counted against any limit."""
+        if not api_calls:
+            return
         with self._lock:
-            if api_calls:
-                self._minute.append((time.monotonic(), tokens))
+            self._minute.append((time.monotonic(), tokens))
             self._day.append((datetime.now(timezone.utc), api_calls, tokens))
 
 
@@ -250,8 +282,10 @@ def real_calls(attempts: list) -> int:
 
 
 class Collector:
-    def __init__(self, config: CollectionConfig, registry: dict, log: AnswerLog, run: str):
+    def __init__(self, config: CollectionConfig, registry: dict, log: AnswerLog, run: str,
+                 wait_for_reset: bool = False):
         self.config = config
+        self.wait_for_reset = wait_for_reset   # full run: wait out daily limits; pilots: leave pairs for later
         self.registry = registry
         self.log = log
         self.run = run
@@ -266,36 +300,88 @@ class Collector:
         self.pacers = {name: Pacer(config.limits[name], log.usage_history(name)) for name in config.tiers.values()}
         self.counts = Counter()
         self._print_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self.waits_path = log.path.parent / WAITS_FILE
 
     def say(self, message: str) -> None:
         with self._print_lock:
             print(message, flush=True)
 
+    def set_waiting(self, tier: str, until: Optional[datetime], reason: str = "") -> None:
+        """Record (or clear) a tier's daily-limit wait in waits.json, so `status` can show it."""
+        with self._state_lock:
+            try:
+                state = json.loads(self.waits_path.read_text())
+            except (FileNotFoundError, ValueError):
+                state = {}
+            if until is None:
+                state.pop(tier, None)
+            else:
+                state[tier] = {"until": until.isoformat(), "reason": reason}
+            temp = self.waits_path.with_suffix(".tmp")
+            temp.write_text(json.dumps(state, indent=1))
+            os.replace(temp, self.waits_path)
+
+    def sleep_logged(self, tier: str, seconds: float, why: str) -> None:
+        resume = datetime.now().astimezone() + timedelta(seconds=seconds)
+        self.say(f"[{tier}] {why}; waiting {seconds / 3600:.1f}h, until about {resume:%Y-%m-%d %H:%M %Z}")
+        self.set_waiting(tier, resume, why)
+        try:
+            while seconds > 0:
+                chunk = min(seconds, MAX_WAIT_CHUNK_SECONDS)
+                time.sleep(chunk)
+                seconds -= chunk
+        finally:
+            self.set_waiting(tier, None)
+
     def run_tier(self, tier: str, prompts: list) -> None:
         model = self.registry[self.config.tiers[tier]]
-        pacer = self.pacers[model.name]
         done = self.log.done()
         todo = [p for p in prompts if (p["id"], tier) not in done]
         self.counts[f"{tier}: skipped (already done)"] += len(prompts) - len(todo)
+        for attempt in range(1, MAX_PASSES + 1):
+            if not self.run_pass(tier, model, todo):
+                return   # a pilot hit its daily limit: leave the rest for later
+            # Retry only pairs whose newest record is a retryable error (truncations are final for this run)
+            latest = self.log.latest()
+            todo = [p for p in todo if (latest[(p["id"], tier)]["error"] or {}).get("kind") in RETRYABLE_KINDS]
+            if not todo:
+                self.say(f"[{tier}] finished")
+                return
+            if attempt < MAX_PASSES:
+                self.say(f"[{tier}] pass {attempt} done; retrying {len(todo)} failed pairs in a minute")
+                time.sleep(60)
+        self.say(f"[{tier}] {len(todo)} pairs still failing after {MAX_PASSES} passes; rerun later to retry them")
+
+    def run_pass(self, tier: str, model, todo: list) -> bool:
+        """One pass over todo. Returns False if a pilot stopped early at a daily limit."""
+        pacer = self.pacers[model.name]
         for position, prompt in enumerate(todo, start=1):
             estimate = estimate_tokens(prompt["messages"], self.config.max_tokens)
-            if not pacer.daily_budget_left(estimate):
-                self.say(f"[{tier}] daily limit for {model.name} reached; {len(todo) - position + 1} pairs left for later")
-                self.counts[f"{tier}: deferred (daily limit)"] += len(todo) - position + 1
-                return
+            while not pacer.daily_budget_left(estimate):
+                if not self.wait_for_reset:
+                    self.say(f"[{tier}] daily limit for {model.name} reached; {len(todo) - position + 1} pairs left for later")
+                    self.counts[f"{tier}: deferred (daily limit)"] += len(todo) - position + 1
+                    return False
+                wait = pacer.seconds_until_daily_room(estimate) + 30
+                self.sleep_logged(tier, wait, f"daily limit for {model.name} reached")
             pacer.wait_for_minute_slot(estimate)
-            record, stop = self.call(tier, model, prompt)
+            record, daily_quota_hit = self.call(tier, model, prompt)
             self.log.append(record)
             pacer.record(record["api_calls"], (record["input_tokens"] or 0) + (record["output_tokens"] or 0))
             status = "error " + record["error"]["kind"] if record["error"] else ("TRUNCATED" if record["truncated"] else "ok")
             self.counts[f"{tier}: {status.split()[0]}"] += 1
-            self.say(f"[{tier}] {position}/{len(todo)} {prompt['id']}: {status} "
+            self.say(f"{datetime.now():%m-%d %H:%M:%S} [{tier}] {position}/{len(todo)} {prompt['id']}: {status} "
                      f"({record['output_tokens'] or 0} out tok, {record['latency_ms'] or 0:.0f} ms"
                      f"{', cache' if record['cache_hit'] else ''})")
-            if stop:
-                self.say(f"[{tier}] {model.name} hit its daily quota; stopping this tier for the run")
-                self.counts[f"{tier}: deferred (daily limit)"] += len(todo) - position
-                return
+            if daily_quota_hit:
+                if not self.wait_for_reset:
+                    self.say(f"[{tier}] {model.name} hit its daily quota; stopping this tier for the run")
+                    self.counts[f"{tier}: deferred (daily limit)"] += len(todo) - position
+                    return False
+                # The provider's own count says we're out for the day; the failed pair is retried next pass
+                self.sleep_logged(tier, DAILY_QUOTA_BACKOFF_SECONDS, f"{model.name} returned a daily-quota error")
+        return True
 
     def call(self, tier: str, model, prompt: dict) -> tuple:
         """Send one prompt to one tier. Returns (record, stop_tier)."""
@@ -434,10 +520,176 @@ def summarize(prompts: list, log: AnswerLog, tiers: list) -> None:
               f"{(statistics.mean(r['output_tokens'] for r in answered) if answered else 0):>9.0f}")
 
 
+# ---------- Status ----------
+
+def running_pid(pid_path: Path) -> Optional[int]:
+    """The PID in pid_path if that process is still alive, else None."""
+    try:
+        pid = int(pid_path.read_text().strip())
+        os.kill(pid, 0)
+        return pid
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        return None
+
+
+def format_eta(hours: Optional[float]) -> str:
+    if hours is None:
+        return "unknown"
+    if hours <= 0:
+        return "done"
+    finish = datetime.now().astimezone() + timedelta(hours=hours)
+    span = f"{int(hours // 24)}d {int(hours % 24)}h" if hours >= 24 else f"{int(hours)}h {int(hours * 60 % 60)}m"
+    return f"{finish:%a %m-%d %H:%M} (in {span})"
+
+
+def expected_tokens(tier: str, prompt: dict, by_source: dict) -> float:
+    """Expected input+output tokens for one prompt on one tier: this tier's average for the prompt's
+    source (from this run, else pilot 2), else a rough guess from the prompt length."""
+    cost = by_source.get((tier, prompt["source"]))
+    if cost is not None:
+        return cost
+    return sum(len(m["content"]) for m in prompt["messages"]) / 4 + 500
+
+
+def average_costs(records: list, sources: dict) -> dict:
+    """(tier, source) -> mean input+output tokens of answered records."""
+    totals = {}
+    for r in records:
+        if r["error"] or r["prompt_id"] not in sources:
+            continue
+        totals.setdefault((r["tier"], sources[r["prompt_id"]]), []).append(
+            (r["input_tokens"] or 0) + (r["output_tokens"] or 0))
+    return {key: statistics.mean(values) for key, values in totals.items()}
+
+
+def simulate_finish(left: list, cost, window: list, limits: Limits, start: datetime,
+                    seconds_per_call: float, max_tokens: int) -> datetime:
+    """When the last of `left` would be answered, following the same pacing rules as the collector.
+
+    window is the (UTC time, tokens) usage already counted against the daily limit. Each call reserves
+    input + max_tokens against the per-minute and per-day token limits (like Pacer), then uses its
+    expected cost.
+    """
+    window = list(window)
+    minute = deque()
+    t = start
+    for prompt in left:
+        estimate = estimate_tokens(prompt["messages"], max_tokens)
+        actual = cost(prompt)
+        while True:   # daily limits (rolling 24h, or reset at midnight Pacific)
+            start_of_day = day_start(t, limits.daily_reset)
+            in_day = [(w, k) for w, k in window if w >= start_of_day]
+            over_calls = limits.rpd is not None and len(in_day) + 1 > limits.rpd
+            over_tokens = limits.tpd is not None and sum(k for _, k in in_day) + estimate > limits.tpd
+            if not (over_calls or over_tokens):
+                break
+            if limits.daily_reset == "midnight_pacific":
+                local = t.astimezone(PACIFIC)
+                t = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0).astimezone(timezone.utc)
+            else:
+                t = min(w for w, _ in in_day) + timedelta(hours=24, seconds=30)
+        while minute and (t - minute[0][0]).total_seconds() >= 60:
+            minute.popleft()
+        over_rpm = limits.rpm is not None and len(minute) + 1 > limits.rpm
+        over_tpm = limits.tpm is not None and minute and sum(k for _, k in minute) + estimate > limits.tpm
+        if over_rpm or over_tpm:
+            t = minute[0][0] + timedelta(seconds=60)
+            while minute and (t - minute[0][0]).total_seconds() >= 60:
+                minute.popleft()
+        window.append((t, actual))
+        minute.append((t, actual))
+        t += timedelta(seconds=seconds_per_call)
+    return t
+
+
+def read_waits(out_dir: Path) -> dict:
+    """tier -> resume time (aware datetime) for tiers the collector says are waiting on a daily limit."""
+    try:
+        raw = json.loads((out_dir / WAITS_FILE).read_text())
+    except (FileNotFoundError, ValueError):
+        return {}
+    return {tier: datetime.fromisoformat(entry["until"]) for tier, entry in raw.items()}
+
+
+def show_status(config: CollectionConfig, prompts: list, out_dir: Path = FULL_DIR) -> None:
+    """Per tier: answers done, errors, truncations, what it's doing, and a simulated finish time.
+
+    The finish time replays the collector's pacing (per-minute and daily limits, counting usage already
+    in the 24h window) over the prompts still to answer, using each tier's average token cost per prompt
+    source from this run (or from pilot 2 for sources this run hasn't reached yet).
+    """
+    log = AnswerLog(out_dir / "answers.jsonl")
+    latest = log.latest()
+    now = datetime.now(timezone.utc)
+    pid = running_pid(out_dir / "run.pid")
+    waits = read_waits(out_dir) if pid else {}
+    sources = {p["id"]: p["source"] for p in prompts}
+    pilot = AnswerLog(PILOT2_DIR / "answers.jsonl").records if (PILOT2_DIR / "answers.jsonl").exists() else []
+    costs = {**average_costs(pilot, sources), **average_costs(log.records, sources)}
+
+    print(f"{log.path.relative_to(PROJECT_ROOT)}: {len(log.records)} records | "
+          + (f"collector running (pid {pid})" if pid else "collector NOT running"))
+    print(f"\n{'tier':<7}{'model':<14}{'done':>9}{'errors':>14}{'trunc':>7}{'last answer':>13}  "
+          f"{'state':<26}estimated finish")
+    notes = []
+    for tier, name in config.tiers.items():
+        records = {p["id"]: latest.get((p["id"], tier)) for p in prompts}
+        done = sum(1 for r in records.values() if r and not r["error"] and not r["truncated"])
+        truncated = sum(1 for r in records.values() if r and not r["error"] and r["truncated"])
+        errors = [r for r in records.values() if r and r["error"]]
+        permanent = [r for r in errors if r["error"]["kind"] not in RETRYABLE_KINDS]
+        left = [p for p in prompts
+                if records[p["id"]] is None
+                or (records[p["id"]]["error"] and records[p["id"]]["error"]["kind"] in RETRYABLE_KINDS)]
+
+        answered = [r for r in log.records if r["tier"] == tier and not r["error"]]
+        stamps = [datetime.fromisoformat(r["timestamp"]) for r in answered]
+        last = f"{(now - max(stamps)).total_seconds() / 60:.0f} min ago" if stamps else "never"
+
+        waiting_until = waits.get(tier)
+        if waiting_until and waiting_until <= now:
+            waiting_until = None
+        if not left:
+            state = "finished"
+        elif not pid:
+            state = "stopped"
+        elif waiting_until:
+            state = f"waiting until {waiting_until.astimezone():%a %H:%M}"
+        else:
+            state = "answering"
+
+        if not left:
+            finish = "done"
+        else:
+            window = [(datetime.fromisoformat(r["timestamp"]), (r["input_tokens"] or 0) + (r["output_tokens"] or 0))
+                      for r in log.records if r["model_name"] == name and r.get("api_calls")]
+            latencies = [r["latency_ms"] for r in answered if not r["cache_hit"] and r["latency_ms"]]
+            seconds_per_call = (statistics.median(latencies) / 1000 if latencies else 1.0) + 0.2
+            start = max(now, waiting_until) if waiting_until else now
+            end = simulate_finish(left, lambda p: expected_tokens(tier, p, costs), window,
+                                  config.limits[name], start, seconds_per_call, config.max_tokens)
+            hours = (end - now).total_seconds() / 3600
+            span = f"{int(hours // 24)}d {int(hours % 24)}h" if hours >= 24 else f"{int(hours)}h {int(hours * 60 % 60)}m"
+            finish = f"{end.astimezone():%a %m-%d %H:%M} (in {span}, {len(left)} left)"
+        error_text = f"{len(errors)}" + (f" ({len(permanent)} perm.)" if permanent else "")
+        print(f"{tier:<7}{name:<14}{f'{done}/{len(prompts)}':>9}{error_text:>14}{truncated:>7}{last:>13}  {state:<26}{finish}")
+        for r in permanent:
+            notes.append(f"{tier} {r['prompt_id']}: {r['error']['kind']} error, not retried automatically "
+                         f"({r['error']['message'][:90]})")
+    if notes:
+        print("\nPermanent errors (excluded from the finish estimate):")
+        for note in notes:
+            print(f"  {note}")
+    if not pid:
+        print("\nThe collector isn't running; finish times assume it is restarted now.")
+
+
 # ---------- Main ----------
 
 def main():
     parser = argparse.ArgumentParser(description="Collect answers from every tier.")
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "status"],
+                        help="run (default) collects answers; status shows progress of the full run")
     parser.add_argument("--pilot", action="store_true", help="run the 30-prompt pilot into data/pilot/")
     parser.add_argument("--pilot2", action="store_true", help="pilot 1 + 30 auto-gradable own prompts into data/pilot2/")
     parser.add_argument("--report-only", action="store_true", help="only rebuild the review and summary")
@@ -446,6 +698,9 @@ def main():
     registry = load_registry()
     config = load_collection_config(registry)
     prompts = load_prompts()
+    if args.command == "status":
+        show_status(config, prompts)
+        return
     out_dir = PILOT2_DIR if args.pilot2 else PILOT_DIR if args.pilot else FULL_DIR
     if args.pilot2:
         prompts = pilot2_prompts(prompts)
@@ -455,10 +710,23 @@ def main():
     tiers = list(config.tiers)
 
     if not args.report_only:
-        collector = Collector(config, registry, log, run="pilot2" if args.pilot2 else "pilot" if args.pilot else "full")
+        full = not (args.pilot or args.pilot2)
+        collector = Collector(config, registry, log, run="pilot2" if args.pilot2 else "pilot" if args.pilot else "full",
+                              wait_for_reset=full)
+        pid_path = out_dir / "run.pid"
+        if full:
+            other = running_pid(pid_path)
+            if other and other != os.getpid():
+                raise SystemExit(f"another collector is already running (pid {other}); not starting a second one")
+            pid_path.write_text(str(os.getpid()))
         started = time.monotonic()
-        print(f"Collecting {len(prompts)} prompts x {len(tiers)} tiers -> {log.path.relative_to(PROJECT_ROOT)}")
-        collector.run_all(prompts)
+        print(f"{datetime.now().astimezone():%Y-%m-%d %H:%M %Z} pid {os.getpid()}: collecting {len(prompts)} prompts x "
+              f"{len(tiers)} tiers -> {log.path.relative_to(PROJECT_ROOT)}", flush=True)
+        try:
+            collector.run_all(prompts)
+        finally:
+            if full and running_pid(pid_path) == os.getpid():
+                pid_path.unlink()
         print(f"\nFinished in {time.monotonic() - started:.0f}s")
         for key, n in sorted(collector.counts.items()):
             print(f"  {key}: {n}")
