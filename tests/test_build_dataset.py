@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from eval.build_dataset import PACIFIC, Limits, Pacer, simulate_finish
+from eval.build_dataset import PACIFIC, Limits, Pacer, simulate_finish, wait_until
 
 
 def test_cache_hits_do_not_count_against_the_daily_token_budget():
@@ -67,3 +67,61 @@ def test_simulation_respects_midnight_pacific_reset():
                           start, 1, 4000)
     assert end.astimezone(PACIFIC).date() > start.astimezone(PACIFIC).date()
 
+
+
+# ---------- wall-clock waits ----------
+
+
+class FakeClock:
+    """A wall clock that only moves when sleep() is called, plus optional jumps (the computer sleeping)."""
+
+    def __init__(self, start):
+        self.time = start
+        self.sleeps = []
+        self.jumps = {}          # after the Nth sleep call, jump the clock forward this much
+
+    def now(self):
+        return self.time
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.time += timedelta(seconds=seconds)
+        jump = self.jumps.get(len(self.sleeps))
+        if jump:
+            self.time += jump
+
+
+START = datetime(2026, 10, 19, 22, 0, tzinfo=timezone.utc)
+
+
+def test_wait_sleeps_in_short_steps_until_the_deadline():
+    clock = FakeClock(START)
+    wait_until(START + timedelta(minutes=5), now=clock.now, sleep=clock.sleep, step=60)
+    assert clock.sleeps == [60] * 5
+    assert clock.time == START + timedelta(minutes=5)
+
+
+def test_time_asleep_counts_toward_the_wait():
+    # A 17.9h wait, but after the 3rd step the computer sleeps for 17 hours
+    clock = FakeClock(START)
+    clock.jumps = {3: timedelta(hours=17)}
+    deadline = START + timedelta(hours=17.9)
+    wait_until(deadline, now=clock.now, sleep=clock.sleep, step=60)
+    assert clock.time >= deadline
+    # it finishes within one step of the deadline: ~3 min before the jump plus ~51 min after it,
+    # not another 17 hours of steps
+    assert len(clock.sleeps) < 60
+    assert clock.time - deadline < timedelta(seconds=60)
+
+
+def test_waking_after_the_deadline_ends_the_wait_immediately():
+    clock = FakeClock(START)
+    clock.jumps = {1: timedelta(days=1)}          # slept straight through the deadline
+    wait_until(START + timedelta(hours=2), now=clock.now, sleep=clock.sleep, step=60)
+    assert len(clock.sleeps) == 1
+
+
+def test_past_deadline_does_not_sleep_at_all():
+    clock = FakeClock(START)
+    wait_until(START - timedelta(minutes=1), now=clock.now, sleep=clock.sleep)
+    assert clock.sleeps == []

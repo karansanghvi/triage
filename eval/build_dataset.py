@@ -60,7 +60,7 @@ PILOT2_OWN = {"extraction": (2, 3, 3), "classification": (2, 3, 3), "qa": (2, 2,
 # A 429 whose message mentions a daily quota: waiting a minute won't help
 DAILY_QUOTA_HINT = re.compile(r"per ?day|perday|daily|requests_per_day|RPD", re.IGNORECASE)
 DAILY_QUOTA_BACKOFF_SECONDS = 30 * 60   # after a daily-quota 429, wait this long before trying again
-MAX_WAIT_CHUNK_SECONDS = 15 * 60        # long waits are slept in chunks, logging each one
+WAIT_STEP_SECONDS = 60                  # long waits sleep in steps this long, re-checking the wall clock
 # Errors worth retrying later in the same run; client and config errors are not
 RETRYABLE_KINDS = {"rate_limit", "server", "timeout", "connection", "circuit_open", "unknown"}
 MAX_PASSES = 5                          # passes over a tier's failed prompts within one run
@@ -219,6 +219,21 @@ class Pacer:
             self._day.append((datetime.now(timezone.utc), api_calls, tokens))
 
 
+def wait_until(deadline: datetime, now=lambda: datetime.now(timezone.utc), sleep=time.sleep,
+               step: float = WAIT_STEP_SECONDS) -> None:
+    """Sleep until the wall clock reaches deadline, in short steps.
+
+    time.sleep() doesn't count time the computer spends asleep (on macOS its clock pauses), so one
+    long sleep can overshoot by hours. Re-checking the real time every step means time asleep counts
+    toward the wait, and the wait ends within one step of the computer waking after the deadline.
+    """
+    while True:
+        remaining = (deadline - now()).total_seconds()
+        if remaining <= 0:
+            return
+        sleep(min(remaining, step))
+
+
 # ---------- Output ----------
 
 class AnswerLog:
@@ -327,10 +342,7 @@ class Collector:
         self.say(f"[{tier}] {why}; waiting {seconds / 3600:.1f}h, until about {resume:%Y-%m-%d %H:%M %Z}")
         self.set_waiting(tier, resume, why)
         try:
-            while seconds > 0:
-                chunk = min(seconds, MAX_WAIT_CHUNK_SECONDS)
-                time.sleep(chunk)
-                seconds -= chunk
+            wait_until(resume.astimezone(timezone.utc))
         finally:
             self.set_waiting(tier, None)
 
