@@ -1,0 +1,10 @@
+# LLM judge settings (app/verifier/judge.py). The pass threshold lives in thresholds.yaml.
+#
+# Note: groq-large is also the collector's high tier, and Groq limits each model to 200K tokens
+# per day. Run judging after collection has finished, or the two will share that budget.
+
+model: groq-large          # openai/gpt-oss-120b on Groq (a name from models.yaml)
+temperature: 0
+reasoning_effort: low
+max_tokens: 1500           # reasoning + the short JSON verdict
+max_attempts: 2            # one retry if the verdict can't be parsed
