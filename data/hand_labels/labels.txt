@@ -10,53 +10,53 @@
 #
 # Check your file with:  python -m eval.hand_labels check
 
-own_extraction_018 
-own_summarization_015 
-own_classification_005 
-own_classification_021 
-own_summarization_007 
-own_creative_016 
-own_qa_027 
-own_qa_011 
-own_classification_012 
-own_qa_006 
-own_summarization_027 
-own_classification_002 
-own_creative_010 
-own_reasoning_006 
-own_classification_013 
-own_extraction_009 
-own_qa_004 
-own_reasoning_022 
-own_reasoning_013 
-own_creative_021 
-own_reasoning_016 
-own_creative_027 
-own_qa_013 
-own_summarization_022 
-own_extraction_007 
-own_reasoning_010 
-own_reasoning_002 
-own_creative_013 
-own_classification_001 
-own_reasoning_027 
-own_summarization_024 
-own_reasoning_008 
-own_classification_024 
-own_creative_004 
-own_qa_012 
-own_extraction_004 
-own_creative_019 
-own_creative_002 
-own_classification_026 
-own_qa_008 
-own_qa_015 
-own_classification_025 
-own_extraction_022 
-own_summarization_014 
-own_extraction_019 
-own_extraction_010 
-own_summarization_018 
-own_extraction_006 
-own_qa_016 
-own_summarization_008 
+own_extraction_018 low
+own_summarization_015 medium
+own_classification_005 high
+own_classification_021 high
+own_summarization_007 low 
+own_creative_016 high
+own_qa_027 high
+own_qa_011 low 
+own_classification_012 medium
+own_qa_006 low 
+own_summarization_027 low 
+own_classification_002 medium
+own_creative_010 high
+own_reasoning_006 low 
+own_classification_013 medium
+own_extraction_009 low 
+own_qa_004 low 
+own_reasoning_022 low 
+own_reasoning_013 low 
+own_creative_021 high
+own_reasoning_016 low 
+own_creative_027 low 
+own_qa_013 low 
+own_summarization_022 medium 
+own_extraction_007 low 
+own_reasoning_010 low 
+own_reasoning_002 low 
+own_creative_013 low 
+own_classification_001 low 
+own_reasoning_027 medium 
+own_summarization_024 high 
+own_reasoning_008 high 
+own_classification_024 high 
+own_creative_004 low  
+own_qa_012 medium 
+own_extraction_004 low 
+own_creative_019 medium 
+own_creative_002 medium 
+own_classification_026 medium 
+own_qa_008 low 
+own_qa_015 low 
+own_classification_025 medium 
+own_extraction_022 low 
+own_summarization_014 high 
+own_extraction_019 low 
+own_extraction_010 low 
+own_summarization_018 medium 
+own_extraction_006 low 
+own_qa_016 low 
+own_summarization_008 high 
