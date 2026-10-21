@@ -13,4 +13,8 @@ model: groq-large          # openai/gpt-oss-120b on Groq (a name from models.yam
 temperature: 0
 reasoning_effort: low
 max_tokens: 1500           # reasoning + the short JSON verdict
-max_attempts: 2            # one retry if the verdict can't be parsed
+max_attempts: 2            # one retry if the verdict can't be parsed; the retry shows the judge its reply and the error
+timeout_seconds: 120       # per judge call (the default 30s is too short for long Arena answers)
+# JSON-only output. Groq supports json_object for all models, including gpt-oss
+# (console.groq.com/docs/structured-outputs, checked 2026-10-20). The parser still checks the shape.
+response_format: json_object

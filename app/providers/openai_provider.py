@@ -37,13 +37,15 @@ def _reasoning_from(message) -> str | None:
 
 def send_openai_format(
     messages, model_id, *, provider, base_url, api_key, stream, temperature, max_tokens, timeout,
-    reasoning_effort=None,
+    reasoning_effort=None, response_format=None,
 ):
     # max_retries=0: the library retries on its own by default.
     # Triage's reliability layer decides when to retry instead.
     client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=0)
 
     extra = {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
+    if response_format is not None:
+        extra["response_format"] = response_format
     if stream:
         return _stream(client, messages, model_id, provider, temperature, max_tokens, extra)
 

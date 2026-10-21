@@ -51,6 +51,8 @@ class JudgeSettings:
     max_tokens: int
     max_attempts: int
     pass_threshold: int
+    timeout_seconds: float = 120.0
+    response_format: Optional[str] = None   # e.g. "json_object": ask the provider for JSON-only output
 
 
 def load_judge_settings(config_path=JUDGE_CONFIG_PATH, thresholds_path=THRESHOLDS_PATH) -> JudgeSettings:
@@ -66,6 +68,8 @@ def load_judge_settings(config_path=JUDGE_CONFIG_PATH, thresholds_path=THRESHOLD
         max_tokens=int(config.get("max_tokens", 1500)),
         max_attempts=int(config.get("max_attempts", 2)),
         pass_threshold=pass_threshold,
+        timeout_seconds=float(config.get("timeout_seconds", 120)),
+        response_format=config.get("response_format"),
     )
 
 
@@ -101,6 +105,19 @@ def build_judge_messages(messages: list, constraints: list, reference: str, cand
     return [{"role": "system", "content": JUDGE_SYSTEM_PROMPT}, {"role": "user", "content": user}]
 
 
+def retry_messages(judge_messages: list, previous_reply: str, problem: str) -> list:
+    """The original judge messages plus the bad reply and a follow-up quoting the exact parse error.
+
+    Re-sending the identical prompt at temperature 0 just repeats the same bad reply; showing the model
+    its reply and what was wrong with it gives it a real chance to fix the format.
+    """
+    return judge_messages + [
+        {"role": "assistant", "content": previous_reply or "(empty reply)"},
+        {"role": "user", "content": f"Your reply wasn't valid JSON in the required format (reason: {problem}). "
+                                    "Reply with only the JSON object in the required format."},
+    ]
+
+
 # ---------- Parsing ----------
 
 def parse_verdict(text: str, constraints: list) -> tuple:
@@ -134,8 +151,10 @@ def default_send(messages: list, settings: JudgeSettings) -> str:
     """Send to the configured judge model through the Phase 1 send_request."""
     from app.providers.base import send_request   # imported here so tests never need provider keys
     model = load_registry()[settings.model_name]
+    response_format = {"type": settings.response_format} if settings.response_format else None
     response = send_request(messages, model, temperature=settings.temperature, max_tokens=settings.max_tokens,
-                            reasoning_effort=settings.reasoning_effort)
+                            timeout=settings.timeout_seconds, reasoning_effort=settings.reasoning_effort,
+                            response_format=response_format)
     return response.text
 
 
@@ -145,8 +164,9 @@ def judge(messages: list, constraints: list, reference: Optional[str], candidate
     """Rate candidate against reference (the high tier's answer) on the 1-5 rubric.
 
     Returns status "no_reference" without calling the judge when the reference is missing, empty or
-    truncated. An unparseable verdict is retried (settings.max_attempts in total), then recorded as
-    status "error". Provider errors are not caught here; the caller decides when to retry.
+    truncated. An unparseable verdict is retried with a follow-up message that shows the judge its reply
+    and the exact parse error (settings.max_attempts in total), then recorded as status "error".
+    Provider errors are not caught here; the caller decides when to retry.
     """
     if reference is None or not reference.strip() or reference_truncated:
         why = "reference answer is truncated" if reference_truncated else "no reference answer"
@@ -157,7 +177,8 @@ def judge(messages: list, constraints: list, reference: Optional[str], candidate
     judge_messages = build_judge_messages(messages, constraints, reference, candidate)
     raw, problem = None, ""
     for attempt in range(1, settings.max_attempts + 1):
-        raw = send(judge_messages, settings)
+        sent = judge_messages if attempt == 1 else retry_messages(judge_messages, raw, problem)
+        raw = send(sent, settings)
         try:
             judge_score, reason, broken = parse_verdict(raw, constraints)
         except ValueError as error:   # includes json.JSONDecodeError

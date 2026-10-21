@@ -79,7 +79,9 @@ def test_malformed_verdict_is_retried_once(bad):
     result = run(fake)
     assert (result.status, result.score, result.attempts) == ("scored", 4, 2)
     assert len(fake.calls) == 2
-    assert fake.calls[0] == fake.calls[1]          # the retry sends the same prompt
+    assert fake.calls[1][:2] == fake.calls[0]      # the retry keeps the original prompt...
+    assert fake.calls[1][2] == {"role": "assistant", "content": bad}   # ...shows the bad reply...
+    assert fake.calls[1][3]["role"] == "user"      # ...and asks for a fix
 
 
 def test_two_malformed_verdicts_record_an_error():
@@ -137,3 +139,63 @@ def test_judge_prompt_contains_rubric_constraints_and_both_answers():
     for phrase in ["5 = as good as or better", "4 = slightly worse", "3 = noticeably worse",
                    "2 = mostly fails", "1 = wrong, off-topic, a refusal, or not in English", "at most 3"]:
         assert phrase in JUDGE_SYSTEM_PROMPT
+
+
+# ---------- error-aware retry ----------
+
+def test_follow_up_quotes_the_exact_parse_error():
+    unquoted = '{"constraints": [], "score": 4, "reason": The candidate is fine.}'
+    fake = FakeJudge(unquoted, json.dumps({"constraints": [], "score": 4, "reason": "The candidate is fine."}))
+    result = run(fake, constraints=[])
+    follow_up = fake.calls[1][-1]["content"]
+    assert follow_up.startswith("Your reply wasn't valid JSON in the required format (reason: ")
+    assert "Expecting value: line 1 column 43 (char 42)" in follow_up      # the real json error text
+    assert follow_up.endswith("Reply with only the JSON object in the required format.")
+    assert (result.status, result.score, result.attempts) == ("scored", 4, 2)
+
+
+def test_follow_up_names_schema_problems_too():
+    missing_met = json.dumps({"constraints": [{"constraint": c} for c in CONSTRAINTS], "score": 5, "reason": "ok"})
+    fake = FakeJudge(missing_met, verdict(5))
+    result = run(fake)
+    assert "each constraint check needs a true/false 'met'" in fake.calls[1][-1]["content"]
+    assert result.score == 5
+
+
+def test_corrected_second_reply_is_accepted_and_capped_normally():
+    fake = FakeJudge("Score: 5", verdict(5, "fixed", met=(False, True)))
+    result = run(fake)
+    assert (result.status, result.judge_score, result.score, result.attempts) == ("scored", 5, 3, 2)
+    assert result.reason == "fixed"
+
+
+def test_empty_first_reply_still_gets_a_follow_up():
+    fake = FakeJudge("", verdict(4))
+    result = run(fake)
+    assert fake.calls[1][2]["content"] == "(empty reply)"
+    assert result.score == 4
+
+
+# ---------- settings reach the provider ----------
+
+def test_default_send_passes_timeout_json_mode_and_reasoning_effort(monkeypatch):
+    from app.providers import base
+    from app.verifier import judge as judge_module
+
+    seen = {}
+
+    class FakeResponse:
+        text = verdict(4)
+
+    def fake_send_request(messages, model, **kwargs):
+        seen.update(kwargs, model=model.name)
+        return FakeResponse()
+
+    monkeypatch.setattr(base, "send_request", fake_send_request)
+    settings = load_judge_settings()
+    judge_module.default_send([{"role": "user", "content": "hi"}], settings)
+    assert seen["model"] == "groq-large"
+    assert seen["timeout"] == 120
+    assert seen["response_format"] == {"type": "json_object"}
+    assert seen["reasoning_effort"] == "low"
+    assert seen["temperature"] == 0

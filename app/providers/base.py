@@ -147,6 +147,7 @@ def send_request(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     reasoning_effort: Optional[str] = None,
+    response_format: Optional[dict] = None,
 ):
     """Send messages to any model.
 
@@ -154,6 +155,7 @@ def send_request(
     stream=True returns a StreamingResponse to loop over.
     reasoning_effort ("low", "medium", "high") is passed to reasoning models on OpenAI-format
     providers such as Groq's gpt-oss; leave it None for every other model.
+    response_format (e.g. {"type": "json_object"}) asks OpenAI-format providers for JSON-only output.
     Raises ProviderError when the provider fails.
     """
     _validate_messages(messages)
@@ -176,6 +178,10 @@ def send_request(
         if model_config.provider not in OPENAI_FORMAT_PROVIDERS:
             raise ProviderError(model_config.provider, "config", "reasoning_effort is only supported on OpenAI-format providers")
         settings["reasoning_effort"] = reasoning_effort
+    if response_format is not None:
+        if model_config.provider not in OPENAI_FORMAT_PROVIDERS:
+            raise ProviderError(model_config.provider, "config", "response_format is only supported on OpenAI-format providers")
+        settings["response_format"] = response_format
 
     if stream:
         events = adapter(messages, model_config.model_id, **settings)
