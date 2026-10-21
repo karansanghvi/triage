@@ -25,3 +25,6 @@ data/pilot2/
 
 # Judge plumbing test output (not committed)
 data/judge_test/
+
+# LLM judgments (not committed yet)
+data/judgments/
