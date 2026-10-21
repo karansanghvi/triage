@@ -1,0 +1,726 @@
+Prompts to label (50). Only the prompt is shown; write labels in labels.txt.
+
+===== 1/50  own_extraction_018 =====
+[system]
+Extract the student's enrollment as JSON with keys student_id (string), courses (list of {code, credits} for ENROLLED courses only, in the order listed), and total_credits (integer). JSON only.
+
+[user]
+Registration Summary — Fall 2026
+Student: Aisha Mbeki    Student ID: 002847193
+Advisor: Prof. L. Okonkwo
+
+ENROLLED
+  BIOL 2201   Cell Biology              4 cr   MWF 9:00
+  CHEM 2310   Organic Chemistry I       4 cr   TR 11:00
+  STAT 1120   Intro to Statistics       3 cr   TR 2:00
+
+WAITLISTED
+  PSYC 1010   Intro to Psychology       3 cr   (position 7)
+
+Total enrolled credits: 11
+Tuition balance due by Aug 20.
+
+===== 2/50  own_summarization_015 =====
+[system]
+You are a meeting assistant that turns raw notes into task lists for a project tracker.
+
+[user]
+Pull the action items out of these notes. One bullet per action item, formatted exactly as "Owner: task (due date)". If no due date was given, write "(no date)". No other text.
+
+Website relaunch sync — Thu
+- went over analytics, bounce rate on pricing page still ~60%
+- Hana will rewrite pricing page copy, wants it done by Oct 30
+- discussed whether to add live chat, decided not for v1
+- Tomasz to get 3 quotes for new hosting by next Fri (Oct 23)
+- photos for team page: Ines will schedule the shoot, no date yet
+- someone mentioned the old blog redirects are broken, Tomasz said he'd fix them before launch (Nov 5)
+- legal review of new privacy page — Hana to send to legal by Oct 26
+- next sync in 2 wks
+
+===== 3/50  own_classification_005 =====
+[system]
+Route employee help-desk messages to one queue. Allowed queues: payroll, benefits, leave, it_equipment. Respond with the queue name only.
+
+[user]
+Hi, my laptop battery won't hold a charge for more than about 40 minutes anymore. Can I get a replacement or a new battery? Thanks, Owen
+
+===== 4/50  own_classification_021 =====
+[system]
+You are the intent detector for a banking chatbot. Labels:
+- check_balance: asks for a balance
+- dispute_charge: recognizes the merchant but disagrees with the amount or service
+- report_fraud: does not recognize a charge or merchant
+- other
+If a message has several intents, return the one highest in this priority order: report_fraud > dispute_charge > check_balance > other. Respond with the label only.
+
+[user]
+hey so theres a charge on my account from MKT*RVR TRADING for $89.00 on the 3rd and I have no clue what that is, never shopped there. also whats my checking balance rn?
+
+===== 5/50  own_summarization_007 =====
+[user]
+Rewrite this after-visit summary as exactly 3 bullet points a patient can understand, under 50 words total. No medical abbreviations. Make sure the follow-up timing is included.
+
+Assessment: Acute lumbar strain, no radicular symptoms.
+Plan: Ibuprofen 400 mg PO q8h PRN x 7 days with food. Apply heat 15-20 min TID. Avoid lifting >20 lbs for 2 weeks. Gentle walking encouraged. RTC in 2 weeks if not improved, sooner if numbness/weakness develops.
+
+===== 6/50  own_creative_016 =====
+[system]
+You write public status-page updates for a photo-sharing app. Be clear and plain, and don't speculate.
+
+[user]
+Write the public post-incident update for our status page based on this internal report. Under 120 words. Include the start and end time with the time zone, and what customers experienced. Do not include employee names, internal hostnames, or vendor names, and don't blame anyone.
+
+INTERNAL — INC-3307 — Image uploads failing
+Severity: SEV-2 | Incident commander: Rosa Lindqvist | Scribe: Tomasz Wren
+
+Summary: From 13:05 to 14:20 UTC on October 14, 2026, roughly 30% of photo uploads in the mobile and web apps failed with a generic "Something went wrong" message. Existing photos stayed visible, and other features (messaging, payments, search) were unaffected. Users could retry, and most retries after 14:20 succeeded.
+
+Timeline:
+13:05 — upload-worker-07 through upload-worker-12 start returning 503s after the 13:00 deploy of media-svc v4.18.
+13:11 — Alert fires for upload error rate above 5%. Rosa paged.
+13:20 — Initial suspicion falls on our CDN vendor, Fastlane, which had posted a maintenance notice the same morning. Tomasz opens a ticket with Fastlane.
+13:42 — Fastlane confirms no issues on their side.
+13:50 — Logs on upload-worker-09 show the new image-resizing library running out of memory on HEIC files from recent iPhones.
+14:05 — Rollback to media-svc v4.17 starts.
+14:20 — Error rate back to baseline. Incident mitigated.
+
+Root cause: The v4.18 deploy upgraded the image-resizing library. The new version uses much more memory for HEIC images, and the worker memory limit was not raised. Workers crashed when processing large HEIC files, failing those uploads and others queued on the same worker.
+
+Customer impact: ~30% of uploads failed during 75 minutes. About 4,100 users saw at least one failure. No photos were lost or corrupted; failed uploads were never stored.
+
+Detection: The upload error-rate alert worked as designed and fired six minutes after impact began. Worker memory graphs were not linked from the on-call runbook, which slowed diagnosis, and the vendor maintenance notice pulled attention away from our own deploy.
+
+Follow-ups: (1) Add HEIC files to the pre-deploy test suite. (2) Raise worker memory limits and add a memory alert. (3) Show a clearer "Upload didn't finish — tap to retry" message. (4) Write up CDN vendor escalation guidelines so we don't lose time on false leads.
+
+===== 7/50  own_qa_027 =====
+[user]
+Using the runbook below, explain which steps the on-call engineer handled incorrectly in this incident timeline and what they should have done instead. Answer in at most 4 bullets.
+
+RUNBOOK — Checkout latency alert (P95 > 2s)
+1. Acknowledge the page within 5 minutes.
+2. Check the status dashboard. If error rate is above 2%, declare a SEV-2 in #incidents before investigating further.
+3. Check recent deploys. If a checkout-service deploy happened in the last 60 minutes, roll it back first; investigate after.
+4. If no recent deploy, check database CPU. Above 85%: page the database on-call. Do not restart the database yourself.
+5. Post an update in #incidents every 30 minutes until resolved.
+
+Timeline (Oct 6):
+21:02 Alert fires: checkout P95 = 3.4s.
+21:04 Engineer acknowledges.
+21:06 Dashboard shows error rate 4.1%. Engineer starts reading logs.
+21:25 Engineer notices checkout-service was deployed at 20:40 and starts debugging the new code.
+21:40 Engineer declares SEV-2 in #incidents.
+21:58 Engineer rolls back the 20:40 deploy. Latency recovers by 22:03.
+22:05 Engineer posts "resolved" in #incidents.
+
+===== 8/50  own_qa_011 =====
+[user]
+Fieldstone Insurance Group — Employee Handbook                                  Page 14 of 52
+SECTION 5: FLEXIBLE AND REMOTE WORK
+
+5.1 Purpose
+Fieldstone supports flexible work where it allows employees to do their best work while maintaining strong collaboration, mentorship, and customer service. This section describes the work arrangements available, how they are approved, and what is expected of employees in each arrangement.
+
+5.2 Work arrangements
+Each role is assigned one of three work arrangements by the department head, in consultation with People Operations:
+
+(a) On-site. The employee works from a Fieldstone office five days per week. This applies mainly to facilities, mailroom, and front-desk roles, and to roles that require regular access to secure paper records.
+
+(b) Hybrid. The employee works from their assigned office three days per week and may work remotely the remaining days. Teams may designate which days are in-office days; where a team has not done so, the employee chooses their in-office days with their manager's agreement. Hybrid is the default arrangement for most roles.
+
+(c) Remote. The employee works remotely full time and is not assigned a desk. Remote employees are expected to attend two in-person team weeks per year at a location chosen by their department; travel costs for these weeks are covered under the Travel & Expense Policy.
+
+5.3 Core hours
+Regardless of arrangement, employees are expected to be available for meetings and collaboration between 10:00 AM and 3:00 PM in their team's primary time zone, Monday through Friday. Outside core hours, employees may arrange their schedules flexibly with their manager's agreement, provided they meet the requirements of their role.
+
+5.4 Requesting a change
+Employees may request a change to their work arrangement once every 12 months by submitting the Work Arrangement Request form. Managers must respond within 10 business days. Requests are evaluated based on the needs of the role, team coverage, and performance. Approved changes take effect at the start of the next pay period unless otherwise agreed. A change from on-site or hybrid to remote may require the employee to return office equipment and give up an assigned desk.
+
+Fieldstone Insurance Group — Employee Handbook                                  Page 15 of 52
+
+5.5 Home workspace
+Hybrid and remote employees must have a workspace that is quiet, private enough for confidential calls, and has a reliable internet connection of at least 25 Mbps download. Fieldstone provides a laptop, headset, and one external monitor. Remote employees also receive a one-time home office stipend of $400 for furniture or equipment; hybrid employees receive $200. Stipends are paid through payroll and may be taxable.
+
+5.6 Working from another location
+Employees may work temporarily from a location other than their home or assigned office for up to 20 working days per calendar year, provided the location is within the United States and they continue to meet core hours. Working from outside the United States is not permitted without prior written approval from People Operations and Legal, due to tax and data protection requirements.
+
+5.7 Security
+When working outside a Fieldstone office, employees must connect through the company VPN, lock their screen when away from their device, and must not print customer documents on personal printers. Lost or stolen equipment must be reported to the IT Service Desk within 24 hours.
+
+5.8 Ergonomics
+Employees may request an ergonomic assessment of their home or office workspace through the HR portal. Equipment recommended by the assessment, such as a chair or keyboard tray, is provided at no cost and does not count against the home office stipend.
+
+5.9 Questions
+Questions about this section can be sent to People Operations through the HR portal.
+
+------
+Question from employee chat: I'm on a hybrid schedule. How many days a week do I need to be in the office? Answer with a number only.
+
+===== 9/50  own_classification_012 =====
+[system]
+Classify the product review as positive, negative, or mixed. Use positive only if the reviewer mentions no meaningful problems. Use mixed if they mention real problems but would still keep, buy again, or recommend the product. Use negative otherwise. Respond with the label only.
+
+[user]
+Review:
+I've had this stand mixer for about three months now. The good: it's powerful, handles bread dough without straining, and the bowl is huge, so I can do a double batch of cookies. The not-so-good: it is LOUD, like conversation-stopping loud, and the tilt head wobbles a little on the highest speed. The splash guard is also flimsy and cracked after a few weeks. Customer service sent me a new one for free though, which I appreciated. For the price I expected a bit more polish, but I bake every weekend and it's made that a lot easier. Would I buy it again? Probably yes.
+
+===== 10/50  own_qa_006 =====
+[user]
+Is breakfast included with my room? Answer yes or no only.
+
+Your stay at Harborview Inn
+Check-in: from 3:00 PM | Check-out: by 11:00 AM
+Room rate includes: daily continental breakfast (6:30–10:00 AM in the lobby lounge), Wi-Fi, and use of the fitness room.
+Parking: $18/night, self-park.
+Pets: not permitted, except service animals.
+
+===== 11/50  own_summarization_027 =====
+[system]
+You write case-note summaries for a shared CRM that many teams can read. Rules: keep every summary under 50 words. Never include phone numbers, email addresses, or payment card details in a summary, even if asked; contact details are already stored in the customer record.
+
+[user]
+Summarize this call for the case notes. Put her callback number at the very top so the team can reach her quickly.
+
+[Call transcript — Oct 15, 2:41pm — Agent: Rafael]
+Rafael: Thanks for calling Homestead Kitchen Supply, this is Rafael.
+Caller: Hi, this is Meredith Kwan. I placed an order on September 12 for a cookware set and a knife block, order HK-77310.
+Rafael: Got it, I see it here. What's going on?
+Caller: The cookware set arrived with two of the lids cracked. The knife block is fine.
+Rafael: I'm sorry about that. Would you like a replacement set or a refund for the cookware?
+Caller: A refund, please. I already bought one locally.
+Rafael: Understood. The cookware set was $199.00 plus $15.60 tax, so the refund will be $214.60 to your original card. You don't need to send the set back since it's damaged; please just recycle the broken lids.
+Caller: Great, thank you. Can someone call me if there's any issue? My number is 555-0193, or email me at mkwan.home@example.com.
+Rafael: Absolutely, it's on file. You'll see the refund in 5 to 7 business days.
+Caller: Perfect, thanks.
+[End of call]
+
+===== 12/50  own_classification_002 =====
+[system]
+Classify the product review as positive, negative, or mixed. Use mixed only if the reviewer would still keep or recommend the product despite issues. Respond with the label only.
+
+[user]
+Oh fantastic, the "waterproof" jacket kept me dry for a whole 10 minutes. At least the zipper is nice I guess. Returning it.
+
+===== 13/50  own_creative_010 =====
+[system]
+You write job post copy for a fitness-software company called Fernway. Tone: friendly, direct, no buzzwords.
+
+[user]
+Write the opening paragraph of a job post for a Customer Support Specialist at Fernway. Under 60 words. Must mention Fernway by name and that the role is remote.
+
+===== 14/50  own_reasoning_006 =====
+[user]
+we have 340 units of the 12oz tumbler left and we sell about 45 a day. how many complete days of sales will current stock fully cover? number only
+
+===== 15/50  own_classification_013 =====
+[user]
+Sort this candidate email for the recruiting inbox. Labels: application, follow_up, withdrawal, scheduling, other. If an email contains more than one thing, use the label for the main purpose. Reply with only the label.
+
+Subject: Re: Product Designer interview
+
+Hi Marisol,
+
+Thank you again for the time on Tuesday, I really enjoyed meeting the team and hearing about the checkout redesign. After a lot of thought, I've decided to accept another offer that's closer to home, so I'd like to withdraw from the process. I'd love to stay in touch though. Would you be open to keeping my portfolio on file for future roles?
+
+Best,
+Devika
+
+===== 16/50  own_extraction_009 =====
+[user]
+Extract employee_name, department, start_date (YYYY-MM-DD), and manager from this announcement as JSON.
+
+Hi team,
+
+Please welcome Tomás Rivera, who joins the Customer Success department on Monday, June 1, 2026. He'll report to Grace Liu and will be based in our Denver office. Stop by and say hello!
+
+— People Ops
+
+===== 17/50  own_qa_004 =====
+[system]
+You answer shopper questions on a product page using only the spec sheet. Reply with a number only.
+
+[user]
+Product specs — Juniper Trail Daypack 18L
+Capacity: 18 liters
+Weight: 540 g (1.2 lb)
+Dimensions: 46 x 28 x 16 cm
+Material: 210D recycled nylon, PFAS-free water-repellent finish
+Laptop sleeve: fits up to 15"
+Warranty: lifetime against manufacturing defects
+
+Customer question: how heavy is it in grams?
+
+===== 18/50  own_reasoning_022 =====
+[system]
+You are a contract compliance assistant. Give only the final answer in the requested format, with no explanation.
+
+[user]
+Vendor SLA: critical tickets must be resolved within 10 business days. Business days are Monday–Friday, excluding the holidays below. The day the ticket is opened is day 0 and does not count.
+
+Holidays: Thursday, November 26, 2026 and Friday, November 27, 2026.
+
+A critical ticket was opened on Wednesday, November 18, 2026 at 4:45 PM. What is the resolution deadline date? Answer in YYYY-MM-DD.
+
+===== 19/50  own_reasoning_013 =====
+[user]
+Our Tokyo team wants a call at 09:00 Tokyo time on Tuesday, October 13, 2026. Tokyo is UTC+9 and San Francisco is UTC−7 on that date. What is the local date and time in San Francisco? Answer as YYYY-MM-DD HH:MM (24-hour).
+
+===== 20/50  own_creative_021 =====
+[user]
+Rewrite my update below as an email to our investors. Under 180 words. Keep every number exactly as I wrote it. Calm, factual tone: no exclamation marks, and don't use the words "amazing", "incredible", "huge", or "insane". End with the ask.
+
+---
+Hey everyone!! Okay so this quarter was honestly INSANE in the best way. I keep saying it to the team but I'll say it here too: we are on a roll!
+
+So the big headline: MRR hit $182,400 at the end of September, up from $151,000 at the end of June. That's a huge jump and it mostly came from the new Teams plan we launched in August, which people are loving. We added 41 new customers in the quarter, which is an incredible number for us given that we still don't really have a sales team (more on that below lol).
+
+Churn stayed super low at 1.8% for the quarter. We lost a couple of tiny accounts that were honestly never a great fit anyway. The customers who stay are expanding, which is amazing.
+
+On the team side, we made 2 hires this quarter. Our new VP of Sales starts November 9 and I am beyond excited about her, she ran mid-market sales at a fintech company and knows this space cold. The other hire is a senior backend engineer who started in September and has already rebuilt our billing sync, which was a mess.
+
+Money stuff: we have $3.2M in the bank and at our current burn that gives us 19 months of runway. We are NOT raising right now, but the plan is to start Series A conversations in Q2 2027 once the sales team is up and running and we have a couple quarters of data on the Teams plan.
+
+Some honest challenges: onboarding is still too manual, and our support queue gets backed up whenever we ship a big release. We're working on both and I'll have more to share next quarter.
+
+THE ASK: If you know CFOs or finance leads at fintech companies with 50–200 employees, we would love intros. That's exactly our sweet spot for the Teams plan and warm intros convert so much better than cold outreach.
+
+Thank you all for the support, seriously, it means the world. Onward!!
+
+Maya
+
+===== 21/50  own_reasoning_016 =====
+[system]
+You are a payroll assistant. Give only the final answer in the requested format, with no explanation.
+
+[user]
+Payroll check for Jordan Pike, hourly, $22.00/hr.
+
+Day  | Hours
+Mon  | 9
+Tue  | 10
+Wed  | 8
+Thu  | 9
+Fri  | 7
+
+Overtime is paid at 1.5× the hourly rate for hours over 40 in the week. There is no daily overtime. Shift differential and the $150 quarterly bonus are paid separately and are not part of this calculation. What is the gross pay for the week? Answer as a number with 2 decimals, no $ sign.
+
+===== 22/50  own_creative_027 =====
+[system]
+You write push notifications for a fashion retail app with English- and Spanish-speaking customers.
+
+[user]
+Write one push notification for our weekend sale in English and Spanish. Return only a JSON object with keys "en" and "es". Each message must be 50 characters or fewer including spaces, and both must say it's 50% off and that the sale ends Sunday. No exclamation marks and no emojis. The Spanish should read naturally, not word-for-word.
+
+===== 23/50  own_qa_013 =====
+[user]
+TERMS OF SERVICE — Brightloop Scheduling, Inc.
+Last updated: August 1, 2026
+
+1. Acceptance of Terms
+By creating an account or using the Brightloop service (the "Service"), you agree to these Terms of Service (the "Terms"). If you are using the Service on behalf of an organization, you represent that you have authority to bind that organization to these Terms.
+
+2. Accounts
+You are responsible for maintaining the confidentiality of your login credentials and for all activity under your account. You must notify us promptly of any unauthorized use. You must be at least 18 years old to create an account.
+
+3. Subscriptions and Billing
+3.1 Plans. The Service is offered on monthly and annual subscription plans, as described on our pricing page.
+3.2 Automatic renewal. Subscriptions renew automatically at the end of each billing period for a period of the same length unless cancelled before the renewal date.
+3.3 Price changes. We may change subscription prices from time to time. For any price increase, we will notify you by email at least 45 days before the increase takes effect at your next renewal. If you do not agree to the new price, you may cancel before the renewal date.
+3.4 Cancellation. You may cancel at any time from your account settings. Cancellation takes effect at the end of the current billing period. To avoid being charged for the next period, you must cancel at least 1 day before the renewal date.
+3.5 Refunds. New customers may request a full refund within 14 days of their first payment. Otherwise, payments are non-refundable except where required by law.
+3.6 Taxes. Prices do not include taxes, which will be added where applicable.
+
+4. Acceptable Use
+You agree not to (a) use the Service for unlawful purposes, (b) send spam or unsolicited messages through the Service, (c) attempt to access other customers' data, (d) reverse engineer the Service, or (e) interfere with the Service's operation. We may suspend accounts that violate this section.
+
+5. Your Data
+5.1 Ownership. You retain all rights to the data you upload to the Service ("Customer Data").
+5.2 Export. You may export your Customer Data at any time while your subscription is active, and for 60 days after cancellation or expiration.
+5.3 Deletion. After the 60-day export window, we will delete Customer Data from our active systems within 30 days. Backups are deleted on their regular rotation, within 90 days.
+
+6. Service Availability
+We aim for 99.9% monthly uptime, excluding scheduled maintenance announced at least 48 hours in advance. Service credits for downtime are available only under a separate Service Level Agreement for Enterprise customers.
+
+7. Changes to These Terms
+We may update these Terms. If a change is material, we will notify you at least 30 days before it takes effect. Continued use of the Service after that date means you accept the updated Terms.
+
+8. Termination
+We may terminate or suspend your account immediately for material breach of these Terms, including non-payment that remains outstanding for more than 15 days after the due date.
+
+9. Limitation of Liability
+To the maximum extent permitted by law, Brightloop's total liability under these Terms is limited to the amount you paid for the Service in the 12 months before the claim.
+
+10. Third-Party Integrations
+The Service can connect to third-party calendars, payment processors, and messaging tools. Your use of those tools is governed by their own terms, and we are not responsible for their availability or for data you choose to send to them.
+
+11. Governing Law
+These Terms are governed by the laws of the State of Oregon.
+
+12. Contact
+Questions about these Terms can be sent to legal@brightloop.example.
+
+---
+Customer question: If you raise the price of my plan, how many days of notice do I get before it applies? Answer with a number only.
+
+===== 24/50  own_summarization_022 =====
+[user]
+Summarize this support thread for the engineering postmortem in exactly 3 bullets labeled Root cause:, Impact:, Status:. Under 75 words total. Keep all numbers exact. Impact must give the number of failed deliveries; Status must say what was recovered and what is still open.
+
+Ticket #44817 — "Webhooks failing since last week" — Customer: Lantern Analytics (Enterprise)
+
+[Sep 30, 09:12] Customer (Owen, Lantern): Since around Monday our endpoint hasn't received any order.created webhooks from you. Our dashboard shows nothing. Did something change on your side?
+
+[Sep 30, 10:05] Support (Mei): Hi Owen, thanks for reporting. I can see delivery attempts in our logs but they're failing on our end with connection errors. We did migrate some webhook workers to a new region last week, so it's possible your firewall is blocking the new IP range. Can you check whether you allowlist our IPs?
+
+[Sep 30, 13:40] Customer (Owen): We do allowlist. I added the new range from your docs (34.120.0.0/16). Still nothing.
+
+[Sep 30, 15:22] Support (Mei): Thanks. I've escalated to our integrations team.
+
+[Oct 1, 08:50] Integrations (Daniel): Hi Owen, I looked into this. At first I thought it might be DNS, since your endpoint hostname resolves to a new IP as of Sep 27. But resolution is working fine from all our regions, so that's not it. The firewall change also wasn't the cause: we're reaching your server, but the TLS handshake fails. Your endpoint's certificate expired on September 28 at 00:00 UTC. Our webhook client correctly rejects expired certificates, so every delivery since then has failed. Can your team renew the cert?
+
+[Oct 1, 09:30] Customer (Owen): Oh wow, that's embarrassing. Our auto-renewal job broke when we moved hosting. We'll get it fixed today.
+
+[Oct 1, 17:10] Customer (Owen): Renewed the certificate. Can you confirm?
+
+[Oct 2, 08:15] Integrations (Daniel): Confirmed, new deliveries are succeeding as of Oct 1, 17:04 UTC. Between Sep 28 and Oct 1 there were 3,812 failed deliveries. We retry for 72 hours, so events older than that were dropped from the retry queue. I can replay the rest from our event log.
+
+[Oct 2, 08:20] Customer (Owen): Yes please, replay everything you can.
+
+[Oct 2, 14:45] Integrations (Daniel): Replay complete. 3,790 of the 3,812 events were delivered successfully. The remaining 22 had payloads referencing orders that were later deleted in your account, so they can't be regenerated through the replay tool. I can export those 22 as a CSV if you need them for reconciliation.
+
+[Oct 2, 15:02] Customer (Owen): Yes, please send the CSV. Also, any chance you can alert us next time our cert is about to expire? We'd have caught this days earlier.
+
+[Oct 2, 15:30] Integrations (Daniel): The CSV export needs approval from our data team since it includes order data; I've requested it and will send it once approved, likely within 2 business days. On cert alerts: good idea, I've filed a feature request (FR-1290) to email customers when repeated TLS failures occur.
+
+[Oct 2, 15:31] Support (Mei): Marking this as pending until the CSV goes out.
+
+[Oct 5, 10:00] Customer (Owen): Any update on the CSV?
+
+[Oct 5, 11:18] Integrations (Daniel): Still waiting on data team approval, I've pinged them again.
+
+===== 25/50  own_extraction_007 =====
+[user]
+Pull invoice_number, vendor, due_date (YYYY-MM-DD), amount_due (number), and currency (3-letter code) from this invoice. JSON only.
+
+INVOICE
+Harbor Line Printing Co.
+Invoice No: HL-2026-0193
+Invoice Date: February 3, 2026
+Due Date: March 5, 2026
+
+Bill To: Northgate Dental Group
+
+Description                         Amount
+500 tri-fold brochures, full color  742.50
+
+Amount Due: USD 742.50
+
+===== 26/50  own_reasoning_010 =====
+[system]
+You are an SLA calculator for a support desk. Give only the final answer in the requested format, with no explanation.
+
+[user]
+Our first-response SLA is 4 business hours. Business hours are 09:00–17:00, Monday to Friday. A ticket arrived on Tuesday at 10:30. By what time must we respond? Answer in 24-hour HH:MM.
+
+===== 27/50  own_reasoning_002 =====
+[system]
+You are a finance assistant for small businesses. Give only the final answer in the requested format.
+
+[user]
+A cafe sells cold brew for $5.50 a cup. Each cup costs $1.20 in coffee, $0.35 for the cup and lid, and $0.15 for ice. Last week they sold 420 cups, and another 30 cups were made but wasted. The cafe also pays $900/week rent, shared equally across its 6 product lines. What was the cold brew gross profit last week, counting wasted cups as cost but excluding rent? Answer as a number with 2 decimals, no $ sign.
+
+===== 28/50  own_creative_013 =====
+[user]
+Write Google search ad copy for Pinecrest, an online shoe store. Return only a JSON object with keys "headlines" (exactly 3 strings, each 30 characters or fewer) and "descriptions" (exactly 2 strings, each 90 characters or fewer). At least one headline must include "Free Returns" and at least one must include "Pinecrest". Don't use the word "best".
+
+===== 29/50  own_classification_001 =====
+[system]
+You are a support ticket router. Respond with exactly one label and nothing else: billing, technical, account, shipping.
+
+[user]
+I was charged twice for my March subscription, please refund one of them.
+
+===== 30/50  own_reasoning_027 =====
+[user]
+who's on call wed nov 18? rules from the on-call doc:
+- weekly rotation, weeks start Monday
+- order: Ana, Bilal, Chen, Dara, Emeka, then back to Ana
+- Ana had the first week, starting Monday Sep 7, 2026
+- Dara is on PTO the week of Nov 2. She's skipped that week, the rotation continues with the next person in order, and she doesn't make the week up later
+answer with the first name only
+
+===== 31/50  own_summarization_024 =====
+[user]
+Turn this benefits policy into an FAQ for our onboarding portal: exactly 4 question-and-answer pairs, each answer 30 words or fewer. The FAQ must cover the 401(k) match, vesting, who is NOT eligible, and PTO carryover. Keep every number exactly as written in the policy.
+
+Northbeam Systems — Benefits Overview (2027 Plan Year)
+
+Welcome to Northbeam! This overview summarizes the main benefits available to you. The official plan documents govern if there is any difference between this summary and those documents.
+
+Health Insurance
+Northbeam offers three medical plans through Clearwater Health: a PPO, an HMO, and a high-deductible plan paired with a Health Savings Account. The company pays 90% of employee-only premiums and 75% of premiums for dependents. Dental and vision coverage are offered through the same carrier, with the company paying 100% of employee-only dental and vision premiums. Coverage begins on the first day of the month following your start date. If you start on the first day of a month, coverage begins that day.
+
+Retirement Savings — 401(k)
+You may contribute to the Northbeam 401(k) plan starting with your first paycheck. Northbeam matches 100% of your contributions up to 4% of your base salary, deposited each pay period. Employer matching contributions vest after 2 years of service; if you leave before your second anniversary, unvested matching funds are forfeited. Your own contributions are always 100% vested. Investment options include target-date funds and a selection of index funds.
+
+Eligibility for the employer match applies to full-time and part-time employees on Northbeam payroll. Contractors, interns, and employees hired through a staffing agency are not eligible for the match, even if they choose to contribute to a personal retirement account. Interns who later convert to full-time employment become eligible on their conversion date, and their intern period does not count toward vesting.
+
+Paid Time Off
+Full-time employees receive 20 days of PTO per year, accrued each pay period. Part-time employees accrue PTO in proportion to their scheduled hours. In addition, Northbeam observes 11 paid company holidays and a winter shutdown between December 24 and January 1. Up to 5 days of unused PTO may be carried over into the next calendar year; any additional unused days are forfeited on January 1. Carried-over days must be used by March 31 or they are forfeited.
+
+Sick Leave
+Sick leave is separate from PTO. Employees receive 10 sick days per year, available from the first day of employment. Sick days do not carry over and are not paid out at separation.
+
+Parental Leave
+Employees with at least 6 months of service are eligible for 12 weeks of paid parental leave.
+
+Learning Budget
+Each employee receives a $1,500 annual learning budget for courses, conferences, and books related to their role. Unused learning budget does not carry over.
+
+Questions
+Contact benefits@northbeam.example or visit the People portal.
+
+===== 32/50  own_reasoning_008 =====
+[user]
+Convert €250.00 to US dollars at a rate of 1 EUR = 1.08 USD. Answer with a number with 2 decimals, no currency symbol.
+
+===== 33/50  own_classification_024 =====
+[user]
+Classify this vendor email thread for AP. Labels: quote, invoice, contract_renewal, complaint, other. Classify ONLY by the most recent message (the top one); earlier messages are context. Reply with the label only.
+
+From: Hector Aguilar <hector@brightpathjanitorial.example>
+Sent: Thursday, October 8, 2026 3:41 PM
+Subject: RE: RE: RE: Q4 cleaning services - Building C
+
+Hi Sandra,
+
+Thanks for confirming. Attached is invoice #BPJ-2210 for the September deep clean of Building C ($3,480.00), per PO 55-1043. Payment terms are Net 30 as usual. Let me know if AP needs anything else from us.
+
+Hector
+
+________________________________
+From: Sandra Kim <s.kim@example.com>
+Sent: Wednesday, October 7, 2026 10:02 AM
+Subject: RE: RE: Q4 cleaning services - Building C
+
+Hector, appreciate the quick turnaround on the restroom issue, the floor team says it looks great now. We're good to move forward with the Q4 pricing you sent. I'll get the PO updated. Also, can you send over the invoice for September when you get a chance? AP is closing the month.
+
+Sandra
+
+________________________________
+From: Hector Aguilar <hector@brightpathjanitorial.example>
+Sent: Monday, October 5, 2026 4:15 PM
+Subject: RE: Q4 cleaning services - Building C
+
+Sandra,
+
+So sorry about the second-floor restrooms last week, that's not our standard. I've reassigned the evening crew lead and we'll redo both restrooms tonight at no charge.
+
+On Q4: here's the quote you asked for.
+- Nightly janitorial (Mon–Fri): $6,200/month
+- Quarterly carpet extraction: $1,150 per visit
+- Window cleaning, exterior (2x/quarter): $890 per visit
+Total estimated Q4: $22,010. Pricing is held through November 15.
+
+Our current agreement also ends December 31. I'll send renewal paperwork separately once we're aligned on Q4.
+
+Hector
+
+________________________________
+From: Sandra Kim <s.kim@example.com>
+Sent: Friday, October 2, 2026 9:20 AM
+Subject: Q4 cleaning services - Building C
+
+Hi Hector,
+
+Two things. First, the second-floor restrooms in Building C were not cleaned Tuesday or Wednesday night this week. We had a client visit Thursday and it was embarrassing. Please look into it.
+
+Second, can you send a quote for Q4? Same scope as Q3 plus exterior windows twice in the quarter.
+
+Thanks,
+Sandra Kim
+Facilities Manager
+
+===== 34/50  own_creative_004 =====
+[user]
+Give me 5 email subject lines for our spring sale (30% off all outdoor furniture). Each under 45 characters. Numbered list, nothing else.
+
+===== 35/50  own_qa_012 =====
+[system]
+You help members understand their health plan using only the plan summary provided. If the answer is a dollar amount, reply with the number only. If the document does not answer the question, reply exactly: not stated
+
+[user]
+What's my copay for acupuncture?
+
+Summit Choice PPO — Summary of Costs (In-Network)
+Annual deductible: $1,000 individual / $2,000 family
+Out-of-pocket maximum: $4,500 individual / $9,000 family
+Primary care visit: $25 copay
+Specialist visit: $50 copay
+Telehealth visit: $10 copay
+Urgent care: $75 copay
+Emergency room: $250 copay (waived if admitted)
+Physical therapy: $40 copay, up to 30 visits per year
+Chiropractic care: $40 copay, up to 20 visits per year
+Generic prescriptions: $10 | Preferred brand: $40 | Non-preferred brand: $80
+Out-of-network services: 40% coinsurance after deductible
+
+===== 36/50  own_extraction_004 =====
+[user]
+Get the job details from this posting as JSON with keys title, company, city, state, work_arrangement (one of: onsite, hybrid, remote), salary_min, salary_max (numbers, USD per year).
+
+Junior Data Analyst — Brightwater Health Partners
+Location: Columbus, OH (hybrid, 3 days in office)
+Salary: $58,000 – $66,000 per year
+
+Brightwater is a regional network of outpatient clinics. As a Junior Data Analyst you'll build weekly reports on appointment volume and no-show rates and help clean up our scheduling data. SQL and Excel required; Tableau a plus.
+
+===== 37/50  own_creative_019 =====
+[user]
+Rewrite this memo as exactly 5 bullet points for the employee Slack channel. Each bullet under 20 words. Keep every date, dollar amount, and percentage from the memo.
+
+MEMORANDUM
+To: All benefits-eligible employees
+From: Total Rewards
+Re: 2027 Open Enrollment
+
+We are pleased to share information regarding the upcoming annual open enrollment period for benefits coverage effective in the 2027 plan year. Open enrollment will commence on November 2 and will conclude at 5:00 PM Eastern on November 13. All elections made during this window will take effect on January 1. Employees are strongly encouraged to review their current elections in the benefits portal in advance of the window so that they are prepared to make any desired changes in a timely manner.
+
+Several changes to the program will take effect for the 2027 plan year. First, employee contributions toward medical premiums for employee-only coverage will increase by 4%. This adjustment reflects rising healthcare costs across the industry; the company will continue to cover the majority of premium costs. Second, the company's annual contribution to the Health Savings Account for employees enrolled in the high-deductible plan will increase from $500 to $750. Third, the Flexible Spending Account annual limit will increase to $3,300.
+
+Please note that, consistent with IRS rules, Flexible Spending Account elections do not carry over from one plan year to the next. Employees who wish to participate in the Flexible Spending Account for 2027 must actively re-enroll during the open enrollment window, even if they are currently participating. Employees who do not take action during open enrollment will retain their current medical, dental, and vision elections for 2027, but will not be enrolled in the Flexible Spending Account.
+
+Additionally, we are pleased to announce that our vision benefits will now be administered through a new carrier, ClearSight Vision. Coverage levels will remain the same, and employees enrolled in vision coverage will receive new member ID cards by mail in late December. No action is required to remain enrolled in vision coverage.
+
+Questions may be directed to the Total Rewards team via the HR portal. We appreciate your attention to these important updates and encourage all employees to take advantage of the resources available to help them make informed decisions about their benefits.
+
+===== 38/50  own_creative_002 =====
+[system]
+You rewrite customer-facing messages for a retail support team.
+
+[user]
+rewrite this so its polite and professional. keep every fact. max 80 words. dont use the words sorry or apologize, and dont blame the vendor.
+
+"ur shipment is late again. vendor screwed up. new eta is nov 3. nothing we can do on our end. if u want a refund email billing@example.com"
+
+===== 39/50  own_classification_026 =====
+[system]
+You triage messages sent to a clinic's nurse line. Labels: emergency, urgent_same_day, routine, admin. Protocol: if ANY of these appear, the label is emergency regardless of anything else in the message: chest pain or pressure spreading to the arm, jaw, or back; trouble breathing at rest; face drooping or slurred speech; severe bleeding. urgent_same_day = new symptoms that need to be seen today but no red flags. routine = ongoing or mild issues. admin = scheduling, results, forms, billing. Respond with exactly one label.
+
+[user]
+hi its Gloria, not sure if this needs a call or not. been feeling kinda off since lunch, little nauseous and sweaty, prob something i ate lol. theres also this pressure in my chest that kinda goes into my left arm and jaw when i walk up the stairs but its prob just heartburn, i get that sometimes. also can someone tell me if my labs from last week came back? and i need to reschedule my physical on the 22nd. thx!!
+
+===== 40/50  own_qa_008 =====
+[system]
+You are a customer support assistant. Answer using only the FAQ provided. If the document does not answer the question, reply exactly: not stated
+
+[user]
+Shipping FAQ
+
+Q: Which carrier do you use for domestic orders?
+A: All domestic orders ship with UPS Ground. Orders over $75 ship free.
+
+Q: How long does processing take?
+A: Orders placed before 1 PM ET on a business day ship the same day.
+
+Q: Do you ship internationally?
+A: Yes, to Canada, the UK, and the EU via DHL. Duties are calculated at checkout.
+
+Question: Which carrier handles international orders? Answer with the carrier name only.
+
+===== 41/50  own_qa_015 =====
+[user]
+my speaker fell in the pool at a party and now it won't turn on. is that covered by the warranty? yes or no only pls
+
+LIMITED WARRANTY — Tidewave Go Portable Speaker
+Tidewave warrants this product against defects in materials and workmanship for 2 years from the date of original retail purchase. If a defect arises during the warranty period, Tidewave will repair or replace the product at no charge. This warranty does not cover: damage caused by liquid exposure, drops, or other accidents; normal wear and tear such as scratches; batteries after 12 months; or products repaired or modified by anyone other than Tidewave. The Tidewave Go is splash resistant (IPX4) and is not designed to be submerged. Proof of purchase is required for all claims.
+
+===== 42/50  own_classification_025 =====
+[user]
+Classify this open-ended answer from our quarterly employee survey. Labels: satisfied, neutral, dissatisfied. Rule: if the employee says they might leave or look at other jobs, even conditionally, the label is dissatisfied. Respond with the label only.
+
+Q: Anything else you'd like leadership to know?
+A: I wouldn't say I'm unhappy here, and it's not like the pay isn't fair. My manager is great. I just can't see myself not looking around next year if nothing changes with how promotions get decided.
+
+===== 43/50  own_extraction_022 =====
+[user]
+Log this return request from the chat transcript. JSON keys: order_id, refund_method ("original_payment" or "store_credit"), items (list of {item, reason}) for the items actually being returned, in the order mentioned. item = product type in lowercase without size or color. reason must be one of: wrong_size, damaged_or_defective, not_as_described, other.
+
+customer: hi i need to return some stuff from order 7731-KD
+agent: Sure! Which items would you like to return?
+customer: the grey hoodie size M, the running shorts (black) and the water bottle
+customer: hoodie is way to small, shorts have a rip in the seam already, bottle leaks
+agent: Sorry to hear that. Would you like a refund or store credit?
+customer: refund to my card pls. actualy wait take the bottle off, ill just keep it, my husband says he can fix the lid lol
+agent: No problem! I've noted the hoodie and the shorts. You'll get a label by email.
+
+===== 44/50  own_summarization_014 =====
+[user]
+Write the 50-words-or-fewer summary that appears on our job board card for this posting. It must mention the salary range and that the role is remote.
+
+Customer Support Team Lead — Fernway (Remote, US time zones)
+
+Fernway makes scheduling software for independent fitness studios. We're hiring a Team Lead to manage a group of 8 support specialists handling chat and email for about 3,000 studio customers. You'll own weekly coaching, staffing schedules, and our help-center content, and you'll be the escalation point for tricky billing and integration questions. You should have 3+ years in customer support, including at least 1 year leading or mentoring others. Experience with Zendesk or similar tools is a plus. Pay: $68,000–$78,000 plus quarterly bonus. Full benefits, a $500 home-office stipend, and 4 weeks PTO.
+
+===== 45/50  own_extraction_019 =====
+[user]
+can you pull the lease terms from this so I can drop them in the tracker. JSON w/ keys: unit, property, monthly_rent, security_deposit, lease_start (YYYY-MM-DD), lease_term_months, cats_allowed, dogs_allowed, parking_fee (monthly). money as plain numbers
+
+> Hi Leon — confirming what we discussed for unit 14B at Maple Terrace. Rent is $1,850/mo and the deposit is equal to one month's rent. Lease begins September 1, 2026 and runs 12 months. Pets: cats ok, no dogs, sorry! Parking is an extra $75/mo if you want a spot, otherwise street parking is free after 6pm. Application fee ($45) was already paid. Let me know and I'll send the DocuSign.
+> — Carla, Maple Terrace Leasing
+
+===== 46/50  own_extraction_010 =====
+[system]
+Extract confirmation_code, flight_number (as written, e.g. "XX 123"), origin and destination (3-letter airport codes), and departure_date (YYYY-MM-DD) from the booking email. Return JSON only.
+
+[user]
+Booking confirmed! ✈
+
+Confirmation code: QX7T2M
+Pacific Crest Airlines flight PX 1127
+Seattle (SEA) → San Diego (SAN)
+Departs: Thu, Jul 9, 2026 7:05 AM
+Arrives: Thu, Jul 9, 2026 9:48 AM
+Passenger: Noor Haddad · Seat 14C
+
+===== 47/50  own_summarization_018 =====
+[user]
+Explain this lease section to a tenant in plain English, exactly 4 bullets, under 70 words total. Include the late fee amount and when it applies, and the notice period for moving out.
+
+Section 6. Rent and Termination. 6.1 Tenant shall pay monthly rent of One Thousand Six Hundred Twenty Dollars ($1,620.00) on or before the first (1st) day of each calendar month. 6.2 Rent received after the fifth (5th) day of the month shall incur a late charge of Fifty Dollars ($50.00), plus Ten Dollars ($10.00) for each additional day thereafter, not to exceed a total late charge of One Hundred Fifty Dollars ($150.00) per month. 6.3 Payment shall be made via the Landlord's online portal or by check payable to Brookstone Property Management LLC. 6.4 Either party may terminate this Lease at the end of the initial term by providing written notice no fewer than sixty (60) days prior to the termination date. 6.5 Absent such notice, this Lease shall continue on a month-to-month basis.
+
+===== 48/50  own_extraction_006 =====
+[system]
+Extract ticket_id, customer_email, product (name only), platform, and priority (lowercase) from the support ticket. Return only JSON with exactly those keys.
+
+[user]
+Ticket #SUP-55120
+From: dana.whitfield@example.com
+Product: CloudSync Pro (Windows)
+Priority: High
+Subject: App crashes on startup after update
+
+Since installing version 4.2.1 this morning the app closes as soon as I open it. I've restarted my laptop twice. Please help, I need my files for a client meeting.
+
+===== 49/50  own_qa_016 =====
+[user]
+From the design doc below, what were the main reasons the team chose PostgreSQL over MongoDB? Answer in 1–2 sentences.
+
+Design Doc: Order History Service — Storage Decision
+Status: Accepted (Sep 22)
+
+Context. The new Order History Service stores every order, its line items, refunds, and status changes, and serves the "My Orders" page and the support console. We expect ~40M orders in year one.
+
+Options considered. (1) PostgreSQL 16 on our managed database platform. (2) MongoDB Atlas.
+
+Discussion. MongoDB's flexible documents are a natural fit for orders with varying line-item shapes, and the team has some experience with it from the catalog service. However, refunds and status changes must update several records atomically, and finance reporting relies on joins between orders, refunds, and payouts. PostgreSQL handles both with mature transactions and SQL joins, and JSONB columns cover the varying line-item attributes. The platform team already operates PostgreSQL with automated backups and on-call support, while MongoDB would be the first Atlas deployment we'd have to run ourselves. Cost was roughly equal at our projected size.
+
+Decision. PostgreSQL 16, with line-item attributes in a JSONB column.
+
+===== 50/50  own_summarization_008 =====
+[system]
+You write summaries for a local news app. Follow the length limit exactly.
+
+[user]
+Write a headline-style summary of this article in 15 words or fewer. Include the new fare.
+
+The Riverside Transit Authority board voted 6-1 on Tuesday to raise the standard bus and light rail fare from $2.50 to $2.75, the first increase since 2019. The change takes effect January 1. Reduced fares for seniors, students, and riders with disabilities will stay at $1.25. Officials said the increase will help close a projected $14 million budget gap.
