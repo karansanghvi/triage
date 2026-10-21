@@ -1,0 +1,7 @@
+# Pass/fail thresholds for Phase 2 scoring.
+
+# Judge-scored prompts (summarization, creative, open_ended, coding, and judge qa/reasoning/arena)
+# are rated by an LLM judge on a 1-5 scale. A score at or above pass_threshold counts as a pass.
+judge:
+  scale_max: 5
+  pass_threshold: 4      # 4 or 5 out of 5 = pass
