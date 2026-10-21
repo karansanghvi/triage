@@ -28,3 +28,13 @@ data/judge_test/
 
 # LLM judgments (not committed yet)
 data/judgments/
+
+
+
+
+# 
+data/answers/run.log
+data/answers/run.pid
+data/answers/ollama.log
+data/answers/waits.json
+data/scores_review.txt
