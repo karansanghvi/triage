@@ -1,0 +1,70 @@
+{
+  "seed": 42,
+  "test_fraction": 0.2,
+  "stratified_by": [
+    "source",
+    "task_type"
+  ],
+  "total": 762,
+  "train": 612,
+  "test": 150,
+  "counts": {
+    "arena/classification": {
+      "train": 1,
+      "test": 0
+    },
+    "arena/coding": {
+      "train": 38,
+      "test": 9
+    },
+    "arena/creative": {
+      "train": 20,
+      "test": 5
+    },
+    "arena/open_ended": {
+      "train": 30,
+      "test": 8
+    },
+    "arena/qa": {
+      "train": 64,
+      "test": 16
+    },
+    "arena/reasoning": {
+      "train": 7,
+      "test": 2
+    },
+    "gsm8k/reasoning": {
+      "train": 160,
+      "test": 40
+    },
+    "mmlu/qa": {
+      "train": 160,
+      "test": 40
+    },
+    "own/classification": {
+      "train": 22,
+      "test": 5
+    },
+    "own/creative": {
+      "train": 22,
+      "test": 5
+    },
+    "own/extraction": {
+      "train": 22,
+      "test": 5
+    },
+    "own/qa": {
+      "train": 22,
+      "test": 5
+    },
+    "own/reasoning": {
+      "train": 22,
+      "test": 5
+    },
+    "own/summarization": {
+      "train": 22,
+      "test": 5
+    }
+  },
+  "test_ids_sha256": "4b5621264c7781db26218fb5fcc9164be1e31939e7f6b80054bc78496944183b"
+}
