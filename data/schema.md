@@ -131,6 +131,22 @@ Scoring (`app/verifier/scorers.py`, `score_final_answer`):
 Numbers must be equal; there is no tolerance, so `18.5` does not match `"18"`. Because the first number wins,
 `Answer: 3 boxes, so 18` is graded as `3`.
 
+## Judge scoring (judge prompts)
+
+Judge-scored prompts have no stored reference. Instead, the **high tier's answer to the same prompt is the
+reference**, and an LLM judge (`app/verifier/judge.py`, settings in `config/judge.yaml`) rates the other tiers'
+answers against it on a 1–5 rubric. A score of at least `judge.pass_threshold` in `config/thresholds.yaml`
+(4) is a pass. If the prompt lists constraints, breaking any of them caps the score at 3.
+
+High-tier rule:
+
+- **High answer complete** (not truncated, not empty): the high tier **passes automatically**, since its answer
+  is the reference. The low, medium, and extra tiers are judged against it.
+- **High answer truncated or empty**: the prompt is **`no_reference` for every tier**. It gets no judge label and
+  is left out of training.
+
+Answers that are themselves truncated or empty still fail before any judging, as for every scorer.
+
 ## Fuzzy fields (field_check only)
 
 By default, `field_check` compares every field strictly. `fuzzy_fields` lists the free-text fields (names,

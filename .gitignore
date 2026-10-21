@@ -22,3 +22,6 @@ data/benchmarks/arena_excluded.jsonl
 # Pilot runs of the data collection (not committed)
 data/pilot/
 data/pilot2/
+
+# Judge plumbing test output (not committed)
+data/judge_test/

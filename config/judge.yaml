@@ -1,5 +1,11 @@
 # LLM judge settings (app/verifier/judge.py). The pass threshold lives in thresholds.yaml.
 #
+# High-tier rule for judge-scored prompts (see data/schema.md, "Judge scoring"):
+#   - the high tier's answer is the reference. If it is complete (not truncated, not empty), the high tier
+#     passes automatically and the other tiers are judged against it.
+#   - if the high answer is truncated or empty, the prompt is "no_reference" for every tier: no judge label,
+#     and it is left out of training.
+#
 # Note: groq-large is also the collector's high tier, and Groq limits each model to 200K tokens
 # per day. Run judging after collection has finished, or the two will share that budget.
 
