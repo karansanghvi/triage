@@ -5,6 +5,7 @@ Usage:
     python -m eval.build_dataset --pilot2    # pilot 1's prompts + 30 auto-gradable own prompts -> data/pilot2/
     python -m eval.build_dataset             # every prompt in data/prompts.jsonl -> data/answers/
     python -m eval.build_dataset status      # progress of the full run, per tier
+    python -m eval.build_dataset --only-ids gsm8k_0001,own_qa_003   # (re)collect just these prompts
 
 The full run waits out daily limits instead of stopping, so it can be left running for days:
     nohup caffeinate -i ./venv/bin/python -m eval.build_dataset > data/answers/run.log 2>&1 &
@@ -705,6 +706,7 @@ def main():
     parser.add_argument("--pilot", action="store_true", help="run the 30-prompt pilot into data/pilot/")
     parser.add_argument("--pilot2", action="store_true", help="pilot 1 + 30 auto-gradable own prompts into data/pilot2/")
     parser.add_argument("--report-only", action="store_true", help="only rebuild the review and summary")
+    parser.add_argument("--only-ids", help="comma-separated prompt IDs (or @file with one per line): collect only these")
     args = parser.parse_args()
 
     registry = load_registry()
@@ -718,6 +720,13 @@ def main():
         prompts = pilot2_prompts(prompts)
     elif args.pilot:
         prompts = pilot_prompts(prompts)
+    if args.only_ids:
+        raw = Path(args.only_ids[1:]).read_text() if args.only_ids.startswith("@") else args.only_ids.replace(",", "\n")
+        wanted = {line.strip() for line in raw.splitlines() if line.strip()}
+        unknown = wanted - {p["id"] for p in prompts}
+        if unknown:
+            raise SystemExit(f"--only-ids: unknown prompt IDs {sorted(unknown)}")
+        prompts = [p for p in prompts if p["id"] in wanted]
     log = AnswerLog(out_dir / "answers.jsonl")
     tiers = list(config.tiers)
 

@@ -50,6 +50,38 @@ MMLU_EXCLUDED_ROWS = {
     # sociology: "Walt Disney, Sony and Time Warner are examples of:" A) transnational corporations
     # (the official answer) and B) multi-media empires are both correct; every model tried picked B.
     13567: "two correct options (A and B)",
+    # The rest: reference review 2026-10-22 (data/review_decisions.md)
+    # virology: PrEP works for both women and drug users, so "D) a. and b. above" is right; reference B is incomplete.
+    13733: "reference incomplete (D is correct)",
+    # college_chemistry: spin trapping is used because radical concentrations are too low for direct EPR (C);
+    # the reference D (lower power) is not the accepted reason.
+    910: "reference wrong (C is correct)",
+    # astronomy: the 1:2:4 resonance keeps Io's orbit elliptical (B, the reference), which is what produces
+    # the tidal heating in A, so two options are defensible.
+    263: "two defensible options (A and B)",
+    # international_law: standard-setting as non-binding standards (C) vs standards of conduct in treaties (D).
+    6457: "two defensible options (C and D)",
+    # high_school_us_history: reference B (Washington accepted the Federalist endorsement) is false; A is accurate.
+    5654: "reference historically false (A is correct)",
+    # business_ethics: the stem is only "How the code is enforced." and the options refer to missing statements.
+    481: "broken question (numbered statements missing)",
+    # college_chemistry: |ge|/gH = 1.761e11 / 2.675e8 = ~658 (C), not 820; option A is a constant, not an answer.
+    977: "reference wrong (C is correct) and option A malformed",
+    # electrical_engineering: boost chopper duty cycle D = 1 - 110/150 = 0.27 (option D), not 0.67.
+    1948: "reference wrong (D is correct)",
+}
+
+# Rows (indices into the openai/gsm8k main/test split) that are broken and must never be used. If one is
+# drawn, a replacement is drawn from the test split in the same slot. Reference review 2026-10-22.
+GSM8K_EXCLUDED_ROWS = {
+    # The dataset's own solution adds 400 instead of Sarah's 300: "750+430+400+700 = 2280"; correct is 2180.
+    1309: "reference wrong (2180, not 2280)",
+    # "Ten stalls have 20 cows each" ... "into each of the twenty stalls": the question contradicts itself.
+    255: "question contradicts itself (ten vs twenty stalls)",
+    # "another 1/4 of his land" can mean a quarter of the original land (140) or of the rest (170).
+    1161: "ambiguous (two readings give 140 or 170)",
+    # "feeds her cats twice a day with 60 grams" doesn't say per cat (2 days) or in total (6 days).
+    1059: "ambiguous (per cat or in total)",
 }
 
 GSM8K_INSTRUCTION = (
@@ -193,7 +225,14 @@ def gsm8k_reference(answer: str, index: int) -> str:
 def build_gsm8k_records(sample_size: int = GSM8K_SAMPLE_SIZE, seed: int = SEED) -> list:
     rows = load_dataset(GSM8K_DATASET, GSM8K_CONFIG, split=GSM8K_SPLIT, revision=GSM8K_REVISION)
     # Without replacement; the records keep the order the rows were drawn in.
-    indices = random.Random(seed).sample(range(len(rows)), sample_size)
+    rng = random.Random(seed)
+    indices = rng.sample(range(len(rows)), sample_size)
+    # Swap any excluded row for a fresh draw in the same slot, so the other picks (and every ID) stay put.
+    for slot, index in enumerate(indices):
+        if index in GSM8K_EXCLUDED_ROWS:
+            taken = set(indices)
+            unused = [i for i in range(len(rows)) if i not in taken and i not in GSM8K_EXCLUDED_ROWS]
+            indices[slot] = rng.choice(unused)
     records = []
     for number, index in enumerate(indices, start=1):
         row = rows[index]
