@@ -79,8 +79,11 @@ Replacement rows drawn: `gsm8k_0001` 1309→1137, `gsm8k_0045` 255→594, `gsm8k
 `gsm8k_0173` 1059→978, `mmlu_0030` 13733→13769, `mmlu_0059` 5654→5720, `mmlu_0068` 481→424,
 `mmlu_0153` 263→299, `mmlu_0166` 6457→6540, `mmlu_0171` 977→993, `mmlu_0172` 910→933, `mmlu_0180` 1948→1984.
 
-**Open (needs a decision):** the replacement for `mmlu_0030` (virology, row 13769) looks broken too. It asks what
-"zoonotic" means and its reference is "A) Such viruses are confined to animals", but a zoonotic virus is one that
-crosses from animals to humans (C). Proposed by Claude: exclude row 13769 and draw another replacement.
+## Follow-up: second `mmlu_0030` replacement
 
-Summary: 12 excluded and replaced (4 GSM8K, 8 MMLU), 2 reworded, 14 kept.
+| Record | Source row | Reason | Decided by |
+|---|---|---|---|
+| `mmlu_0030` | virology, row 13769 (the first replacement) | The question asks what "zoonotic" means, but the reference "A) Such viruses are confined to animals" contradicts the definition: a zoonotic virus crosses from animals to humans. Excluded and replaced again from virology in the same slot. | Karan (flagged by Claude) |
+
+Summary: 12 excluded and replaced (4 GSM8K, 8 MMLU), 2 reworded, 14 kept; plus 1 follow-up exclusion
+(the first replacement for `mmlu_0030`).

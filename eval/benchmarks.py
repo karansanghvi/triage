@@ -69,6 +69,9 @@ MMLU_EXCLUDED_ROWS = {
     977: "reference wrong (C is correct) and option A malformed",
     # electrical_engineering: boost chopper duty cycle D = 1 - 110/150 = 0.27 (option D), not 0.67.
     1948: "reference wrong (D is correct)",
+    # virology: the first replacement for mmlu_0030. Asks what "zoonotic" means, but its reference
+    # "A) Such viruses are confined to animals" contradicts the definition (they cross from animals to humans).
+    13769: "reference contradicts the definition of zoonotic",
 }
 
 # Rows (indices into the openai/gsm8k main/test split) that are broken and must never be used. If one is
