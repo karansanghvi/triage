@@ -147,6 +147,44 @@ High-tier rule:
 
 Answers that are themselves truncated or empty still fail before any judging, as for every scorer.
 
+### Code-checked constraints
+
+LLM judges miscount, so constraints that can be counted exactly are checked in code
+(`app/verifier/constraints.py`) and **override the judge's verdict** for that constraint. The cap at 3 is
+then applied using the corrected verdicts. Each judgment records the judge's own verdicts
+(`judge_broken_constraints`), the code checks (`code_checks`, with the count), and the final
+`broken_constraints`.
+
+A constraint is only code-checked when its **whole text** matches one of these forms (case-insensitive, Unicode
+dashes allowed). Constraints scoped to part of the answer ("each bullet under 12 words", "Customer: exactly 2
+sentences", "Short: 20 words max", "title 60 characters or fewer") and everything else stay with the judge.
+
+| Form | Rule |
+|---|---|
+| `under N words`, `fewer than N words` | words < N |
+| `max N words`, `maximum N words`, `at most N words`, `N words or fewer` | words ≤ N |
+| `N–M words` | N ≤ words ≤ M |
+| `under N characters [including spaces]` | characters < N |
+| `max N characters …`, `N characters or fewer [including spaces / the URL]` (optionally after `single SMS,`) | characters ≤ N |
+| `exactly N bullets`, `at most N bullets` | bullet lines = N, ≤ N |
+| `exactly N sentences`, `one sentence`, `max N sentences`, `N–M sentences` | sentences = N, ≤ N, in range |
+
+Counting rules:
+
+- **Word:** a whitespace-separated token containing at least one letter or digit. Hyphenated words
+  ("hand-wash-only") are one word; a lone "-", "—" or "**" is not a word; markdown attached to a word doesn't
+  add words ("**Answer:**" is one word).
+- **Character:** every character of the answer after trimming leading and trailing whitespace, spaces included.
+- **Bullet:** a line starting with `-`, `*`, `•`, `+`, or a number followed by `.` or `)`. If any bullet is
+  indented (a nested list) or the answer contains a code block, the count is left to the judge.
+- **Sentence:** counted only in plain prose (no bullets, headings, code blocks, or blank-line paragraphs;
+  otherwise left to the judge). A sentence ends at `.`, `!` or `?` followed by whitespace or the end of the
+  answer; periods in common abbreviations (e.g., i.e., Dr., Mr., U.S., a.m., etc.) and in decimals (3.5) don't
+  end a sentence.
+
+Every judgment also records `judge_version` (set in `config/judge.yaml`). The judging runner only treats
+judgments made with the current version as finished, so bumping the version re-judges everything.
+
 ## Fuzzy fields (field_check only)
 
 By default, `field_check` compares every field strictly. `fuzzy_fields` lists the free-text fields (names,

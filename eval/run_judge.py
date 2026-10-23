@@ -42,13 +42,31 @@ JUDGE_TIERS = ("low", "medium", "high")
 FINISHED = {"pass", "fail", "assumed_pass", "no_reference"}
 MAX_PASSES = 5
 WAITS_FILE = "waits.json"
+# Judgments set aside when the judge changed; their API usage still counts toward Groq's daily limit
+STALE_FILE = "stale_judgments.jsonl"
+
+
+def judge_usage(out_dir: Path) -> list:
+    """(UTC time, api calls, tokens) for every judge call recorded in judgments.jsonl and stale_judgments.jsonl."""
+    usage = []
+    for name in ("judgments.jsonl", STALE_FILE):
+        path = out_dir / name
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                r = json.loads(line)
+                if r.get("api_calls"):
+                    usage.append((datetime.fromisoformat(r["timestamp"]), r["api_calls"],
+                                  r["input_tokens"] + r["output_tokens"]))
+    return usage
 
 
 # ---------- Records ----------
 
 def make_record(prompt_id: str, tier: str, status: str, method: str, reason: str = "",
                 result: Optional[JudgeResult] = None, usage: Optional[dict] = None, error: Optional[dict] = None,
-                judge_model: Optional[str] = None) -> dict:
+                judge_model: Optional[str] = None, judge_version: Optional[int] = None) -> dict:
     """One judgment. status: pass, fail, assumed_pass, no_reference (finished) or pending, error (retried).
     method says how it was decided: judged, auto_high, assumed (option C), pre_failed, no_reference, waiting."""
     usage = usage or {}
@@ -57,11 +75,14 @@ def make_record(prompt_id: str, tier: str, status: str, method: str, reason: str
         "score": result.score if result else None,
         "judge_score": result.judge_score if result else None,
         "broken_constraints": list(result.broken_constraints) if result else [],
+        "judge_broken_constraints": list(result.judge_broken_constraints) if result else [],
+        "code_checks": list(result.code_checks) if result else [],
         "attempts": result.attempts if result else 0,
         "judge_model": judge_model if method == "judged" else None,
         "input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0),
         "api_calls": usage.get("api_calls", 0),
         "error": error,
+        "judge_version": judge_version,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -74,7 +95,8 @@ def prefail_reason(record: dict) -> str:
 
 # ---------- Option C for one prompt ----------
 
-def judge_prompt(prompt: dict, answers: dict, finished: dict, judge_call: Callable, judge_model: str = "") -> list:
+def judge_prompt(prompt: dict, answers: dict, finished: dict, judge_call: Callable, judge_model: str = "",
+                 judge_version: Optional[int] = None) -> list:
     """New records for this prompt's unfinished tiers, following option C.
 
     finished maps (prompt_id, tier) -> the newest finished record. judge_call(prompt, candidate, reference)
@@ -87,7 +109,8 @@ def judge_prompt(prompt: dict, answers: dict, finished: dict, judge_call: Callab
         return finished.get((pid, tier))
 
     def emit(tier, status, method, reason, **kw):
-        record = make_record(pid, tier, status, method, reason, judge_model=judge_model, **kw)
+        record = make_record(pid, tier, status, method, reason, judge_model=judge_model,
+                             judge_version=judge_version, **kw)
         records.append(record)
         return record
 
@@ -149,8 +172,10 @@ class JudgmentLog:
             out[(r["prompt_id"], r["tier"])] = r
         return out
 
-    def finished(self) -> dict:
-        return {k: r for k, r in self.latest().items() if r["status"] in FINISHED}
+    def finished(self, judge_version: Optional[int] = None) -> dict:
+        """Finished judgments; with judge_version, only those made by that version count."""
+        return {k: r for k, r in self.latest().items() if r["status"] in FINISHED
+                and (judge_version is None or r.get("judge_version") == judge_version)}
 
     def append(self, record: dict) -> None:
         with open(self.path, "a", encoding="utf-8") as f:
@@ -173,6 +198,7 @@ class JudgeRunner:
         self.settings = settings
         self.judge_call = judge_call or self.real_judge_call
         self.judge_model = settings.model_name if settings else "fake"
+        self.judge_version = settings.judge_version if settings else None
 
     def say(self, message: str) -> None:
         print(f"{datetime.now():%m-%d %H:%M:%S} {message}", flush=True)
@@ -228,10 +254,11 @@ class JudgeRunner:
         """One pass over every prompt with unfinished tiers. Returns how many tiers are still unfinished."""
         unfinished = 0
         for prompt in self.prompts:
-            finished = self.log.finished()
+            finished = self.log.finished(self.judge_version)
             if all((prompt["id"], t) in finished for t in JUDGE_TIERS):
                 continue
-            for record in judge_prompt(prompt, self.answers, finished, self.judge_call, self.judge_model):
+            for record in judge_prompt(prompt, self.answers, finished, self.judge_call, self.judge_model,
+                                       self.judge_version):
                 self.log.append(record)
                 if record["status"] not in FINISHED:
                     unfinished += 1
@@ -263,9 +290,10 @@ class JudgeRunner:
 def show_status(prompts: list, out_dir: Path = JUDGMENTS_DIR) -> None:
     judged_prompts = [p for p in prompts if p["scoring"] == "judge"]
     log = JudgmentLog(out_dir / "judgments.jsonl")
-    latest = log.latest()
+    version = load_judge_settings().judge_version
+    latest = {k: r for k, r in log.latest().items() if r.get("judge_version") == version}
     pid = running_pid(out_dir / "run.pid")
-    print(f"{log.path.relative_to(PROJECT_ROOT)}: {len(log.records)} records | "
+    print(f"{log.path.relative_to(PROJECT_ROOT)}: {len(log.records)} records (judge version {version}) | "
           + (f"judge running (pid {pid})" if pid else "judge NOT running")
           + (" | collector RUNNING (judging can't start yet)" if running_pid(FULL_DIR / "run.pid") else ""))
     try:
@@ -280,7 +308,7 @@ def show_status(prompts: list, out_dir: Path = JUDGMENTS_DIR) -> None:
         counts = Counter(latest[(p["id"], tier)]["status"] if (p["id"], tier) in latest else "not started"
                          for p in judged_prompts)
         print(f"{tier:<8}" + "".join(f"{counts[s]:>14}" for s in statuses))
-    calls = [r for r in log.records if r["api_calls"]]
+    calls = [r for r in log.records if r["api_calls"] and r.get("judge_version") == version]
     tokens = sum(r["input_tokens"] + r["output_tokens"] for r in calls)
     print(f"\njudge calls so far: {sum(r['api_calls'] for r in calls)} | tokens: {tokens:,}")
 
@@ -299,7 +327,7 @@ def show_status(prompts: list, out_dir: Path = JUDGMENTS_DIR) -> None:
     answers = [json.loads(l) for l in (FULL_DIR / "answers.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()][:-1]
     window = [(datetime.fromisoformat(r["timestamp"]), (r["input_tokens"] or 0) + (r["output_tokens"] or 0))
               for r in answers if r["model_name"] == settings.model_name and r.get("api_calls")]
-    window += [(datetime.fromisoformat(r["timestamp"]), r["input_tokens"] + r["output_tokens"]) for r in calls]
+    window += [(when, tokens) for when, _, tokens in judge_usage(out_dir)]
     start = datetime.now(timezone.utc)
     if pid and wait.get("until"):
         start = max(start, datetime.fromisoformat(wait["until"]).astimezone(timezone.utc))
@@ -339,8 +367,7 @@ def main():
                for r in map(json.loads, filter(str.strip, answers_path.read_text(encoding="utf-8").splitlines()))
                if r["model_name"] == settings.model_name and r.get("api_calls")]
     log = JudgmentLog(JUDGMENTS_DIR / "judgments.jsonl")
-    history += [(datetime.fromisoformat(r["timestamp"]), r["api_calls"], r["input_tokens"] + r["output_tokens"])
-                for r in log.records if r["api_calls"]]
+    history += judge_usage(JUDGMENTS_DIR)
     runner = JudgeRunner(prompts, load_answers(answers_path), log, pacer=Pacer(config.limits[settings.model_name], history),
                          settings=settings)
     runner.say(f"pid {os.getpid()}: judging {len(runner.prompts)} judge-scored prompts with {settings.model_name} (option C)")

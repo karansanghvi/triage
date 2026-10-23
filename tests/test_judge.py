@@ -163,7 +163,7 @@ def test_follow_up_names_schema_problems_too():
 
 
 def test_corrected_second_reply_is_accepted_and_capped_normally():
-    fake = FakeJudge("Score: 5", verdict(5, "fixed", met=(False, True)))
+    fake = FakeJudge("Score: 5", verdict(5, "fixed", met=(True, False)))   # 'delicious' rule: judge-checked
     result = run(fake)
     assert (result.status, result.judge_score, result.score, result.attempts) == ("scored", 5, 3, 2)
     assert result.reason == "fixed"

@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -161,3 +162,31 @@ def test_refuses_to_start_while_the_collector_is_running(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="collector is still running"):
         run_judge.main()
     assert not (tmp_path / "judgments").exists()                    # nothing was started
+
+
+def test_judgments_from_an_older_judge_version_are_redone(tmp_path):
+    log = JudgmentLog(tmp_path / "judgments.jsonl")
+    old = FakeJudge({"Low answer.": 5})
+    runner = JudgeRunner([PROMPT], answers(), log, judge_call=old, out_dir=tmp_path)
+    runner.judge_version = 1
+    runner.run(passes=1, pause=0)
+    assert all(r["judge_version"] == 1 for r in log.records)
+
+    new = FakeJudge({"Low answer.": 2, "Medium answer.": 5})
+    runner = JudgeRunner([PROMPT], answers(), JudgmentLog(tmp_path / "judgments.jsonl"), judge_call=new, out_dir=tmp_path)
+    runner.judge_version = 2
+    runner.run(passes=1, pause=0)
+    assert [c for c, _ in new.calls] == ["Low answer.", "Medium answer."]     # version 1 results not reused
+    latest = runner.log.latest()
+    assert {r["judge_version"] for r in latest.values()} == {2}
+    assert latest[(PROMPT["id"], "medium")]["status"] == "pass"
+
+
+def test_stale_judgments_still_count_toward_the_daily_limit(tmp_path):
+    from eval.run_judge import judge_usage
+    stale = {"prompt_id": "x", "tier": "low", "api_calls": 1, "input_tokens": 1000, "output_tokens": 200,
+             "timestamp": "2026-10-22T17:00:00+00:00"}
+    (tmp_path / "stale_judgments.jsonl").write_text(json.dumps(stale) + "\n")
+    (tmp_path / "judgments.jsonl").write_text(json.dumps(dict(stale, api_calls=0)) + "\n")   # no calls: not counted
+    usage = judge_usage(tmp_path)
+    assert [(calls, tokens) for _, calls, tokens in usage] == [(1, 1200)]
