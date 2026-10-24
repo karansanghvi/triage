@@ -17,6 +17,7 @@ wins. Rerunning skips finished judgments, retries pending and error ones, paces 
 free-tier limits (shared with the collector's high tier, so it won't start while the collector runs),
 and waits out daily limits using wall-clock time. Long runs:
     nohup caffeinate -i ./venv/bin/python -m eval.run_judge >> data/judgments/run.log 2>&1 &
+Add --first ID1,ID2 to judge particular prompts before the others.
 """
 import argparse
 import json
@@ -285,6 +286,13 @@ class JudgeRunner:
         self.say(f"{left} judgments still pending after {passes} passes; rerun later")
 
 
+def prioritize(prompts: list, first: list) -> list:
+    """prompts with the IDs in first moved to the front, in the order given; the rest keep their order."""
+    by_id = {p["id"]: p for p in prompts}
+    head = [by_id[i] for i in first if i in by_id]
+    return head + [p for p in prompts if p["id"] not in set(first)]
+
+
 # ---------- Status ----------
 
 def show_status(prompts: list, out_dir: Path = JUDGMENTS_DIR) -> None:
@@ -343,6 +351,7 @@ def show_status(prompts: list, out_dir: Path = JUDGMENTS_DIR) -> None:
 def main():
     parser = argparse.ArgumentParser(description="LLM-judge the judge-scored prompts (option C).")
     parser.add_argument("command", nargs="?", default="run", choices=["run", "status"])
+    parser.add_argument("--first", default="", help="comma-separated prompt IDs to judge before all others")
     args = parser.parse_args()
     prompts = load_prompts()
     if args.command == "status":
@@ -370,6 +379,13 @@ def main():
     history += judge_usage(JUDGMENTS_DIR)
     runner = JudgeRunner(prompts, load_answers(answers_path), log, pacer=Pacer(config.limits[settings.model_name], history),
                          settings=settings)
+    first = [i.strip() for i in args.first.split(",") if i.strip()]
+    if first:
+        unknown = set(first) - {p["id"] for p in runner.prompts}
+        if unknown:
+            raise SystemExit(f"--first: not judge-scored prompt IDs: {sorted(unknown)}")
+        runner.prompts = prioritize(runner.prompts, first)
+        runner.say(f"judging first: {', '.join(first)}")
     runner.say(f"pid {os.getpid()}: judging {len(runner.prompts)} judge-scored prompts with {settings.model_name} (option C)")
     try:
         runner.run()

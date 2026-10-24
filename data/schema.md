@@ -185,6 +185,14 @@ Counting rules:
 Every judgment also records `judge_version` (set in `config/judge.yaml`). The judging runner only treats
 judgments made with the current version as finished, so bumping the version re-judges everything.
 
+The reference answer is a **quality bar, not the source of truth**: the judge checks facts against the
+conversation and well-established general knowledge, and details in the reference that the conversation
+doesn't support aren't treated as correct. A small unsupported detail added by the candidate is a minor issue,
+not a factual error in the main point, unless that detail is central to the request. When a code check overrides
+the judge and lowers the score, a note such as "capped: 151 words, limit under 150" is appended to the reason.
+
+**Judge frozen at version 3. Further judge quirks are documented as limitations, not fixed by re-judging.**
+
 ## Fuzzy fields (field_check only)
 
 By default, `field_check` compares every field strictly. `fuzzy_fields` lists the free-text fields (names,

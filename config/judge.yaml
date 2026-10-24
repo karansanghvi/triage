@@ -12,8 +12,12 @@
 # Bump judge_version whenever the judge prompt, rubric or constraint checks change. Every judgment records it,
 # and the judging runner only treats judgments with the current version as finished.
 # v1: original rubric. v2 (2026-10-22): countable constraints checked in code, meaning-based constraint checks,
-#     factual-error rule.
-judge_version: 2
+#     factual-error rule. v3 (2026-10-23): the reference is a quality bar, not the source of truth (facts are
+#     checked against the conversation and general knowledge); a "capped: ..." note is added to the reason when a
+#     code check lowers the score.
+#
+# Judge frozen at version 3. Further judge quirks are documented as limitations, not fixed by re-judging.
+judge_version: 3
 model: groq-large          # openai/gpt-oss-120b on Groq (a name from models.yaml)
 temperature: 0
 reasoning_effort: low

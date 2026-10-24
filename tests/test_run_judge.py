@@ -190,3 +190,24 @@ def test_stale_judgments_still_count_toward_the_daily_limit(tmp_path):
     (tmp_path / "judgments.jsonl").write_text(json.dumps(dict(stale, api_calls=0)) + "\n")   # no calls: not counted
     usage = judge_usage(tmp_path)
     assert [(calls, tokens) for _, calls, tokens in usage] == [(1, 1200)]
+
+
+def test_version_2_judgments_are_redone_by_version_3(tmp_path):
+    log = JudgmentLog(tmp_path / "judgments.jsonl")
+    runner = JudgeRunner([PROMPT], answers(), log, judge_call=FakeJudge({"Low answer.": 2, "Medium answer.": 5}),
+                         out_dir=tmp_path)
+    runner.judge_version = 2
+    runner.run(passes=1, pause=0)
+    v3 = FakeJudge({"Low answer.": 4})
+    runner = JudgeRunner([PROMPT], answers(), JudgmentLog(tmp_path / "judgments.jsonl"), judge_call=v3, out_dir=tmp_path)
+    runner.judge_version = 3
+    runner.run(passes=1, pause=0)
+    assert len(v3.calls) == 1                                       # re-judged, not reused
+    assert {r["judge_version"] for r in runner.log.latest().values()} == {3}
+
+
+def test_prioritize_moves_chosen_prompts_first():
+    from eval.run_judge import prioritize
+    prompts = [{"id": i} for i in ["a", "b", "c", "d"]]
+    assert [p["id"] for p in prioritize(prompts, ["c"])] == ["c", "a", "b", "d"]
+    assert [p["id"] for p in prioritize(prompts, ["d", "b"])] == ["d", "b", "a", "c"]

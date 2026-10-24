@@ -141,3 +141,15 @@ def describe(constraint: str, answer: str) -> str:
               "sentences": count_sentences}
     limit = f"{a}-{b}" if op == "range" else f"{op} {a}"
     return f"{what}={counts[what](answer)} (limit {limit})"
+
+
+def cap_note(constraint: str, answer: str) -> str:
+    """A plain-English note for a broken countable constraint, e.g. "151 words, limit under 150"."""
+    parsed = parse_constraint(constraint)
+    if parsed is None:
+        return constraint
+    what, op, a, b = parsed
+    value = {"words": count_words, "characters": count_characters, "sentences": count_sentences,
+             "bullets": lambda t: (lambda l: None if l is None else len(l))(bullet_lines(t))}[what](answer)
+    limit = {"<": f"under {a}", "<=": f"at most {a}", "==": f"exactly {a}"}.get(op, f"{a}-{b}")
+    return f"{value} {what}, limit {limit}"

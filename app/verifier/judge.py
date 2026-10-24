@@ -11,7 +11,7 @@ from typing import Callable, Optional
 import yaml
 
 from app.registry import PROJECT_ROOT, load_registry
-from app.verifier.constraints import check_constraint, describe
+from app.verifier.constraints import cap_note, check_constraint, describe
 from app.verifier.scorers import parse_json_output
 
 JUDGE_CONFIG_PATH = PROJECT_ROOT / "config" / "judge.yaml"
@@ -21,8 +21,13 @@ CONSTRAINT_CAP = 3
 JUDGE_SYSTEM_PROMPT = """\
 You are a strict, fair grader for an AI assistant's answers. You will see a conversation, the \
 constraints stated in it (if any), a REFERENCE answer from a strong model, and a CANDIDATE answer. \
-Judge how well the CANDIDATE serves the user who wrote the conversation, using the REFERENCE as the \
-bar for a good answer. The reference is not necessarily perfect: a candidate can match or beat it.
+Judge how well the CANDIDATE serves the user who wrote the conversation, using the REFERENCE as a \
+quality bar for a good answer. The reference is not necessarily perfect: a candidate can match or beat it.
+
+The REFERENCE is a quality bar, not the source of truth. Check facts against the conversation and \
+well-established general knowledge. Details in the reference that the conversation doesn't support (for \
+example an invented date, year, name or number) must not be treated as correct, and a candidate must not \
+be penalized for disagreeing with them.
 
 Score the CANDIDATE from 1 to 5:
 5 = as good as or better than the reference
@@ -31,7 +36,9 @@ Score the CANDIDATE from 1 to 5:
 2 = mostly fails the request
 1 = wrong, off-topic, a refusal, or not in English when English was expected
 
-A significant factual error in the main point of the answer means a score of 3 or lower.
+A significant factual error in the main point of the answer means a score of 3 or lower. A candidate \
+adding a small detail the conversation doesn't support is a minor issue, not a factual error in the main \
+point, unless that detail is central to the request.
 
 If constraints are listed, check each one against the CANDIDATE and report whether it is met. Judge each \
 constraint by its meaning, not its exact wording: for example, "18 x 12 inches" satisfies "includes 18 x 12 \
@@ -171,6 +178,16 @@ def apply_code_checks(constraints: list, candidate: str, judge_broken: tuple) ->
     return tuple(broken), tuple(checks)
 
 
+def with_cap_note(reason: str, judge_score: int, score: int, checks: tuple, candidate: str) -> str:
+    """Append "capped: ..." when a code check overrode the judge and lowered the score, so the judge's own
+    reason (which may say "meets all constraints") never contradicts the final score."""
+    overridden = [c for c in checks if not c["met"] and c["judge_said_met"]]
+    if score >= judge_score or not overridden:
+        return reason
+    notes = "; ".join(cap_note(c["constraint"], candidate) for c in overridden)
+    return f"{reason.rstrip()} (capped: {notes})"
+
+
 def default_send(messages: list, settings: JudgeSettings) -> str:
     """Send to the configured judge model through the Phase 1 send_request."""
     from app.providers.base import send_request   # imported here so tests never need provider keys
@@ -210,6 +227,7 @@ def judge(messages: list, constraints: list, reference: Optional[str], candidate
             continue
         broken, checks = apply_code_checks(constraints, candidate, judge_broken)
         score = min(judge_score, CONSTRAINT_CAP) if broken else judge_score
+        reason = with_cap_note(reason, judge_score, score, checks, candidate)
         return JudgeResult(status="scored", score=score, passed=score >= settings.pass_threshold,
                            reason=reason, judge_score=judge_score, broken_constraints=broken,
                            judge_broken_constraints=judge_broken, code_checks=checks,

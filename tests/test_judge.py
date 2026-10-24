@@ -199,3 +199,45 @@ def test_default_send_passes_timeout_json_mode_and_reasoning_effort(monkeypatch)
     assert seen["response_format"] == {"type": "json_object"}
     assert seen["reasoning_effort"] == "low"
     assert seen["temperature"] == 0
+
+
+# ---------- version 3: cap note and reference-as-quality-bar ----------
+
+def test_code_override_appends_a_cap_note_to_the_reason():
+    constraints = ["under 150 words"]
+    reply = json.dumps({"constraints": [{"constraint": "under 150 words", "met": True}], "score": 5,
+                        "reason": "Meets all constraints and matches the reference."})
+    candidate = " ".join(["word"] * 151)
+    result = judge(MESSAGES, constraints, "ref", candidate, SETTINGS, send=FakeJudge(reply))
+    assert result.score == 3
+    assert result.reason == "Meets all constraints and matches the reference. (capped: 151 words, limit under 150)"
+
+
+def test_no_cap_note_when_the_judge_itself_found_the_broken_constraint():
+    result = run(FakeJudge(verdict(5, "uses the banned word", met=(True, False))))
+    assert result.score == 3
+    assert "capped:" not in result.reason
+
+
+def test_no_cap_note_when_the_score_was_already_3_or_lower():
+    reply = json.dumps({"constraints": [{"constraint": "under 10 words", "met": True}], "score": 2, "reason": "weak"})
+    result = judge(MESSAGES, ["under 10 words"], "ref", "word " * 12, SETTINGS, send=FakeJudge(reply))
+    assert (result.score, result.reason) == (2, "weak")
+
+
+def test_cap_note_wording_for_each_kind_of_limit():
+    from app.verifier.constraints import cap_note
+    assert cap_note("max 80 words", "w " * 88) == "88 words, limit at most 80"
+    assert cap_note("exactly 3 bullets", "- a\n- b") == "2 bullets, limit exactly 3"
+    assert cap_note("80–120 words", "w " * 50) == "50 words, limit 80-120"
+
+
+def test_prompt_says_the_reference_is_a_quality_bar_not_ground_truth():
+    assert "quality bar, not the source of truth" in JUDGE_SYSTEM_PROMPT
+    assert "Check facts against the conversation and well-established general knowledge" in JUDGE_SYSTEM_PROMPT
+    assert "must not be treated as correct" in JUDGE_SYSTEM_PROMPT
+    assert "small detail the conversation doesn't support is a minor issue" in JUDGE_SYSTEM_PROMPT
+
+
+def test_judge_is_frozen_at_version_3():
+    assert load_judge_settings().judge_version == 3
