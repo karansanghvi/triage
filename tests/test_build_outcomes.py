@@ -1,6 +1,6 @@
 import pytest
 
-from eval.build_outcomes import build_all, build_outcome
+from eval.build_outcomes import JUDGE_EXCLUDED, build_all, build_outcome
 
 AUTO = {"id": "gsm8k_0002", "source": "gsm8k", "task_type": "reasoning", "scoring": "final_answer",
         "difficulty_guess": "unrated", "messy": False}
@@ -106,6 +106,15 @@ def test_no_reference_is_excluded_for_every_tier():
                                                "scorer": None, "reason": "judge-scored prompt"}}, judged)
     assert (outcome["label"], outcome["label_status"]) == (None, "excluded_no_reference")
     assert outcome["tiers"]["extra"]["status"] == "no_reference"
+
+
+def test_judge_excluded_prompt_gets_no_label():
+    prompt = {**JUDGED, "id": "arena_0067"}
+    judged = {"low": judgment("low", "fail", score_value=2), "medium": judgment("medium", "pending"),
+              "high": judgment("high", "pass", "auto_high")}
+    assert "arena_0067" in JUDGE_EXCLUDED
+    outcome = build_outcome(prompt, {}, judged)
+    assert (outcome["label"], outcome["label_status"], outcome["none_passed"]) == (None, "excluded_judge_too_large", False)
 
 
 def test_missing_judgments_leave_judge_prompts_incomplete():

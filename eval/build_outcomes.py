@@ -10,8 +10,8 @@ prompt, in prompts.jsonl order. The same inputs always give the same output.
 Label rule (the routing label = the cheapest tier that passes):
     low passed -> "low"; else medium passed -> "medium"; else "high" (also when no tier passed: none_passed).
 The extra tier (llama) is recorded but never affects the label. A prompt is excluded (no_reference) if the
-judge had no usable reference, and incomplete if a tier the rule needs is still pending or errored; both get
-label null.
+judge had no usable reference, excluded_judge_too_large if it is in JUDGE_EXCLUDED, and incomplete if a tier
+the rule needs is still pending or errored; all three get label null.
 """
 import json
 import sys
@@ -28,6 +28,11 @@ TIERS = ("low", "medium", "high", "extra")
 LABEL_TIERS = ("low", "medium", "high")
 PRE_FAIL_REASONS = {"truncated", "empty", "input too large"}
 UNRESOLVED = {"pending", "error"}
+# Judge prompts that can never be judged, with the reason (see data/review_decisions.md). Label null.
+JUDGE_EXCLUDED = {
+    "arena_0067": "the judge request for the medium answer (9,523 tokens) is over Groq's 8,000 tokens-per-minute "
+                  "limit for gpt-oss-120b, so it fails with a 413 every time",
+}
 
 
 # ---------- One tier ----------
@@ -109,6 +114,8 @@ def build_outcome(prompt: dict, scores: dict, judgments: dict) -> dict:
             tiers[tier] = tier_from_score(row) if row else {"status": "pending", "method": "waiting",
                                                              "reason": "not scored yet", "judge_score": None}
     label, label_status, none_passed = label_for(tiers)
+    if prompt["id"] in JUDGE_EXCLUDED:
+        label, label_status, none_passed = None, "excluded_judge_too_large", False
     return {
         "id": prompt["id"],
         "source": prompt["source"],
