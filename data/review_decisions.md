@@ -87,3 +87,9 @@ Replacement rows drawn: `gsm8k_0001` 1309→1137, `gsm8k_0045` 255→594, `gsm8k
 
 Summary: 12 excluded and replaced (4 GSM8K, 8 MMLU), 2 reworded, 14 kept; plus 1 follow-up exclusion
 (the first replacement for `mmlu_0030`).
+
+## Follow-up: `arena_0067` excluded from labels
+
+| Record | Reason | Decided by |
+|---|---|---|
+| `arena_0067` | The judge request for its medium answer is 9,523 tokens, over Groq's 8,000 tokens-per-minute limit for gpt-oss-120b, so it fails with a 413 on every attempt and can never be judged. Shortening the input would grade it differently from every other prompt (the judge is frozen at version 3), so it is excluded instead: `JUDGE_EXCLUDED` in `eval/build_outcomes.py`, label null, label_status `excluded_judge_too_large`. The prompt record itself is unchanged. | Karan (proposed by Claude) |

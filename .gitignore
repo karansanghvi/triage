@@ -26,15 +26,13 @@ data/pilot2/
 # Judge plumbing test output (not committed)
 data/judge_test/
 
-# LLM judgments (not committed yet)
+# LLM judgments (not committed)
 data/judgments/
 
+# Collected answers, run logs and state (large; not committed)
+data/answers/
 
-
-
-# 
-data/answers/run.log
-data/answers/run.pid
-data/answers/ollama.log
-data/answers/waits.json
+# Scores and outcomes (rebuilt from answers and judgments by eval.score_answers / eval.build_outcomes)
+data/scores.jsonl
 data/scores_review.txt
+data/outcomes.jsonl

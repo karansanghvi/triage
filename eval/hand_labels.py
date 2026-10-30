@@ -3,6 +3,7 @@
 Usage:
     python -m eval.hand_labels setup     # pick the 50 prompts and write the two files (won't overwrite labels)
     python -m eval.hand_labels check     # confirm labels.txt has exactly those 50 IDs, each low/medium/high
+    python -m eval.hand_labels compare   # compare the hand labels with the outcome labels (data/outcomes.jsonl)
 
 The labeler sees only each prompt's ID and messages: no reference, difficulty guess, notes,
 constraints, scores or answers. Prompts whose outcomes were already seen (pilot 1, pilot 2, and the
@@ -24,6 +25,8 @@ LABELS_PATH = LABELS_DIR / "labels.txt"
 SEED = 42
 SAMPLE_SIZE = 50
 VALID_LABELS = {"low", "medium", "high"}
+TIER_ORDER = ("low", "medium", "high")
+OUTCOMES_PATH = PROJECT_ROOT / "data" / "outcomes.jsonl"
 # Prompts whose outcomes were already reviewed by hand (besides everything in the pilots)
 ALREADY_SEEN = {"own_extraction_014", "own_extraction_016", "own_extraction_027", "own_reasoning_025"}
 ID_HEADER = re.compile(r"^=+ \d+/\d+ +(own_\w+) =+$")
@@ -118,9 +121,67 @@ def check_labels(expected_ids: list, labels_text: str) -> tuple:
     return problems, labels
 
 
+# ---------- Comparison with outcomes ----------
+
+def compare_labels(hand: dict, outcomes: dict) -> dict:
+    """Hand labels against outcome labels. hand: id -> label; outcomes: id -> outcome line.
+
+    "too high" means the hand label is a pricier tier than needed (money wasted if routed that way);
+    "too low" means a cheaper tier than needed (that tier's answer actually failed). Prompts without an
+    outcome label (excluded) are counted separately and left out of every rate.
+    """
+    rank = {tier: i for i, tier in enumerate(TIER_ORDER)}
+    rows, unlabeled = [], []
+    for prompt_id, guess in sorted(hand.items()):
+        outcome = outcomes.get(prompt_id)
+        if not outcome or outcome["label"] is None:
+            unlabeled.append(prompt_id)
+            continue
+        actual = outcome["label"]
+        direction = "match" if guess == actual else ("too high" if rank[guess] > rank[actual] else "too low")
+        rows.append({"id": prompt_id, "task_type": outcome["task_type"], "hand": guess, "actual": actual,
+                     "direction": direction})
+    confusion = {h: {a: sum(r["hand"] == h and r["actual"] == a for r in rows) for a in TIER_ORDER}
+                 for h in TIER_ORDER}
+    return {"rows": rows, "unlabeled": unlabeled, "confusion": confusion,
+            "counts": {d: sum(r["direction"] == d for r in rows) for d in ("match", "too high", "too low")}}
+
+
+def print_comparison(result: dict) -> None:
+    rows, counts = result["rows"], result["counts"]
+    total = len(rows)
+    print(f"Compared {total} hand labels with outcome labels"
+          + (f" ({len(result['unlabeled'])} excluded, no outcome label: {', '.join(result['unlabeled'])})"
+             if result["unlabeled"] else ""))
+    if not total:
+        return
+    for direction, meaning in (("match", "same tier"), ("too high", "guessed a pricier tier than needed"),
+                               ("too low", "guessed a cheaper tier, whose answer actually failed")):
+        print(f"  {direction:<9}{counts[direction]:>4}  ({counts[direction] / total:.0%})  {meaning}")
+
+    print("\nRows: hand label, columns: outcome label")
+    print(f"{'':<10}" + "".join(f"{a:>8}" for a in TIER_ORDER) + f"{'total':>8}")
+    for h in TIER_ORDER:
+        line = result["confusion"][h]
+        print(f"{h:<10}" + "".join(f"{line[a]:>8}" for a in TIER_ORDER) + f"{sum(line.values()):>8}")
+    print(f"{'total':<10}" + "".join(f"{sum(result['confusion'][h][a] for h in TIER_ORDER):>8}" for a in TIER_ORDER)
+          + f"{total:>8}")
+
+    print(f"\n{'task_type':<16}{'match':>7}{'too high':>10}{'too low':>9}{'total':>7}")
+    for task_type in sorted({r["task_type"] for r in rows}):
+        group = [r for r in rows if r["task_type"] == task_type]
+        c = {d: sum(r["direction"] == d for r in group) for d in ("match", "too high", "too low")}
+        print(f"{task_type:<16}{c['match']:>7}{c['too high']:>10}{c['too low']:>9}{len(group):>7}")
+
+    print("\nDisagreements:")
+    for r in sorted(rows, key=lambda r: (r["direction"], r["id"])):
+        if r["direction"] != "match":
+            print(f"  {r['id']:<26} hand {r['hand']:<7} outcome {r['actual']:<7} ({r['direction']})")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Blind hand labels for own prompts.")
-    parser.add_argument("command", choices=["setup", "check"])
+    parser.add_argument("command", choices=["setup", "check", "compare"])
     args = parser.parse_args()
 
     if args.command == "setup":
@@ -144,6 +205,14 @@ def main():
         sys.exit(1)
     counts = {label: sum(v == label for v in labels.values()) for label in ("low", "medium", "high")}
     print(f"OK: every prompt has a label {counts}")
+    if args.command == "compare":
+        outcomes = {}
+        for line in OUTCOMES_PATH.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                outcome = json.loads(line)
+                outcomes[outcome["id"]] = outcome
+        print()
+        print_comparison(compare_labels(labels, outcomes))
 
 
 if __name__ == "__main__":
