@@ -93,3 +93,13 @@ Summary: 12 excluded and replaced (4 GSM8K, 8 MMLU), 2 reworded, 14 kept; plus 1
 | Record | Reason | Decided by |
 |---|---|---|
 | `arena_0067` | The judge request for its medium answer is 9,523 tokens, over Groq's 8,000 tokens-per-minute limit for gpt-oss-120b, so it fails with a 413 on every attempt and can never be judged. Shortening the input would grade it differently from every other prompt (the judge is frozen at version 3), so it is excluded instead: `JUDGE_EXCLUDED` in `eval/build_outcomes.py`, label null, label_status `excluded_judge_too_large`. The prompt record itself is unchanged. | Karan (proposed by Claude) |
+
+## Follow-up: "every tier failed" prompts re-reviewed before Phase 3 training (2026-11-02)
+
+The 11 prompts that `data/scores_review.txt` lists as "every tier failed" were re-reviewed: `own_reasoning_025`,
+`mmlu_0004`, `mmlu_0010`, `mmlu_0016`, `mmlu_0030`, `mmlu_0079`, `mmlu_0082`, `mmlu_0095`, `mmlu_0111`,
+`mmlu_0168`, `mmlu_0176`. Nine keys are correct and two are ambiguous (`mmlu_0030`: MERS and SARS are both
+emergent coronaviruses with hundreds of deaths each, so the "thousands" premise doesn't separate them;
+`mmlu_0079`: right only under UK rules, which the question doesn't state). None are excluded or replaced:
+they stay labeled high. All 11 are in the train split. (`arena_0130` is also listed there only because every
+answer was truncated; it is already excluded as no_reference.) Decided by Karan (proposed by Claude).
