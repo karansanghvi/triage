@@ -36,3 +36,13 @@ data/answers/
 data/scores.jsonl
 data/scores_review.txt
 data/outcomes.jsonl
+
+# Router inputs (rebuilt by app.router.features / app.router.embeddings)
+data/features.npz
+data/embeddings.npz
+
+# Judge calibration output (judge verdicts on exact-match answers; not committed)
+data/judge_calibration/
+
+# Trained model files (rebuilt by eval.train_classifier); the .json metrics next to them are committed
+models/*.joblib
