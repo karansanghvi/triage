@@ -31,3 +31,10 @@ quality:
     cheap: 0.4
     balanced: 0.6
     high: 0.8
+
+# The trained classifier the live router uses (models/<name>_<tier>_v<version>.joblib/.json).
+# Placeholder pick: best cross-validation scores on train so far (AUC and log loss, both tiers).
+# The final choice comes from the Pareto curve in Phase 3 Step 4.
+classifier:
+  name: classifier_c_logreg_cv
+  version: 1
