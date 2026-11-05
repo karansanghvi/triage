@@ -1,13 +1,15 @@
 # Triage routing and reliability settings
 
 # Fallback chains: for each tier, the models to try in order.
-# The first model is the primary; the rest are backups.
-# Each backup should be on a different provider than the one before it,
-# so a single provider outage can't take down a whole tier.
+# The FIRST model must be the Phase 2 model for that tier (config/collection.yaml): the classifier
+# learned "will this exact model pass?", so live routing must call the same model.
+# Backups are on a different provider, so one provider outage can't take down a whole tier.
+# Backups are a reliability safety net: their answers aren't what the classifier predicted,
+# so responses served by a backup should be logged as such.
 fallback_chains:
-  low: [ollama-llama, groq-small, ollama-qwen]
-  medium: [groq-large, gemini-flash]   # backup steps UP a tier: costs more, never worse quality
-  high: [gemini-flash, groq-qwen]
+  low: [groq-allam, ollama-llama]      # local llama3.2:3b: similar quality, no provider dependency
+  medium: [groq-small, gemini-flash]   # gemini-flash: different provider, at least medium quality
+  high: [groq-large, gemini-flash]     # only non-Groq option; free tier is tiny (20/day), backup only
 
 # Retries apply only to rate limits (429) and server errors (5xx).
 retry:
@@ -22,3 +24,10 @@ circuit_breaker:
 
 # No single call may take longer than this.
 timeout_seconds: 30
+
+quality:
+  default: balanced          # used when a request has no X-Triage-Quality header
+  presets:                   # placeholders; set from the train-set Pareto curve in Phase 3 Step 4
+    cheap: 0.4
+    balanced: 0.6
+    high: 0.8
