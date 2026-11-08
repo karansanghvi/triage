@@ -1,0 +1,124 @@
+{
+  "signal": {
+    "comparable_share": 0.5769230769230769,
+    "by_source": {
+      "arena": 0.0,
+      "gsm8k": 1.0,
+      "mmlu": 1.0,
+      "own": 0.1893939393939394
+    },
+    "low+medium": {
+      "agree_rate": 0.5652173913043478,
+      "when_agree_medium_really_passed": 0.9641025641025641,
+      "medium_failures_caught": 0.7741935483870968
+    },
+    "low+extra": {
+      "agree_rate": 0.4985507246376812,
+      "when_agree_low_really_passed": 0.8895348837209303,
+      "low_failures_caught": 0.87248322147651
+    }
+  },
+  "results": {
+    "always_low": {
+      "n": 598,
+      "quality": 0.4331103678929766,
+      "quality_retained": 0.4457831325301205,
+      "cost_per_1k": 0.03694729096989967,
+      "cost_saved": 0.8942644976380636,
+      "latency_p50_ms": 468.4,
+      "latency_p95_ms": 1034.675,
+      "mix": {
+        "low": 1.0,
+        "medium": 0.0,
+        "high": 0.0
+      }
+    },
+    "always_medium": {
+      "n": 598,
+      "quality": 0.8678929765886287,
+      "quality_retained": 0.8932874354561101,
+      "cost_per_1k": 0.13091613712374583,
+      "cost_saved": 0.6253451020985366,
+      "latency_p50_ms": 465.4,
+      "latency_p95_ms": 2054.6099999999988,
+      "mix": {
+        "low": 0.0,
+        "medium": 1.0,
+        "high": 0.0
+      }
+    },
+    "always_high": {
+      "n": 598,
+      "quality": 0.9715719063545151,
+      "quality_retained": 1.0,
+      "cost_per_1k": 0.34943127090301,
+      "cost_saved": 0.0,
+      "latency_p50_ms": 632.0999999999999,
+      "latency_p95_ms": 5737.909999999998,
+      "mix": {
+        "low": 0.0,
+        "medium": 0.0,
+        "high": 1.0
+      }
+    },
+    "oracle": {
+      "n": 598,
+      "quality": 0.9816053511705686,
+      "quality_retained": 1.0103270223752152,
+      "cost_per_1k": 0.15522056020066888,
+      "cost_saved": 0.5557908718371325,
+      "latency_p50_ms": 481.6,
+      "latency_p95_ms": 2925.4349999999986,
+      "mix": {
+        "low": 0.4331103678929766,
+        "medium": 0.44816053511705684,
+        "high": 0.11872909698996656
+      }
+    },
+    "agree low+medium": {
+      "n": 598,
+      "quality": 0.8946488294314381,
+      "quality_retained": 0.9208261617900172,
+      "cost_per_1k": 0.18788222408026753,
+      "cost_saved": 0.46231994751146044,
+      "latency_p50_ms": 586.6,
+      "latency_p95_ms": 2186.0249999999996,
+      "mix": {
+        "low": 0.0,
+        "medium": 0.7441471571906354,
+        "high": 0.25585284280936454
+      },
+      "escalation_rate": 0.25585284280936454
+    },
+    "agree low+extra": {
+      "n": 598,
+      "quality": 0.8561872909698997,
+      "quality_retained": 0.8812392426850257,
+      "cost_per_1k": 0.20054054347826086,
+      "cost_saved": 0.4260944564004865,
+      "latency_p50_ms": 2075.7,
+      "latency_p95_ms": 9605.364999999996,
+      "mix": {
+        "low": 0.28762541806020064,
+        "medium": 0.7073578595317725,
+        "high": 0.005016722408026756
+      },
+      "escalation_rate": 0.29431438127090304
+    },
+    "3-way agreement": {
+      "n": 598,
+      "quality": 0.8695652173913043,
+      "quality_retained": 0.8950086058519793,
+      "cost_per_1k": 0.2192985702341137,
+      "cost_saved": 0.37241286486067426,
+      "latency_p50_ms": 2087.2,
+      "latency_p95_ms": 10042.504999999996,
+      "mix": {
+        "low": 0.28762541806020064,
+        "medium": 0.6086956521739131,
+        "high": 0.10367892976588629
+      },
+      "escalation_rate": 0.29431438127090304
+    }
+  }
+}

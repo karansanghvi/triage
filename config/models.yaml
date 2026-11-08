@@ -2,48 +2,15 @@
 # All prices are in US dollars per 1 million tokens.
 # input_price / output_price = what you actually pay (0 on free tiers and local models)
 # price_as = the realistic paid price, used for savings math on the dashboard
+# Tiers match the Phase 2 data collection (config/collection.yaml):
+#   low = groq-allam, medium = groq-small, high = groq-large. Other models are backups or extras.
 # Tiers are ordered by price: low < medium < high
 
 models:
   # ---------- Low tier: cheapest ----------
-  - name: ollama-llama
-    provider: ollama
-    model_id: llama3.2:3b
-    tier: low
-    input_price: 0
-    output_price: 0
-    avg_latency_ms: 0
-    price_as:
-      label: Groq gpt-oss-20b
-      input_price: 0.10
-      output_price: 0.50
-
-  - name: ollama-qwen
-    provider: ollama
-    model_id: qwen2.5:3b
-    tier: low
-    input_price: 0
-    output_price: 0
-    avg_latency_ms: 0
-    price_as:
-      label: Groq gpt-oss-20b
-      input_price: 0.10
-      output_price: 0.50
-
-  - name: groq-small
-    provider: groq
-    model_id: openai/gpt-oss-20b
-    tier: low
-    input_price: 0
-    output_price: 0
-    avg_latency_ms: 0
-    price_as:
-      label: Groq gpt-oss-20b (paid)       # console.groq.com/docs/models, checked 2026-10-19
-      input_price: 0.075
-      output_price: 0.30
-
   # Smallest non-reasoning text model on Groq's free tier (Llama 3.1 8B was shut off for free
   # accounts on 2026-08-16). Bilingual Arabic/English, 4,096-token context window.
+  # Phase 2 low tier.
   - name: groq-allam
     provider: groq
     model_id: allam-2-7b
@@ -60,11 +27,55 @@ models:
       input_price: 0.05
       output_price: 0.08
 
+  # Local model: Phase 2 "extra" tier and the low tier's backup in routing.yaml.
+  # Priced like a comparable small hosted model, which is what it would cost if you didn't host it.
+  # (Before 2026-11-05 this was priced like gpt-oss-20b at $0.10 / $0.50, which overstated it;
+  # Phase 2's saved answers still carry costs computed with that old price.)
+  - name: ollama-llama
+    provider: ollama
+    model_id: llama3.2:3b
+    tier: low
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    price_as:
+      label: "estimate: small-model price (same as the allam estimate)"
+      input_price: 0.05
+      output_price: 0.08
+
+  # No longer used (blocked for collection, removed from routing). Kept for history.
+  - name: ollama-qwen
+    provider: ollama
+    model_id: qwen2.5:3b
+    tier: low
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    price_as:
+      label: "estimate: small-model price (same as the allam estimate)"
+      input_price: 0.05
+      output_price: 0.08
+
   # ---------- Medium tier ----------
+  # Phase 2 medium tier.
+  - name: groq-small
+    provider: groq
+    model_id: openai/gpt-oss-20b
+    tier: medium
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    price_as:
+      label: Groq gpt-oss-20b (paid)       # console.groq.com/docs/models, checked 2026-10-19
+      input_price: 0.075
+      output_price: 0.30
+
+  # ---------- High tier: strongest and most expensive ----------
+  # Phase 2 high tier.
   - name: groq-large
     provider: groq
     model_id: openai/gpt-oss-120b
-    tier: medium
+    tier: high
     input_price: 0
     output_price: 0
     avg_latency_ms: 0
@@ -73,7 +84,8 @@ models:
       input_price: 0.15
       output_price: 0.60
 
-  # ---------- High tier: strongest and most expensive ----------
+  # Backup for the medium and high tiers in routing.yaml (the only non-Groq option).
+  # Free tier is tiny (5 RPM, 20 requests/day): backup only.
   - name: gemini-flash
     provider: gemini
     model_id: models/gemini-3.8-flash
@@ -86,9 +98,9 @@ models:
       input_price: 0.75
       output_price: 3.75
 
-  # Backup for the high tier, on a different provider than Gemini.
+  # No longer used (blocked for collection, removed from routing). Kept for history.
   # Note: this is a Groq "preview" model, so Groq may remove it someday.
-  # On the free tier it can only handle about one request per minute: backup only.
+  # On the free tier it can only handle about one request per minute.
   - name: groq-qwen
     provider: groq
     model_id: qwen/qwen3.8-27b

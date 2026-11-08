@@ -25,16 +25,20 @@ circuit_breaker:
 # No single call may take longer than this.
 timeout_seconds: 30
 
+# Quality dial (tau): route to the cheapest tier whose predicted pass probability is >= tau.
+# Presets chosen from the train-set Pareto curve (out-of-fold probabilities, classifier_c_logreg_cv v1),
+# one rule each. The test set was not used. Train-set results in brackets.
 quality:
   default: balanced          # used when a request has no X-Triage-Quality header
-  presets:                   # placeholders; set from the train-set Pareto curve in Phase 3 Step 4
-    cheap: 0.4
-    balanced: 0.6
-    high: 0.8
+  presets:
+    cheap: 0.68              # best quality at always-medium's cost or less   [88.5% kept, 63% saved]
+    balanced: 0.86           # cheapest tau keeping 95% of strong quality      [95% kept, 23% saved]
+    high: 0.89               # cheapest tau keeping 98% of strong quality      [98% kept, 11% saved]
 
 # The trained classifier the live router uses (models/<name>_<tier>_v<version>.joblib/.json).
-# Placeholder pick: best cross-validation scores on train so far (AUC and log loss, both tiers).
-# The final choice comes from the Pareto curve in Phase 3 Step 4.
+# Chosen in Phase 3 Step 4: classifier_b_logreg_cv and classifier_c_logreg_cv tied on the train-set
+# Pareto curve; C is kept because it includes the handcrafted features, which make decisions
+# easier to explain.
 classifier:
   name: classifier_c_logreg_cv
   version: 1
