@@ -19,7 +19,7 @@ import numpy as np
 from app.registry import PROJECT_ROOT
 from eval.build_dataset import FULL_DIR
 from eval.score_answers import load_answers
-from eval.splits import load_split
+from eval.splits import load_split, load_validation_split
 
 OUTCOMES_PATH = PROJECT_ROOT / "data" / "outcomes.jsonl"
 TIERS = ("low", "medium", "high")
@@ -36,14 +36,24 @@ class EvalRow:
     latency_ms: dict = field(default_factory=dict)  # tier -> milliseconds (None if unknown)
 
 
+SPLITS = ("train", "fit", "val", "test")
+
+
 def load_eval_rows(split: str = "train", allow_test: bool = False) -> list:
-    """Labeled prompts in one split, with every tier's pass/fail, cost and latency"""
-    if split not in ("train", "test"):
-        raise ValueError("split must be 'train' or 'test'")
+    """Labeled prompts in one split, with every tier's pass/fail, cost and latency.
+
+    train = all of train_ids.txt; fit = train minus validation; val = validation (val_ids.txt); test = locked.
+    """
+    if split not in SPLITS:
+        raise ValueError(f"split must be one of {SPLITS}")
     if split == "test" and not allow_test:
         raise PermissionError("the test split is for the final evaluation only; pass allow_test=True there")
     train_ids, test_ids = load_split()
-    wanted = train_ids if split == "train" else test_ids
+    if split in ("fit", "val"):
+        val_ids = load_validation_split()
+        wanted = train_ids - val_ids if split == "fit" else val_ids
+    else:
+        wanted = train_ids if split == "train" else test_ids
     answers = load_answers(FULL_DIR / "answers.jsonl")
     
     rows, missing = [], 0

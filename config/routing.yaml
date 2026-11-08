@@ -22,9 +22,45 @@ circuit_breaker:
   failure_threshold: 3
   cooldown_seconds: 60
 
-# No single call may take longer than this.
-timeout_seconds: 30
+# No single call may take longer than this (seconds), unless model_timeouts says otherwise.
+# 8 = groq-large p95 (6,652 ms, rounded up to 7 s) + 1 s margin, from reports/latency_p95.json
+# (eval/latency_report.py: Phase 2 train-split answers, cache hits and errors excluded).
+# groq-allam and groq-small never exceeded 4.9 s in Phase 2, so the default covers all their calls.
+timeout_seconds: 8
 
+# Per-model timeout overrides (seconds). Use for models whose normal latency is far above the default.
+# tests/test_timeouts.py checks each value against reports/latency_p95.json.
+model_timeouts:
+  # groq-large (strong tier): p99 8,709 ms -> 9 s + 1 s margin; 0 of 568 Phase 2 calls exceed it.
+  # Intentionally p99, not p95, for this one model: the strong tier gets the hardest prompts, whose slowest
+  # calls are the long answers it exists for. Timing them out (2.8% of calls at 8 s) sends traffic to a
+  # 20/day fallback whose answers the classifier never saw.
+  groq-large: 10
+  # gemini-flash: no Phase 2 latency data. It is the last fallback for medium and high, so a generous
+  # limit beats returning an error. Revisit once live latency data exists.
+  gemini-flash: 30
+  # ollama-llama (local llama3.2:3b, low-tier backup): p95 30,785 ms -> 31 s + 1 s margin
+  # (reports/latency_p95.json). With the 8 s default, 33% of its Phase 2 calls would have been killed;
+  # with 32 s, 4.8%. Phase 2 ran it alongside the other tiers on the same machine.
+  ollama-llama: 32
+
+# Request settings. These MUST match the Phase 2 collection (config/collection.yaml): the classifier
+# predicts "will this model pass with THESE settings?" (tests/test_live_settings.py checks they match).
+# Callers may override generation per call; model_params can only be set here.
+generation:
+  temperature: 0
+  max_tokens: 4000
+
+# Extra request parameters per MODEL (not per tier), so a fallback like gemini-flash never receives
+# a parameter meant for another model. reasoning_effort "low" is what gpt-oss was collected with.
+model_params:
+  groq-small:
+    reasoning_effort: low
+  groq-large:
+    reasoning_effort: low
+
+# NOTE (Phase 4 Step 0): these tau values were chosen for classifier v1 and have NOT been re-tuned for
+# classifier_c_logreg_cv v2. They will be re-picked on the validation set in Step 3 (reports/PHASE_4.md).
 # Quality dial (tau): route to the cheapest tier whose predicted pass probability is >= tau.
 # Presets chosen from the train-set Pareto curve (out-of-fold probabilities, classifier_c_logreg_cv v1),
 # one rule each. The test set was not used. Train-set results in brackets.
@@ -39,6 +75,9 @@ quality:
 # Chosen in Phase 3 Step 4: classifier_b_logreg_cv and classifier_c_logreg_cv tied on the train-set
 # Pareto curve; C is kept because it includes the handcrafted features, which make decisions
 # easier to explain.
+# v2 (Phase 4 Step 0): same model, retrained on the fit set (validation held out) with FEATURE_VERSION 3 and
+# hand-tagged task types. It tied the guessed-task-type candidate on validation, so hand tags stay
+# (reports/PHASE_4.md, reports/candidates_val.json).
 classifier:
   name: classifier_c_logreg_cv
-  version: 1
+  version: 2

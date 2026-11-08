@@ -2,7 +2,7 @@
 import logging
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -39,12 +39,26 @@ class BreakerSettings:
     cooldown_seconds: float = 60.0
 
 
+# Generation settings that apply to every model, and request parameters that are set per MODEL
+# (never per call or per tier), so a fallback model never receives a parameter meant for another model.
+GENERATION_KEYS = {"temperature", "max_tokens"}
+MODEL_PARAM_KEYS = {"reasoning_effort"}
+# Providers whose adapter speaks OpenAI's format (the only ones that accept reasoning_effort)
+OPENAI_FORMAT_PROVIDERS = {"openai", "groq", "ollama", "openrouter"}
+
+
 @dataclass(frozen=True)
 class RoutingConfig:
     chains: dict                     # tier -> list of model names, primary first
     retry: RetryPolicy
     breaker: BreakerSettings
     timeout_seconds: float = 30.0
+    generation: dict = field(default_factory=dict)     # e.g. {"temperature": 0, "max_tokens": 4000}
+    model_params: dict = field(default_factory=dict)   # model name -> e.g. {"reasoning_effort": "low"}
+    model_timeouts: dict = field(default_factory=dict) # model name -> seconds, overrides timeout_seconds
+
+    def timeout_for(self, model_name: str) -> float:
+        return self.model_timeouts.get(model_name, self.timeout_seconds)
 
 
 def _positive_number(value, field: str, *, whole: bool = False):
@@ -101,7 +115,59 @@ def load_routing(registry: dict, path=DEFAULT_ROUTING_PATH) -> RoutingConfig:
     )
 
     timeout = float(_positive_number(data.get("timeout_seconds", 30), "timeout_seconds"))
-    return RoutingConfig(chains=chains, retry=retry, breaker=breaker, timeout_seconds=timeout)
+    return RoutingConfig(chains=chains, retry=retry, breaker=breaker, timeout_seconds=timeout,
+                         generation=_load_generation(data.get("generation")),
+                         model_params=_load_model_params(data.get("model_params"), registry),
+                         model_timeouts=_load_model_timeouts(data.get("model_timeouts"), registry))
+
+
+def _load_model_timeouts(raw, registry: dict) -> dict:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError("routing.yaml: 'model_timeouts' must be a mapping of model name -> seconds")
+    out = {}
+    for name, seconds in raw.items():
+        if name not in registry:
+            raise ValueError(f"routing.yaml: model_timeouts lists unknown model '{name}'")
+        out[name] = float(_positive_number(seconds, f"model_timeouts.{name}"))
+    return out
+
+
+def _load_generation(raw) -> dict:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError("routing.yaml: 'generation' must be a mapping")
+    unknown = set(raw) - GENERATION_KEYS
+    if unknown:
+        raise ValueError(f"routing.yaml: unsupported generation setting(s): {', '.join(sorted(unknown))}")
+    out = {}
+    if "temperature" in raw:
+        t = raw["temperature"]
+        if isinstance(t, bool) or not isinstance(t, (int, float)) or t < 0:
+            raise ValueError(f"routing.yaml: 'generation.temperature' must be a number >= 0, got {t!r}")
+        out["temperature"] = float(t)
+    if "max_tokens" in raw:
+        out["max_tokens"] = _positive_number(raw["max_tokens"], "generation.max_tokens", whole=True)
+    return out
+
+
+def _load_model_params(raw, registry: dict) -> dict:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError("routing.yaml: 'model_params' must be a mapping of model name -> parameters")
+    out = {}
+    for name, params in raw.items():
+        if name not in registry:
+            raise ValueError(f"routing.yaml: model_params lists unknown model '{name}'")
+        if not isinstance(params, dict):
+            raise ValueError(f"routing.yaml: model_params for '{name}' must be a mapping")
+        unknown = set(params) - MODEL_PARAM_KEYS
+        if unknown:
+            raise ValueError(f"routing.yaml: unsupported model_params for '{name}': {', '.join(sorted(unknown))}")
+        if "reasoning_effort" in params and registry[name].provider not in OPENAI_FORMAT_PROVIDERS:
+            raise ValueError(f"routing.yaml: '{name}' ({registry[name].provider}) does not accept reasoning_effort")
+        out[name] = dict(params)
+    return out
 
 
 # ---------- Backoff with jitter ----------
@@ -263,6 +329,11 @@ class ReliableClient:
         """
         if tier not in self.routing.chains:
             raise ValueError(f"unknown tier '{tier}'. Use one of: low, medium, high")
+        per_model = MODEL_PARAM_KEYS & set(settings)
+        if per_model:
+            # A per-call value would also reach the fallback models (e.g. gemini-flash), which reject it
+            raise ValueError(f"{', '.join(sorted(per_model))} is set per model: put it under model_params "
+                             "in the routing config, not in send()")
 
         chain = [self.registry[name] for name in self.routing.chains[tier]]
         attempts: list[Attempt] = []
@@ -336,8 +407,10 @@ class ReliableClient:
         return None
 
     def _call(self, model, messages, stream, settings):
-        # Every call gets a timeout, unless the caller set their own
-        settings = {"timeout": self.routing.timeout_seconds, **settings}
+        # Every call gets the configured timeout (per model if set) and generation settings, unless the caller
+        # set their own, plus the parameters configured for THIS model only (so a fallback never inherits them)
+        settings = {"timeout": self.routing.timeout_for(model.name), **self.routing.generation, **settings,
+                    **self.routing.model_params.get(model.name, {})}
 
         if not stream:
             return self._send(messages, model, **settings)

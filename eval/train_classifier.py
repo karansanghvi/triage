@@ -16,6 +16,8 @@ Usage:
  
 Honest-evaluation rules:
     * Only labeled prompts in the train split are loaded; assert_no_test_ids() guards that.
+    * By default the validation IDs (data/splits/val_ids.txt) are held out too, so models train on the
+      "fit" set and can be compared on validation. --include-val trains on all labeled train prompts.
     * All numbers printed here are 5-fold CROSS-VALIDATION on the train split. Comparing A/B/C and picking
       a winner uses these. The locked test set is used once, at the end, by a separate script.
     * No class reweighting: tau compares these probabilities directly, so they must stay honest.
@@ -42,14 +44,16 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
  
 from app.registry import PROJECT_ROOT
-from eval.splits import assert_no_test_ids, load_split
+from eval.splits import assert_no_test_ids, fit_ids, load_split
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
  
 DATA_DIR = PROJECT_ROOT / "data"
 MODELS_DIR = PROJECT_ROOT / "models"
-FEATURES_PATH = DATA_DIR / "features.npz"
+FEATURES_PATH = DATA_DIR / "features.npz"                 # task_<t> one-hot from the hand tags
+FEATURES_GUESSED_PATH = DATA_DIR / "features_guessed.npz" # task_<t> one-hot from guess_task_type()
+TASK_TYPE_SOURCES = {"hand": FEATURES_PATH, "guessed": FEATURES_GUESSED_PATH}
 EMBEDDINGS_PATH = DATA_DIR / "embeddings.npz"
 OUTCOMES_PATH = DATA_DIR / "outcomes.jsonl"
 TIERS = ("low", "medium")
@@ -72,10 +76,11 @@ def load_npx(path: Path) -> tuple:
         (str(data["model_name"]) if "model_name" in data else "unknown")
     return rows, names, version
 
-def feature_matrix(feature_set: str, ids: list) -> tuple:
-    """(X, column names, version info) for the given prompt IDs, in that order"""
+def feature_matrix(feature_set: str, ids: list, task_types: str = "hand") -> tuple:
+    """(X, column names, version info) for the given prompt IDs, in that order.
+    task_types: "hand" (features.npz) or "guessed" (features_guessed.npz, built with --guess-task-type)"""
     if feature_set in ("features", "task_only"):
-        rows, names, version = load_npx(FEATURES_PATH)
+        rows, names, version = load_npx(TASK_TYPE_SOURCES[task_types])
         X = np.array([rows[i] for i in ids], dtype=np.float64)
         if feature_set == "task_only":
             keep = [j for j, n in enumerate(names) if n.startswith("task_")]
@@ -85,18 +90,24 @@ def feature_matrix(feature_set: str, ids: list) -> tuple:
         rows, names, version = load_npx(EMBEDDINGS_PATH)
         return np.array([rows[i] for i in ids], dtype=np.float64), names, {"embeddings": version}
     if feature_set == "both":
-        Xf, nf, vf = feature_matrix("features", ids)
+        Xf, nf, vf = feature_matrix("features", ids, task_types)
         Xe, ne, ve = feature_matrix("embeddings", ids)
         return np.hstack([Xf, Xe]), nf + ne, {**vf, **ve}
     raise ValueError(f"unknown feature set {feature_set!r}")
 
-def load_training_rows() -> list:
-    """Labelled outcomes in the train split, sorted by ID so runs are reproducible"""
+def load_training_rows(include_val: bool = False) -> list:
+    """Labelled outcomes in the train split, sorted by ID so runs are reproducible.
+
+    By default the validation IDs (data/splits/val_ids.txt) are left out, so this returns the "fit" set;
+    include_val=True returns every labeled train prompt (e.g. a final refit after tuning on validation)."""
     train_ids, _ = load_split()
     outcomes = [json.loads(l) for l in OUTCOMES_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
     rows = sorted((o for o in outcomes if o["label_status"] == "labeled" and o["id"] in train_ids),
                   key=lambda o: o["id"])
     assert_no_test_ids({o["id"] for o in rows})
+    if not include_val:
+        keep = fit_ids(o["id"] for o in rows)
+        rows = [o for o in rows if o["id"] in keep]
     return rows
 
 # ---------- Model ----------
@@ -166,11 +177,11 @@ def next_version(name: str, tier: str) -> int:
 # ---------- Main ----------
 
 def train_tier(tier: str, rows: list, feature_set: str, kind: str, name: str, save: bool,
-               pca: int = None) -> dict:
+               pca: int = None, trained_on: str = "fit", task_types: str = "hand") -> dict:
     keep = [o for o in rows if o.get(f"{tier}_pass") is not None]
     ids = [o["id"] for o in keep]
     y = np.array([int(bool(o[f"{tier}_pass"])) for o in keep])
-    X, names, versions = feature_matrix(feature_set, ids)
+    X, names, versions = feature_matrix(feature_set, ids, task_types)
     if pca and pca >= X.shape[1]:
         raise SystemExit(f"--pca {pca} must be smaller than the {X.shape[1]} columns of --features {feature_set}")
 
@@ -212,6 +223,8 @@ def train_tier(tier: str, rows: list, feature_set: str, kind: str, name: str, sa
     
     record = {
         "name": name, "tier": tier, "feature_set": feature_set, "model": kind, "pca": pca, "chosen_C": chosen_c,
+        "trained_on": trained_on,   # "fit" = labeled train minus validation; "train" = all labeled train (--include-val)
+        "task_types": task_types,   # where the task_<t> columns came from at training time: hand tags or guesses
         "versions": versions,
         "columns": names if X.shape[1] <= 50 else f"{X.shape[1]} columns",
         "cv": {"folds": FOLDS, "seed": SEED, **metrics}, "by_task_type": by_task, "top_weights": weights,
@@ -234,18 +247,29 @@ def main():
     parser.add_argument("--model", default="logreg", choices=["logreg", "logreg_cv", "gboost"])
     parser.add_argument("--pca", type=int, default=None, help="reduce the columns to this many PCA components first")
     parser.add_argument("--no-save", action="store_true", help="just print metrics")
+    parser.add_argument("--task-types", default="hand", choices=list(TASK_TYPE_SOURCES),
+                        help="task_<t> columns from hand tags (features.npz) or from guess_task_type() "
+                             "(features_guessed.npz); guessed models are saved with a _guessed suffix")
+    parser.add_argument("--include-val", action="store_true",
+                        help="train on ALL labeled train prompts, validation included (default: fit set only)")
     args = parser.parse_args()
     if args.pca is not None and args.pca < 1:
         raise SystemExit("--pca must be a positive whole number")
 
     name = (NAMES[args.features] + ("" if args.model == "logreg" else f"_{args.model}")
-            + (f"_pca{args.pca}" if args.pca else ""))
-    rows = load_training_rows()
-    if not rows: 
+            + (f"_pca{args.pca}" if args.pca else "") + ("_guessed" if args.task_types == "guessed" else ""))
+    if args.task_types == "guessed" and args.features in ("embeddings",):
+        raise SystemExit("--task-types guessed only matters for feature sets with task columns")
+    rows = load_training_rows(include_val=args.include_val)
+    if not rows:
         raise SystemExit("no labeled train prompts found; check data/outcomes.jsonl and data/splits/")
-    print(f"{len(rows)} labeled train prompts; metrics are {FOLDS}-fold cross-validation on train only")
+    trained_on = "train" if args.include_val else "fit"
+    print(f"{len(rows)} labeled {trained_on} prompts"
+          + ("" if args.include_val else " (validation held out)")
+          + f"; metrics are {FOLDS}-fold cross-validation on these only")
     for tier in TIERS:
-        train_tier(tier, rows, args.features, args.model, name, save=not args.no_save, pca=args.pca)
+        train_tier(tier, rows, args.features, args.model, name, save=not args.no_save, pca=args.pca,
+                   trained_on=trained_on, task_types=args.task_types)
 
 
 if __name__ == "__main__":

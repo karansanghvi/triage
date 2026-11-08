@@ -1,0 +1,7670 @@
+{
+  "description": "guess_task_type() vs hand-tagged task_type, on train_ids - val_ids ('fit') or val_ids ('val') (eval/guesser_agreement.py); test set never read",
+  "decision": {
+    "date": "2026-11-07",
+    "outcome": "option D reverted; guesser rules are back to commit c61a92a (same guesses, GUESS_RULES structure kept)",
+    "reason": "Option D improved train - val agreement by +2 prompts (67.7% -> 68.1%) but lost 2 on validation (73.5% -> 71.8%, 0 fixed / 2 broken), so it was reverted under this phase's rule: a change replaces the current one only on a validation win.",
+    "follow_up": "Keyword tuning has hit diminishing returns (+/-3 prompts). An embedding-based task classifier is the follow-up if Part F shows task type matters.",
+    "feature_version": "3 (features identical to v2; bumped because Part F retrains on the fit set)"
+  },
+  "notes": [
+    "Keyword tuning has hit diminishing returns: every keyword variant tried moved agreement by about +/-3 prompts (fit: baseline 67.7% -> option D 68.1%; validation confirmation: 73.5% -> 71.8%, 2 prompts broken, none fixed).",
+    "The remaining gaps are not keyword-shaped: coding prompts that only name a library or framework (vue, mssql, weaviate, ...), open_ended (0% recall, the guesser has no rule that can output it), and creative (3% recall on fit).",
+    "An embedding-based task classifier is a possible follow-up, depending on the Part F results (hand-tag vs guessed-task-type classifiers compared on validation)."
+  ],
+  "runs": {
+    "baseline": {
+      "n": 495,
+      "agree": 335,
+      "agreement": 0.6767676767676768,
+      "feature_version": "2",
+      "per_task": {
+        "extraction": {
+          "n": 18,
+          "correct": 3,
+          "recall": 0.16666666666666666,
+          "guessed": 9
+        },
+        "summarization": {
+          "n": 18,
+          "correct": 12,
+          "recall": 0.6666666666666666,
+          "guessed": 14
+        },
+        "classification": {
+          "n": 19,
+          "correct": 7,
+          "recall": 0.3684210526315789,
+          "guessed": 10
+        },
+        "reasoning": {
+          "n": 152,
+          "correct": 135,
+          "recall": 0.8881578947368421,
+          "guessed": 168
+        },
+        "creative": {
+          "n": 34,
+          "correct": 1,
+          "recall": 0.029411764705882353,
+          "guessed": 1
+        },
+        "qa": {
+          "n": 198,
+          "correct": 169,
+          "recall": 0.8535353535353535,
+          "guessed": 266
+        },
+        "coding": {
+          "n": 32,
+          "correct": 8,
+          "recall": 0.25,
+          "guessed": 27
+        },
+        "open_ended": {
+          "n": 24,
+          "correct": 0,
+          "recall": 0.0,
+          "guessed": 0
+        }
+      },
+      "confusion": {
+        "extraction": {
+          "extraction": 3,
+          "classification": 1,
+          "reasoning": 4,
+          "qa": 6,
+          "coding": 4
+        },
+        "summarization": {
+          "summarization": 12,
+          "reasoning": 1,
+          "qa": 3,
+          "coding": 2
+        },
+        "classification": {
+          "classification": 7,
+          "reasoning": 1,
+          "qa": 9,
+          "coding": 2
+        },
+        "reasoning": {
+          "classification": 1,
+          "reasoning": 135,
+          "qa": 16
+        },
+        "creative": {
+          "summarization": 1,
+          "classification": 1,
+          "reasoning": 5,
+          "creative": 1,
+          "qa": 22,
+          "coding": 4
+        },
+        "qa": {
+          "extraction": 4,
+          "summarization": 1,
+          "reasoning": 17,
+          "qa": 169,
+          "coding": 7
+        },
+        "coding": {
+          "extraction": 1,
+          "reasoning": 2,
+          "qa": 21,
+          "coding": 8
+        },
+        "open_ended": {
+          "extraction": 1,
+          "reasoning": 3,
+          "qa": 20
+        }
+      },
+      "guesses": {
+        "arena_0004": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0006": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0007": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0009": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0010": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0011": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0012": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0013": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "arena_0014": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0015": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0016": {
+          "hand": "coding",
+          "guess": "extraction"
+        },
+        "arena_0017": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0019": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0020": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0023": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0025": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0026": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0027": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0028": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0031": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0032": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0033": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0034": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0036": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0040": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0044": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0046": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0047": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0048": {
+          "hand": "coding",
+          "guess": "reasoning"
+        },
+        "arena_0049": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0052": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0053": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0054": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0056": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0057": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0059": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "arena_0062": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0065": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0067": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0070": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "arena_0071": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0072": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0073": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0075": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0076": {
+          "hand": "coding",
+          "guess": "reasoning"
+        },
+        "arena_0077": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0078": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0079": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0082": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0085": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0086": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "arena_0087": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0092": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0094": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0095": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0096": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0097": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0099": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0100": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0101": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "arena_0102": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0105": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0106": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0107": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0108": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0109": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0110": {
+          "hand": "classification",
+          "guess": "reasoning"
+        },
+        "arena_0111": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0115": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0116": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0118": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0119": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0120": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0121": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0122": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0123": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0124": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "arena_0126": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0127": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0128": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0129": {
+          "hand": "open_ended",
+          "guess": "extraction"
+        },
+        "arena_0130": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0132": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0136": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0137": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0139": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0140": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0142": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0143": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0145": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0146": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0147": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0148": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0149": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "arena_0150": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0151": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0153": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0154": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0155": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0156": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0158": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0159": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0160": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "arena_0162": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0166": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0167": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0168": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0169": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0171": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0173": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0175": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0176": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0177": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0178": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0179": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0180": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0181": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "arena_0183": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0184": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0185": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0186": {
+          "hand": "creative",
+          "guess": "classification"
+        },
+        "arena_0187": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0189": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0190": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0191": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0193": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0194": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0195": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0197": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0199": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0200": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "gsm8k_0001": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0005": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0006": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0007": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0009": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0011": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0012": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0013": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0014": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0016": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0017": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0019": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0020": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0021": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0027": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0028": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0032": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0034": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0036": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0037": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0038": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0041": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0042": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0045": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0046": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0047": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0052": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0053": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0055": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0057": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0058": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0059": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0061": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0062": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0063": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0064": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0065": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0066": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0067": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0068": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0070": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0072": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0075": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0076": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0079": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0080": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0082": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0084": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0085": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0089": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0090": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0091": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0092": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0094": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0096": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0098": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0101": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0103": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0104": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0105": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0106": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0107": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0108": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0109": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0110": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0111": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0112": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0113": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0114": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0115": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0116": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0118": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0119": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0120": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0121": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0122": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0123": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0124": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0125": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0127": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0128": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0130": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0131": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0133": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0136": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0137": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0138": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0139": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0142": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0143": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0144": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0145": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0146": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0147": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0148": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0149": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0151": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0152": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0155": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0156": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0158": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0159": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0160": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0163": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0167": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0170": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0171": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0172": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0173": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0174": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0175": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0176": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0177": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0178": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0179": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0180": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0181": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0182": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0184": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0185": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0189": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0190": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0194": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0195": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0196": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0197": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0198": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0200": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "mmlu_0001": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0003": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0004": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0006": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0007": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0009": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0010": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0011": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0012": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0014": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0015": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0016": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0017": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0018": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0019": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0020": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0021": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0024": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0025": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0027": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0028": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0031": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0033": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0034": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0038": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0039": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0040": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0041": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0042": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0043": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0044": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0045": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0046": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0047": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0049": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0051": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0052": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0053": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0054": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0057": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0058": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0059": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0061": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0065": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0066": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0067": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0068": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0069": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0071": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0072": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0074": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0075": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0077": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0078": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0079": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0082": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0083": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0085": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0086": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0087": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0091": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0094": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0095": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0096": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0097": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0098": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0099": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0101": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0102": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0103": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0104": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0105": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0106": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0107": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0108": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0109": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0111": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0114": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0115": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0121": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0122": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0125": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0126": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0127": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0129": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0130": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0131": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0134": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0137": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0138": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0140": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0141": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0144": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0145": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0146": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0148": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0149": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0150": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0151": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0153": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0154": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0156": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0158": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0159": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0161": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0162": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0163": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0164": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0165": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0167": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0168": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0170": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0173": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0174": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0176": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0177": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0178": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0179": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0183": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0184": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0185": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0186": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0187": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0188": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0190": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0191": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0193": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0197": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_classification_002": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_004": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_005": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_008": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_011": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_012": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_013": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_014": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_015": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_016": {
+          "hand": "classification",
+          "guess": "coding"
+        },
+        "own_classification_017": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_018": {
+          "hand": "classification",
+          "guess": "coding"
+        },
+        "own_classification_019": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_020": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_022": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_023": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_025": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_026": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_creative_001": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_002": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_004": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_005": {
+          "hand": "creative",
+          "guess": "creative"
+        },
+        "own_creative_006": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_007": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_008": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "own_creative_009": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_011": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_013": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_014": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_016": {
+          "hand": "creative",
+          "guess": "summarization"
+        },
+        "own_creative_018": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_020": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "own_creative_023": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_025": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_026": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_027": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_extraction_003": {
+          "hand": "extraction",
+          "guess": "extraction"
+        },
+        "own_extraction_005": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_extraction_006": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_007": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_008": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_009": {
+          "hand": "extraction",
+          "guess": "extraction"
+        },
+        "own_extraction_010": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_012": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_013": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_014": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_015": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_extraction_016": {
+          "hand": "extraction",
+          "guess": "extraction"
+        },
+        "own_extraction_019": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_021": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_extraction_022": {
+          "hand": "extraction",
+          "guess": "classification"
+        },
+        "own_extraction_025": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_026": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_027": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_qa_001": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_002": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_005": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "own_qa_006": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_007": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_009": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_011": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_012": {
+          "hand": "qa",
+          "guess": "summarization"
+        },
+        "own_qa_013": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_014": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_015": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_016": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "own_qa_017": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_018": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_021": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_022": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_024": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_026": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_reasoning_001": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_003": {
+          "hand": "reasoning",
+          "guess": "classification"
+        },
+        "own_reasoning_004": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_005": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_008": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_009": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_reasoning_010": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_011": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_013": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_015": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_016": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_018": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_021": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_022": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_023": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_024": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_reasoning_025": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_reasoning_027": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_summarization_001": {
+          "hand": "summarization",
+          "guess": "coding"
+        },
+        "own_summarization_003": {
+          "hand": "summarization",
+          "guess": "qa"
+        },
+        "own_summarization_004": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_005": {
+          "hand": "summarization",
+          "guess": "qa"
+        },
+        "own_summarization_007": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_008": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_010": {
+          "hand": "summarization",
+          "guess": "qa"
+        },
+        "own_summarization_011": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_012": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_014": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_016": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_019": {
+          "hand": "summarization",
+          "guess": "reasoning"
+        },
+        "own_summarization_020": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_021": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_024": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_025": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_026": {
+          "hand": "summarization",
+          "guess": "coding"
+        },
+        "own_summarization_027": {
+          "hand": "summarization",
+          "guess": "summarization"
+        }
+      },
+      "created": "2026-11-08T03:52:32.686829+00:00"
+    },
+    "candidate_keywords": {
+      "n": 495,
+      "agree": 333,
+      "agreement": 0.6727272727272727,
+      "feature_version": "2",
+      "per_task": {
+        "extraction": {
+          "n": 18,
+          "correct": 3,
+          "recall": 0.16666666666666666,
+          "guessed": 9
+        },
+        "summarization": {
+          "n": 18,
+          "correct": 10,
+          "recall": 0.5555555555555556,
+          "guessed": 11
+        },
+        "classification": {
+          "n": 19,
+          "correct": 7,
+          "recall": 0.3684210526315789,
+          "guessed": 10
+        },
+        "reasoning": {
+          "n": 152,
+          "correct": 135,
+          "recall": 0.8881578947368421,
+          "guessed": 166
+        },
+        "creative": {
+          "n": 34,
+          "correct": 1,
+          "recall": 0.029411764705882353,
+          "guessed": 1
+        },
+        "qa": {
+          "n": 198,
+          "correct": 164,
+          "recall": 0.8282828282828283,
+          "guessed": 254
+        },
+        "coding": {
+          "n": 32,
+          "correct": 13,
+          "recall": 0.40625,
+          "guessed": 44
+        },
+        "open_ended": {
+          "n": 24,
+          "correct": 0,
+          "recall": 0.0,
+          "guessed": 0
+        }
+      },
+      "confusion": {
+        "extraction": {
+          "extraction": 3,
+          "classification": 1,
+          "reasoning": 3,
+          "qa": 6,
+          "coding": 5
+        },
+        "summarization": {
+          "summarization": 10,
+          "reasoning": 1,
+          "qa": 3,
+          "coding": 4
+        },
+        "classification": {
+          "classification": 7,
+          "reasoning": 1,
+          "qa": 9,
+          "coding": 2
+        },
+        "reasoning": {
+          "classification": 1,
+          "reasoning": 135,
+          "qa": 16
+        },
+        "creative": {
+          "classification": 1,
+          "reasoning": 5,
+          "creative": 1,
+          "qa": 21,
+          "coding": 6
+        },
+        "qa": {
+          "extraction": 4,
+          "summarization": 1,
+          "reasoning": 16,
+          "qa": 164,
+          "coding": 13
+        },
+        "coding": {
+          "extraction": 1,
+          "reasoning": 2,
+          "qa": 16,
+          "coding": 13
+        },
+        "open_ended": {
+          "extraction": 1,
+          "reasoning": 3,
+          "qa": 19,
+          "coding": 1
+        }
+      },
+      "guesses": {
+        "arena_0004": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0006": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0007": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0009": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0010": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0011": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0012": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0013": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "arena_0014": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0015": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0016": {
+          "hand": "coding",
+          "guess": "extraction"
+        },
+        "arena_0017": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0019": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0020": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0023": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0025": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0026": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0027": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0028": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0031": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0032": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0033": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0034": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0036": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0040": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0044": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0046": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0047": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0048": {
+          "hand": "coding",
+          "guess": "reasoning"
+        },
+        "arena_0049": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0052": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0053": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0054": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0056": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0057": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0059": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "arena_0062": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0065": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0067": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0070": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "arena_0071": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0072": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0073": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0075": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0076": {
+          "hand": "coding",
+          "guess": "reasoning"
+        },
+        "arena_0077": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0078": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0079": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0082": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0085": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0086": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "arena_0087": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0092": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0094": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0095": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0096": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0097": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0099": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0100": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0101": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "arena_0102": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0105": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0106": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0107": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0108": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0109": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0110": {
+          "hand": "classification",
+          "guess": "reasoning"
+        },
+        "arena_0111": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0115": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0116": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0118": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0119": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0120": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0121": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0122": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0123": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0124": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "arena_0126": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0127": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0128": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0129": {
+          "hand": "open_ended",
+          "guess": "extraction"
+        },
+        "arena_0130": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0132": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0136": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0137": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0139": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0140": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0142": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0143": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0145": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0146": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0147": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0148": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0149": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "arena_0150": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0151": {
+          "hand": "open_ended",
+          "guess": "coding"
+        },
+        "arena_0153": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0154": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0155": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0156": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0158": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0159": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0160": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "arena_0162": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0166": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0167": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0168": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0169": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0171": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0173": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0175": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0176": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0177": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0178": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0179": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0180": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0181": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "arena_0183": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0184": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0185": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0186": {
+          "hand": "creative",
+          "guess": "classification"
+        },
+        "arena_0187": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0189": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0190": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0191": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0193": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0194": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0195": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0197": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0199": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0200": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "gsm8k_0001": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0005": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0006": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0007": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0009": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0011": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0012": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0013": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0014": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0016": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0017": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0019": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0020": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0021": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0027": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0028": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0032": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0034": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0036": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0037": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0038": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0041": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0042": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0045": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0046": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0047": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0052": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0053": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0055": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0057": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0058": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0059": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0061": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0062": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0063": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0064": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0065": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0066": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0067": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0068": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0070": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0072": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0075": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0076": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0079": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0080": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0082": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0084": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0085": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0089": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0090": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0091": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0092": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0094": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0096": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0098": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0101": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0103": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0104": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0105": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0106": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0107": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0108": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0109": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0110": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0111": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0112": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0113": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0114": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0115": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0116": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0118": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0119": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0120": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0121": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0122": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0123": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0124": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0125": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0127": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0128": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0130": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0131": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0133": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0136": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0137": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0138": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0139": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0142": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0143": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0144": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0145": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0146": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0147": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0148": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0149": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0151": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0152": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0155": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0156": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0158": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0159": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0160": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0163": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0167": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0170": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0171": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0172": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0173": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0174": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0175": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0176": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0177": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0178": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0179": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0180": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0181": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0182": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0184": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0185": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0189": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0190": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0194": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0195": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0196": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0197": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0198": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0200": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "mmlu_0001": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0003": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0004": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0006": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0007": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0009": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0010": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0011": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0012": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0014": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0015": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0016": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0017": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0018": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0019": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0020": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0021": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0024": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0025": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0027": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0028": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0031": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0033": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0034": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0038": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0039": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0040": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0041": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0042": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0043": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0044": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0045": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0046": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0047": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0049": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0051": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0052": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0053": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0054": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0057": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0058": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0059": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0061": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0065": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0066": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0067": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0068": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0069": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0071": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0072": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0074": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0075": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0077": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0078": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0079": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0082": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0083": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0085": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0086": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0087": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0091": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0094": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0095": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0096": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0097": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0098": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0099": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0101": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0102": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0103": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0104": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0105": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0106": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0107": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0108": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0109": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0111": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0114": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0115": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0121": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0122": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0125": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0126": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0127": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0129": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0130": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0131": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0134": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0137": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0138": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0140": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0141": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0144": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0145": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0146": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0148": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0149": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0150": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0151": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0153": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0154": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0156": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0158": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0159": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0161": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0162": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0163": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0164": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0165": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0167": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0168": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0170": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0173": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0174": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0176": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0177": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0178": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0179": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0183": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0184": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0185": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0186": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0187": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0188": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0190": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0191": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0193": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0197": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_classification_002": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_004": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_005": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_008": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_011": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_012": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_013": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_014": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_015": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_016": {
+          "hand": "classification",
+          "guess": "coding"
+        },
+        "own_classification_017": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_018": {
+          "hand": "classification",
+          "guess": "coding"
+        },
+        "own_classification_019": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_020": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_022": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_023": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_025": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_026": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_creative_001": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_002": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_004": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_005": {
+          "hand": "creative",
+          "guess": "creative"
+        },
+        "own_creative_006": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_007": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_008": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "own_creative_009": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_011": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_013": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_014": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_016": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_018": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_020": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "own_creative_023": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_025": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_026": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_027": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_extraction_003": {
+          "hand": "extraction",
+          "guess": "extraction"
+        },
+        "own_extraction_005": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_extraction_006": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_007": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_008": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_009": {
+          "hand": "extraction",
+          "guess": "extraction"
+        },
+        "own_extraction_010": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_012": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_013": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_014": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_015": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_extraction_016": {
+          "hand": "extraction",
+          "guess": "extraction"
+        },
+        "own_extraction_019": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_021": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_extraction_022": {
+          "hand": "extraction",
+          "guess": "classification"
+        },
+        "own_extraction_025": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_026": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_027": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_qa_001": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_002": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_005": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "own_qa_006": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_007": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_009": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_011": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_012": {
+          "hand": "qa",
+          "guess": "summarization"
+        },
+        "own_qa_013": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_014": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "own_qa_015": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_016": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "own_qa_017": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_018": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_021": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_022": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "own_qa_024": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_026": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_reasoning_001": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_003": {
+          "hand": "reasoning",
+          "guess": "classification"
+        },
+        "own_reasoning_004": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_005": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_008": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_009": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_reasoning_010": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_011": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_013": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_015": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_016": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_018": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_021": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_022": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_023": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_024": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_reasoning_025": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_reasoning_027": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_summarization_001": {
+          "hand": "summarization",
+          "guess": "coding"
+        },
+        "own_summarization_003": {
+          "hand": "summarization",
+          "guess": "qa"
+        },
+        "own_summarization_004": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_005": {
+          "hand": "summarization",
+          "guess": "qa"
+        },
+        "own_summarization_007": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_008": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_010": {
+          "hand": "summarization",
+          "guess": "qa"
+        },
+        "own_summarization_011": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_012": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_014": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_016": {
+          "hand": "summarization",
+          "guess": "coding"
+        },
+        "own_summarization_019": {
+          "hand": "summarization",
+          "guess": "reasoning"
+        },
+        "own_summarization_020": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_021": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_024": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_025": {
+          "hand": "summarization",
+          "guess": "coding"
+        },
+        "own_summarization_026": {
+          "hand": "summarization",
+          "guess": "coding"
+        },
+        "own_summarization_027": {
+          "hand": "summarization",
+          "guess": "summarization"
+        }
+      },
+      "changed_vs": {
+        "label": "baseline",
+        "prompts": [
+          {
+            "id": "arena_0025",
+            "hand": "coding",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "component",
+            "fixed": true,
+            "broke": false,
+            "preview": "vue component containig vue3-easy-data-table make table header sticky"
+          },
+          {
+            "id": "arena_0072",
+            "hand": "coding",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "database",
+            "fixed": true,
+            "broke": false,
+            "preview": "I am doing data migration of a database mssql around 4 tb, how to transfer it sm"
+          },
+          {
+            "id": "arena_0085",
+            "hand": "coding",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "component",
+            "fixed": true,
+            "broke": false,
+            "preview": "create a vue 3 mock dashboard using the most popular component library"
+          },
+          {
+            "id": "arena_0139",
+            "hand": "coding",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "api",
+            "fixed": true,
+            "broke": false,
+            "preview": "Here is the problem statement: I have an activity watcher system called kwatcher"
+          },
+          {
+            "id": "arena_0151",
+            "hand": "open_ended",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "react",
+            "fixed": false,
+            "broke": false,
+            "preview": "I am planning to switch from my old 2015 macbook pro to new M4 macbook air. But "
+          },
+          {
+            "id": "arena_0195",
+            "hand": "coding",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "schema",
+            "fixed": true,
+            "broke": false,
+            "preview": "Weaviate v3 had a method called schema.get associated with Client objects. In v4"
+          },
+          {
+            "id": "mmlu_0016",
+            "hand": "qa",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "database",
+            "fixed": false,
+            "broke": true,
+            "preview": "Suppose Unix did not provide a way of passing file descriptors between processes"
+          },
+          {
+            "id": "mmlu_0072",
+            "hand": "qa",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "exception",
+            "fixed": false,
+            "broke": true,
+            "preview": "This question refers to the following information. First we must remark that the"
+          },
+          {
+            "id": "mmlu_0083",
+            "hand": "qa",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "error",
+            "fixed": false,
+            "broke": true,
+            "preview": "Researchers are conducting an experiment using a significance level of 0.05. The"
+          },
+          {
+            "id": "mmlu_0146",
+            "hand": "qa",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "error",
+            "fixed": false,
+            "broke": true,
+            "preview": "Which of the following statements is false concerning the linear probability mod"
+          },
+          {
+            "id": "own_creative_006",
+            "hand": "creative",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "error",
+            "fixed": false,
+            "broke": false,
+            "preview": "Write the message shown when a customer's card payment doesn't go through at che"
+          },
+          {
+            "id": "own_creative_016",
+            "hand": "creative",
+            "old": "summarization",
+            "new": "coding",
+            "trigger": "error",
+            "fixed": false,
+            "broke": false,
+            "preview": "Write the public post-incident update for our status page based on this internal"
+          },
+          {
+            "id": "own_extraction_027",
+            "hand": "extraction",
+            "old": "reasoning",
+            "new": "coding",
+            "trigger": "error",
+            "fixed": false,
+            "broke": false,
+            "preview": "Subject: sync keeps failing!!! Hi, since yesterday sync fails w/ error E-4012 on"
+          },
+          {
+            "id": "own_qa_014",
+            "hand": "qa",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "api",
+            "fixed": false,
+            "broke": true,
+            "preview": "## Rate limits Requests are limited per API key. Limits depend on your plan: | P"
+          },
+          {
+            "id": "own_qa_022",
+            "hand": "qa",
+            "old": "reasoning",
+            "new": "coding",
+            "trigger": "exception",
+            "fixed": false,
+            "broke": false,
+            "preview": "Northwind Air \u2014 Checked Baggage Policy 1. Free checked baggage allowance Your fr"
+          },
+          {
+            "id": "own_summarization_016",
+            "hand": "summarization",
+            "old": "summarization",
+            "new": "coding",
+            "trigger": "api",
+            "fixed": false,
+            "broke": true,
+            "preview": "Write an executive summary of this incident report in exactly 3 sentences and no"
+          },
+          {
+            "id": "own_summarization_025",
+            "hand": "summarization",
+            "old": "summarization",
+            "new": "coding",
+            "trigger": "error",
+            "fixed": false,
+            "broke": true,
+            "preview": "Summarize Q3 for the board update in exactly 5 bullets, under 80 words total. Co"
+          }
+        ]
+      },
+      "created": "2026-11-08T03:52:53.547687+00:00"
+    },
+    "option_d": {
+      "split": "fit",
+      "n": 495,
+      "agree": 337,
+      "agreement": 0.6808080808080809,
+      "feature_version": "3",
+      "per_task": {
+        "extraction": {
+          "n": 18,
+          "correct": 3,
+          "recall": 0.16666666666666666,
+          "guessed": 9
+        },
+        "summarization": {
+          "n": 18,
+          "correct": 11,
+          "recall": 0.6111111111111112,
+          "guessed": 13
+        },
+        "classification": {
+          "n": 19,
+          "correct": 7,
+          "recall": 0.3684210526315789,
+          "guessed": 10
+        },
+        "reasoning": {
+          "n": 152,
+          "correct": 135,
+          "recall": 0.8881578947368421,
+          "guessed": 168
+        },
+        "creative": {
+          "n": 34,
+          "correct": 1,
+          "recall": 0.029411764705882353,
+          "guessed": 1
+        },
+        "qa": {
+          "n": 198,
+          "correct": 169,
+          "recall": 0.8535353535353535,
+          "guessed": 263
+        },
+        "coding": {
+          "n": 32,
+          "correct": 11,
+          "recall": 0.34375,
+          "guessed": 31
+        },
+        "open_ended": {
+          "n": 24,
+          "correct": 0,
+          "recall": 0.0,
+          "guessed": 0
+        }
+      },
+      "confusion": {
+        "extraction": {
+          "extraction": 3,
+          "classification": 1,
+          "reasoning": 4,
+          "qa": 6,
+          "coding": 4
+        },
+        "summarization": {
+          "summarization": 11,
+          "reasoning": 1,
+          "qa": 3,
+          "coding": 3
+        },
+        "classification": {
+          "classification": 7,
+          "reasoning": 1,
+          "qa": 9,
+          "coding": 2
+        },
+        "reasoning": {
+          "classification": 1,
+          "reasoning": 135,
+          "qa": 16
+        },
+        "creative": {
+          "summarization": 1,
+          "classification": 1,
+          "reasoning": 5,
+          "creative": 1,
+          "qa": 22,
+          "coding": 4
+        },
+        "qa": {
+          "extraction": 4,
+          "summarization": 1,
+          "reasoning": 17,
+          "qa": 169,
+          "coding": 7
+        },
+        "coding": {
+          "extraction": 1,
+          "reasoning": 2,
+          "qa": 18,
+          "coding": 11
+        },
+        "open_ended": {
+          "extraction": 1,
+          "reasoning": 3,
+          "qa": 20
+        }
+      },
+      "guesses": {
+        "arena_0004": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0006": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0007": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0009": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0010": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0011": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0012": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0013": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "arena_0014": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0015": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0016": {
+          "hand": "coding",
+          "guess": "extraction"
+        },
+        "arena_0017": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0019": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0020": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0023": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0025": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0026": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0027": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0028": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0031": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0032": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0033": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0034": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0036": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0040": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0044": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0046": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0047": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0048": {
+          "hand": "coding",
+          "guess": "reasoning"
+        },
+        "arena_0049": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0052": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0053": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0054": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0056": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0057": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0059": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "arena_0062": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0065": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0067": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0070": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "arena_0071": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0072": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0073": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0075": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0076": {
+          "hand": "coding",
+          "guess": "reasoning"
+        },
+        "arena_0077": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0078": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0079": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0082": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0085": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0086": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "arena_0087": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0092": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0094": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0095": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0096": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0097": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0099": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0100": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0101": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "arena_0102": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0105": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0106": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0107": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0108": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0109": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0110": {
+          "hand": "classification",
+          "guess": "reasoning"
+        },
+        "arena_0111": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "arena_0115": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0116": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0118": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0119": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0120": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0121": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0122": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0123": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0124": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "arena_0126": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0127": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0128": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0129": {
+          "hand": "open_ended",
+          "guess": "extraction"
+        },
+        "arena_0130": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0132": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0136": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0137": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0139": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0140": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0142": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0143": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0145": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0146": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0147": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0148": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0149": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "arena_0150": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0151": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0153": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0154": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0155": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0156": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0158": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0159": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0160": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "arena_0162": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0166": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0167": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0168": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0169": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0171": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0173": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0175": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0176": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0177": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0178": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0179": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0180": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0181": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "arena_0183": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0184": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0185": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0186": {
+          "hand": "creative",
+          "guess": "classification"
+        },
+        "arena_0187": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0189": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0190": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0191": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0193": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0194": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0195": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0197": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0199": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0200": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "gsm8k_0001": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0005": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0006": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0007": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0009": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0011": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0012": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0013": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0014": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0016": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0017": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0019": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0020": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0021": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0027": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0028": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0032": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0034": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0036": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0037": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0038": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0041": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0042": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0045": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0046": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0047": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0052": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0053": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0055": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0057": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0058": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0059": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0061": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0062": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0063": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0064": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0065": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0066": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0067": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0068": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0070": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0072": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0075": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0076": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0079": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0080": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0082": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0084": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0085": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0089": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0090": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0091": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0092": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0094": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0096": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0098": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0101": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0103": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0104": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0105": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0106": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0107": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0108": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0109": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0110": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0111": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0112": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0113": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0114": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0115": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0116": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0118": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0119": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0120": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0121": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0122": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0123": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0124": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0125": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0127": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0128": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0130": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0131": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0133": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0136": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0137": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0138": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0139": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0142": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0143": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0144": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0145": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0146": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0147": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0148": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0149": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0151": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0152": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0155": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0156": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0158": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0159": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0160": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0163": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0167": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0170": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0171": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0172": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0173": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0174": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0175": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0176": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0177": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0178": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0179": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0180": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0181": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0182": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0184": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0185": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0189": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0190": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0194": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0195": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0196": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0197": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0198": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0200": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "mmlu_0001": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0003": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0004": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0006": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0007": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0009": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0010": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0011": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0012": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0014": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0015": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0016": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0017": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0018": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0019": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0020": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0021": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0024": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0025": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0027": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0028": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0031": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0033": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0034": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0038": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0039": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0040": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0041": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0042": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0043": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0044": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0045": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0046": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0047": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0049": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0051": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0052": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0053": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0054": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0057": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0058": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0059": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0061": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0065": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0066": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0067": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0068": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0069": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0071": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0072": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0074": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0075": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0077": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0078": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0079": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0082": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0083": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0085": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0086": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0087": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0091": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0094": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0095": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0096": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0097": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0098": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0099": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0101": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0102": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0103": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0104": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0105": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0106": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0107": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0108": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0109": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0111": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0114": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0115": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0121": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0122": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0125": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0126": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0127": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0129": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0130": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0131": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0134": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0137": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0138": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0140": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0141": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0144": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0145": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0146": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0148": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0149": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0150": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0151": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0153": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0154": {
+          "hand": "qa",
+          "guess": "extraction"
+        },
+        "mmlu_0156": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0158": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0159": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0161": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0162": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0163": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0164": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0165": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0167": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0168": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0170": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0173": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0174": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0176": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0177": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "mmlu_0178": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0179": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0183": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0184": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0185": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0186": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0187": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0188": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0190": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0191": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0193": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0197": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_classification_002": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_004": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_005": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_008": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_011": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_012": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_013": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_014": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_015": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_016": {
+          "hand": "classification",
+          "guess": "coding"
+        },
+        "own_classification_017": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_018": {
+          "hand": "classification",
+          "guess": "coding"
+        },
+        "own_classification_019": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_020": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_022": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_023": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_025": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_026": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_creative_001": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_002": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_004": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_005": {
+          "hand": "creative",
+          "guess": "creative"
+        },
+        "own_creative_006": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_007": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_008": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "own_creative_009": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_011": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_013": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_014": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_016": {
+          "hand": "creative",
+          "guess": "summarization"
+        },
+        "own_creative_018": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_020": {
+          "hand": "creative",
+          "guess": "reasoning"
+        },
+        "own_creative_023": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_025": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_026": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "own_creative_027": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_extraction_003": {
+          "hand": "extraction",
+          "guess": "extraction"
+        },
+        "own_extraction_005": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_extraction_006": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_007": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_008": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_009": {
+          "hand": "extraction",
+          "guess": "extraction"
+        },
+        "own_extraction_010": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_012": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_013": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_014": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_015": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_extraction_016": {
+          "hand": "extraction",
+          "guess": "extraction"
+        },
+        "own_extraction_019": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_021": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_extraction_022": {
+          "hand": "extraction",
+          "guess": "classification"
+        },
+        "own_extraction_025": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_026": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_027": {
+          "hand": "extraction",
+          "guess": "reasoning"
+        },
+        "own_qa_001": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_002": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_005": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "own_qa_006": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_007": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_009": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_011": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_012": {
+          "hand": "qa",
+          "guess": "summarization"
+        },
+        "own_qa_013": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_014": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_015": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_016": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "own_qa_017": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_018": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_021": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_022": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_024": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_026": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_reasoning_001": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_003": {
+          "hand": "reasoning",
+          "guess": "classification"
+        },
+        "own_reasoning_004": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_005": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_008": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_009": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_reasoning_010": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_011": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_013": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_015": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_016": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_018": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_021": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_022": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_023": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_024": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_reasoning_025": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_reasoning_027": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_summarization_001": {
+          "hand": "summarization",
+          "guess": "coding"
+        },
+        "own_summarization_003": {
+          "hand": "summarization",
+          "guess": "qa"
+        },
+        "own_summarization_004": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_005": {
+          "hand": "summarization",
+          "guess": "qa"
+        },
+        "own_summarization_007": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_008": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_010": {
+          "hand": "summarization",
+          "guess": "qa"
+        },
+        "own_summarization_011": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_012": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_014": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_016": {
+          "hand": "summarization",
+          "guess": "coding"
+        },
+        "own_summarization_019": {
+          "hand": "summarization",
+          "guess": "reasoning"
+        },
+        "own_summarization_020": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_021": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_024": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_025": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_026": {
+          "hand": "summarization",
+          "guess": "coding"
+        },
+        "own_summarization_027": {
+          "hand": "summarization",
+          "guess": "summarization"
+        }
+      },
+      "changed_vs": {
+        "label": "baseline",
+        "prompts": [
+          {
+            "id": "arena_0025",
+            "hand": "coding",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "component",
+            "fixed": true,
+            "broke": false,
+            "preview": "vue component containig vue3-easy-data-table make table header sticky"
+          },
+          {
+            "id": "arena_0085",
+            "hand": "coding",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "component",
+            "fixed": true,
+            "broke": false,
+            "preview": "create a vue 3 mock dashboard using the most popular component library"
+          },
+          {
+            "id": "arena_0195",
+            "hand": "coding",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "schema",
+            "fixed": true,
+            "broke": false,
+            "preview": "Weaviate v3 had a method called schema.get associated with Client objects. In v4"
+          },
+          {
+            "id": "own_summarization_016",
+            "hand": "summarization",
+            "old": "summarization",
+            "new": "coding",
+            "trigger": "api",
+            "fixed": false,
+            "broke": true,
+            "preview": "Write an executive summary of this incident report in exactly 3 sentences and no"
+          }
+        ]
+      },
+      "created": "2026-11-08T03:56:25.700791+00:00"
+    },
+    "option_d_val": {
+      "split": "val",
+      "n": 117,
+      "agree": 84,
+      "agreement": 0.717948717948718,
+      "feature_version": "3",
+      "per_task": {
+        "extraction": {
+          "n": 4,
+          "correct": 1,
+          "recall": 0.25,
+          "guessed": 1
+        },
+        "summarization": {
+          "n": 4,
+          "correct": 2,
+          "recall": 0.5,
+          "guessed": 3
+        },
+        "classification": {
+          "n": 4,
+          "correct": 1,
+          "recall": 0.25,
+          "guessed": 1
+        },
+        "reasoning": {
+          "n": 37,
+          "correct": 34,
+          "recall": 0.918918918918919,
+          "guessed": 39
+        },
+        "creative": {
+          "n": 8,
+          "correct": 0,
+          "recall": 0.0,
+          "guessed": 1
+        },
+        "qa": {
+          "n": 48,
+          "correct": 43,
+          "recall": 0.8958333333333334,
+          "guessed": 63
+        },
+        "coding": {
+          "n": 6,
+          "correct": 3,
+          "recall": 0.5,
+          "guessed": 9
+        },
+        "open_ended": {
+          "n": 6,
+          "correct": 0,
+          "recall": 0.0,
+          "guessed": 0
+        }
+      },
+      "confusion": {
+        "extraction": {
+          "extraction": 1,
+          "summarization": 1,
+          "qa": 1,
+          "coding": 1
+        },
+        "summarization": {
+          "summarization": 2,
+          "qa": 1,
+          "coding": 1
+        },
+        "classification": {
+          "classification": 1,
+          "qa": 2,
+          "coding": 1
+        },
+        "reasoning": {
+          "reasoning": 34,
+          "qa": 3
+        },
+        "creative": {
+          "qa": 7,
+          "coding": 1
+        },
+        "qa": {
+          "reasoning": 3,
+          "qa": 43,
+          "coding": 2
+        },
+        "coding": {
+          "qa": 3,
+          "coding": 3
+        },
+        "open_ended": {
+          "reasoning": 2,
+          "creative": 1,
+          "qa": 3
+        }
+      },
+      "guesses": {
+        "arena_0002": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0008": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0022": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0024": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "arena_0035": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0038": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0045": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0058": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0066": {
+          "hand": "open_ended",
+          "guess": "creative"
+        },
+        "arena_0068": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0069": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0074": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0081": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0083": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0084": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0089": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0104": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0112": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0114": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "arena_0133": {
+          "hand": "open_ended",
+          "guess": "reasoning"
+        },
+        "arena_0138": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0144": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0163": {
+          "hand": "creative",
+          "guess": "coding"
+        },
+        "arena_0164": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "arena_0165": {
+          "hand": "coding",
+          "guess": "coding"
+        },
+        "arena_0172": {
+          "hand": "open_ended",
+          "guess": "qa"
+        },
+        "arena_0188": {
+          "hand": "coding",
+          "guess": "qa"
+        },
+        "arena_0196": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "arena_0198": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "gsm8k_0002": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0008": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0018": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0022": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0024": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0025": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0026": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0030": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0031": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0043": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0049": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0050": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0071": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0073": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0086": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0087": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0097": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0099": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0132": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0140": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0141": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0150": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0157": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0161": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0162": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0168": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0183": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0187": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0188": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0191": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0192": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "gsm8k_0199": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "mmlu_0005": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0023": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0026": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0029": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0030": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0036": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0050": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0056": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0064": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0073": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0080": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0090": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0092": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0093": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0100": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0110": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0112": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0113": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0117": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0118": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "mmlu_0119": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0124": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0132": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0135": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0139": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0142": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0152": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0166": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0181": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0189": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0195": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "mmlu_0198": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_classification_006": {
+          "hand": "classification",
+          "guess": "coding"
+        },
+        "own_classification_021": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_classification_024": {
+          "hand": "classification",
+          "guess": "classification"
+        },
+        "own_classification_027": {
+          "hand": "classification",
+          "guess": "qa"
+        },
+        "own_creative_003": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_015": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_019": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_creative_021": {
+          "hand": "creative",
+          "guess": "qa"
+        },
+        "own_extraction_001": {
+          "hand": "extraction",
+          "guess": "qa"
+        },
+        "own_extraction_002": {
+          "hand": "extraction",
+          "guess": "extraction"
+        },
+        "own_extraction_017": {
+          "hand": "extraction",
+          "guess": "coding"
+        },
+        "own_extraction_018": {
+          "hand": "extraction",
+          "guess": "summarization"
+        },
+        "own_qa_003": {
+          "hand": "qa",
+          "guess": "qa"
+        },
+        "own_qa_004": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_019": {
+          "hand": "qa",
+          "guess": "reasoning"
+        },
+        "own_qa_023": {
+          "hand": "qa",
+          "guess": "coding"
+        },
+        "own_reasoning_002": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_006": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_reasoning_007": {
+          "hand": "reasoning",
+          "guess": "qa"
+        },
+        "own_reasoning_017": {
+          "hand": "reasoning",
+          "guess": "reasoning"
+        },
+        "own_summarization_002": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_006": {
+          "hand": "summarization",
+          "guess": "qa"
+        },
+        "own_summarization_013": {
+          "hand": "summarization",
+          "guess": "summarization"
+        },
+        "own_summarization_022": {
+          "hand": "summarization",
+          "guess": "coding"
+        }
+      },
+      "baseline_rules": {
+        "git_rev": "c61a92a",
+        "n": 117,
+        "agree": 86,
+        "agreement": 0.7350427350427351,
+        "feature_version": "2",
+        "per_task": {
+          "extraction": {
+            "n": 4,
+            "correct": 1,
+            "recall": 0.25,
+            "guessed": 1
+          },
+          "summarization": {
+            "n": 4,
+            "correct": 3,
+            "recall": 0.75,
+            "guessed": 4
+          },
+          "classification": {
+            "n": 4,
+            "correct": 1,
+            "recall": 0.25,
+            "guessed": 1
+          },
+          "reasoning": {
+            "n": 37,
+            "correct": 34,
+            "recall": 0.918918918918919,
+            "guessed": 39
+          },
+          "creative": {
+            "n": 8,
+            "correct": 0,
+            "recall": 0.0,
+            "guessed": 1
+          },
+          "qa": {
+            "n": 48,
+            "correct": 44,
+            "recall": 0.9166666666666666,
+            "guessed": 64
+          },
+          "coding": {
+            "n": 6,
+            "correct": 3,
+            "recall": 0.5,
+            "guessed": 7
+          },
+          "open_ended": {
+            "n": 6,
+            "correct": 0,
+            "recall": 0.0,
+            "guessed": 0
+          }
+        },
+        "confusion": {
+          "extraction": {
+            "extraction": 1,
+            "summarization": 1,
+            "qa": 1,
+            "coding": 1
+          },
+          "summarization": {
+            "summarization": 3,
+            "qa": 1
+          },
+          "classification": {
+            "classification": 1,
+            "qa": 2,
+            "coding": 1
+          },
+          "reasoning": {
+            "reasoning": 34,
+            "qa": 3
+          },
+          "creative": {
+            "qa": 7,
+            "coding": 1
+          },
+          "qa": {
+            "reasoning": 3,
+            "qa": 44,
+            "coding": 1
+          },
+          "coding": {
+            "qa": 3,
+            "coding": 3
+          },
+          "open_ended": {
+            "reasoning": 2,
+            "creative": 1,
+            "qa": 3
+          }
+        },
+        "guesses": {
+          "arena_0002": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0008": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0022": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0024": {
+            "hand": "reasoning",
+            "guess": "qa"
+          },
+          "arena_0035": {
+            "hand": "coding",
+            "guess": "coding"
+          },
+          "arena_0038": {
+            "hand": "open_ended",
+            "guess": "reasoning"
+          },
+          "arena_0045": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0058": {
+            "hand": "open_ended",
+            "guess": "qa"
+          },
+          "arena_0066": {
+            "hand": "open_ended",
+            "guess": "creative"
+          },
+          "arena_0068": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0069": {
+            "hand": "creative",
+            "guess": "qa"
+          },
+          "arena_0074": {
+            "hand": "coding",
+            "guess": "qa"
+          },
+          "arena_0081": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0083": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0084": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0089": {
+            "hand": "coding",
+            "guess": "coding"
+          },
+          "arena_0104": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0112": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0114": {
+            "hand": "creative",
+            "guess": "qa"
+          },
+          "arena_0133": {
+            "hand": "open_ended",
+            "guess": "reasoning"
+          },
+          "arena_0138": {
+            "hand": "coding",
+            "guess": "qa"
+          },
+          "arena_0144": {
+            "hand": "open_ended",
+            "guess": "qa"
+          },
+          "arena_0163": {
+            "hand": "creative",
+            "guess": "coding"
+          },
+          "arena_0164": {
+            "hand": "qa",
+            "guess": "coding"
+          },
+          "arena_0165": {
+            "hand": "coding",
+            "guess": "coding"
+          },
+          "arena_0172": {
+            "hand": "open_ended",
+            "guess": "qa"
+          },
+          "arena_0188": {
+            "hand": "coding",
+            "guess": "qa"
+          },
+          "arena_0196": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "arena_0198": {
+            "hand": "creative",
+            "guess": "qa"
+          },
+          "gsm8k_0002": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0008": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0018": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0022": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0024": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0025": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0026": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0030": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0031": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0043": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0049": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0050": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0071": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0073": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0086": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0087": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0097": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0099": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0132": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0140": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0141": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0150": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0157": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0161": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0162": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0168": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0183": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0187": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0188": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0191": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0192": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "gsm8k_0199": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "mmlu_0005": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0023": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0026": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0029": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0030": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0036": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0050": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0056": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0064": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0073": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0080": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0090": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0092": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0093": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0100": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0110": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0112": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0113": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0117": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0118": {
+            "hand": "qa",
+            "guess": "reasoning"
+          },
+          "mmlu_0119": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0124": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0132": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0135": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0139": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0142": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0152": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0166": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0181": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0189": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0195": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "mmlu_0198": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "own_classification_006": {
+            "hand": "classification",
+            "guess": "coding"
+          },
+          "own_classification_021": {
+            "hand": "classification",
+            "guess": "qa"
+          },
+          "own_classification_024": {
+            "hand": "classification",
+            "guess": "classification"
+          },
+          "own_classification_027": {
+            "hand": "classification",
+            "guess": "qa"
+          },
+          "own_creative_003": {
+            "hand": "creative",
+            "guess": "qa"
+          },
+          "own_creative_015": {
+            "hand": "creative",
+            "guess": "qa"
+          },
+          "own_creative_019": {
+            "hand": "creative",
+            "guess": "qa"
+          },
+          "own_creative_021": {
+            "hand": "creative",
+            "guess": "qa"
+          },
+          "own_extraction_001": {
+            "hand": "extraction",
+            "guess": "qa"
+          },
+          "own_extraction_002": {
+            "hand": "extraction",
+            "guess": "extraction"
+          },
+          "own_extraction_017": {
+            "hand": "extraction",
+            "guess": "coding"
+          },
+          "own_extraction_018": {
+            "hand": "extraction",
+            "guess": "summarization"
+          },
+          "own_qa_003": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "own_qa_004": {
+            "hand": "qa",
+            "guess": "reasoning"
+          },
+          "own_qa_019": {
+            "hand": "qa",
+            "guess": "reasoning"
+          },
+          "own_qa_023": {
+            "hand": "qa",
+            "guess": "qa"
+          },
+          "own_reasoning_002": {
+            "hand": "reasoning",
+            "guess": "qa"
+          },
+          "own_reasoning_006": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "own_reasoning_007": {
+            "hand": "reasoning",
+            "guess": "qa"
+          },
+          "own_reasoning_017": {
+            "hand": "reasoning",
+            "guess": "reasoning"
+          },
+          "own_summarization_002": {
+            "hand": "summarization",
+            "guess": "summarization"
+          },
+          "own_summarization_006": {
+            "hand": "summarization",
+            "guess": "qa"
+          },
+          "own_summarization_013": {
+            "hand": "summarization",
+            "guess": "summarization"
+          },
+          "own_summarization_022": {
+            "hand": "summarization",
+            "guess": "summarization"
+          }
+        }
+      },
+      "changed_vs": {
+        "label": "baseline_rules@c61a92a",
+        "prompts": [
+          {
+            "id": "own_qa_023",
+            "hand": "qa",
+            "old": "qa",
+            "new": "coding",
+            "trigger": "database",
+            "fixed": false,
+            "broke": true,
+            "preview": "Clearpath Health Software \u2014 Data Retention Policy (v2.3) Owner: Security & Compl"
+          },
+          {
+            "id": "own_summarization_022",
+            "hand": "summarization",
+            "old": "summarization",
+            "new": "coding",
+            "trigger": "endpoint",
+            "fixed": false,
+            "broke": true,
+            "preview": "Summarize this support thread for the engineering postmortem in exactly 3 bullet"
+          }
+        ]
+      },
+      "created": "2026-11-08T03:56:31.779057+00:00"
+    }
+  }
+}

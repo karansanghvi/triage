@@ -48,3 +48,31 @@ def assert_no_test_ids(ids, splits_dir: Path = SPLITS_DIR) -> None:
     if leaked:
         raise TestSetLeakError(f"{len(leaked)} test-set prompt IDs passed to training/tuning code: "
                                f"{', '.join(leaked[:10])}" + (" ..." if len(leaked) > 10 else ""))
+
+
+def load_validation_split(splits_dir: Path = SPLITS_DIR) -> set:
+    """Validation IDs (written by eval/make_validation_split.py) as a set.
+
+    Raises if val_ids.txt doesn't match the hash in val_info.json, if val isn't a subset of train,
+    or if it overlaps the test set.
+    """
+    train, test = load_split(splits_dir)
+    val = _read_ids(splits_dir / "val_ids.txt")
+    info = json.loads((splits_dir / "val_info.json").read_text(encoding="utf-8"))
+    digest = hashlib.sha256("\n".join(sorted(val)).encode("utf-8")).hexdigest()
+    if digest != info["val_ids_sha256"]:
+        raise ValueError("val_ids.txt doesn't match the hash in val_info.json; the locked validation split was changed")
+    if len(val) != info["val"]:
+        raise ValueError("validation size doesn't match val_info.json")
+    if val & test:
+        raise TestSetLeakError(f"{len(val & test)} validation IDs are in the test set: {sorted(val & test)[:5]}")
+    if not val <= train:
+        raise ValueError(f"{len(val - train)} validation IDs are not in the train split: {sorted(val - train)[:5]}")
+    return val
+
+
+def fit_ids(ids, splits_dir: Path = SPLITS_DIR) -> set:
+    """The "fit" set: the given (labeled train) IDs minus the validation IDs. Also guards against test IDs."""
+    ids = set(ids)
+    assert_no_test_ids(ids, splits_dir)
+    return ids - load_validation_split(splits_dir)

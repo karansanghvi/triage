@@ -28,7 +28,7 @@ import numpy as np
 #    so bump your feature version if you edit them after training.
 # ---------------------------------------------------------------------------
  
-FEATURE_VERSION = "2"
+FEATURE_VERSION = "3"   # 3: Phase 4 Step 0 retrain on the fit set (features and guesses same as v2)
  
 TASK_TYPES = ["extraction", "summarization", "classification", "reasoning", 
               "creative", "qa", "coding", "open_ended"]
@@ -123,22 +123,26 @@ def normalize_task_type(task_type: str | None) -> str | None:
     t = TASK_ALIASES.get(t, t)
     return t if t in TASK_TYPES else None
 
+# Task-type guess rules, checked in order on the lowercased prompt; the first match wins, "qa" if none.
+# Same guesses as the original if-chain (commit c61a92a). Extra coding keywords were tried in Phase 4
+# Step 0 and reverted: they gained on train - val but lost on validation (reports/guesser_agreement.json).
+GUESS_RULES = [
+    ("coding", re.compile(r"\b(?:python|javascript|typescript|java|sql|regex|function|refactor|debug|bug|"
+                          r"code|script|compile|stack trace)\b|```")),
+    ("extraction", re.compile(r"\b(?:extract|pull out|find all|fields?)\b")),
+    ("summarization", re.compile(r"\bsummar|\btl;?dr\b|\bkey points\b")),
+    ("classification", re.compile(r"\b(?:classify|categori[sz]e|label|sentiment|which category)\b")),
+    ("creative", re.compile(r"\bwrite (?:a|an|me a) (?:poem|story|song|haiku|limerick)|\b(?:slogan|tagline|imagine)\b")),
+    ("reasoning", re.compile(r"\b(?:calculate|solve|prove|how many|how much|step[- ]by[- ]step)\b|\d+\s*[-+*/x]\s*\d+")),
+]
+
+
 def guess_task_type(text: str) -> str:
     """Keyword guess for production, where nobody hand-tags the request."""
     t = text.lower()
-    if re.search(r"\b(?:python|javascript|typescript|java|sql|regex|function|refactor|debug|bug|"
-                r"code|script|compile|stack trace)\b|```", t):
-        return "coding"
-    if re.search(r"\b(?:extract|pull out|find all|fields?)\b", t):
-        return "extraction"
-    if re.search(r"\bsummar|\btl;?dr\b|\bkey points\b", t):
-        return "summarization"
-    if re.search(r"\b(?:classify|categori[sz]e|label|sentiment|which category)\b", t):
-        return "classification"
-    if re.search(r"\bwrite (?:a|an|me a) (?:poem|story|song|haiku|limerick)|\b(?:slogan|tagline|imagine)\b", t):
-        return "creative"
-    if re.search(r"\b(?:calculate|solve|prove|how many|how much|step[- ]by[- ]step)\b|\d+\s*[-+*/x]\s*\d+", t):
-        return "reasoning"
+    for task, pattern in GUESS_RULES:
+        if pattern.search(t):
+            return task
     return "qa"
 
 # ---------------------------------------------------------------------------
