@@ -123,7 +123,7 @@ def main(argv=None):
 
     _, test = load_split()
     val_ids = load_validation_split()
-    rows = load_eval_rows("val")
+    rows = load_eval_rows("val", allow_val=True)
     assert {r.id for r in rows} <= val_ids and not {r.id for r in rows} & test
     prompts = {p["id"]: p for p in load_prompts() if p["id"] in val_ids}
     outcomes = outcomes_by_id(val_ids)

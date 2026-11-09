@@ -15,8 +15,10 @@ Every call is paid for. "extra" is llama3.2:3b, run locally in Phase 2; its pric
 small paid model, which is the honest choice if you didn't host it yourself.
 
 Usage:
-    python -m eval.agreement_sim
+    python -m eval.agreement_sim                 # train split (as before): reports/agreement_train.json
+    python -m eval.agreement_sim --split val     # Phase 4: reports/agreement_val.json
 """
+import argparse
 import json
 
 import numpy as np
@@ -127,14 +129,18 @@ def agreement_report(rows: list, keys: dict, is_comparable: dict) -> dict:
     return out
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Simulate agreement cascades with the Phase 2 answers.")
+    parser.add_argument("--split", default="train", choices=["train", "fit", "val"],
+                        help="split to score (default train, as before)")
+    split = parser.parse_args(argv).split
     REPORTS_DIR.mkdir(exist_ok=True)
-    rows = load_eval_rows("train")
+    rows = load_eval_rows(split, allow_val=split == "val")
     is_comparable, keys = load_keys(rows)
     checks = check_all(rows, use_constraints=False)
     report = agreement_report(rows, keys, is_comparable)
 
-    print(f"{len(rows)} labeled train prompts | {report['comparable_share']:.0%} have a comparable final answer ("
+    print(f"{len(rows)} labeled {split} prompts | {report['comparable_share']:.0%} have a comparable final answer ("
           + ", ".join(f"{s} {v:.0%}" for s, v in report["by_source"].items()) + ")\n")
     print("How good is agreement as a signal? (comparable prompts only)")
     lm, le = report["low+medium"], report["low+extra"]
@@ -166,7 +172,7 @@ def main():
         print(f"{name}: {r['quality_retained']:.1%} kept, saves {r['cost_saved']:.0%} -> {where}")
     print(f"(always-medium: {medium['quality_retained']:.1%} kept, saves {medium['cost_saved']:.0%})")
 
-    (REPORTS_DIR / "agreement_train.json").write_text(json.dumps({"signal": report, "results": results}, indent=2))
+    (REPORTS_DIR / f"agreement_{split}.json").write_text(json.dumps({"signal": report, "results": results}, indent=2))
 
 
 if __name__ == "__main__":

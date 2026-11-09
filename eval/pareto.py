@@ -16,7 +16,13 @@ Two modes:
     hand-tagged task types and with guessed ones (what production sees). Writes a marker file; running it
     again needs --force, because re-running and adjusting after seeing test results defeats the test set.
  
-Outputs go to reports/: pareto_<split>.png (the chart) and pareto_<split>.json (every number).
+  SPLIT OPTION (Phase 4):  --split train (default) | fit | val
+    train and fit use out-of-fold probabilities (fit = train minus validation). val runs the real Predictor
+    for each --classifiers name:version on the validation prompts with hand-tagged task types, because a
+    model trained on the fit set has no out-of-fold probabilities for them.
+
+Outputs go to reports/: pareto_<split>.png (the chart) and pareto_<split>.json (every number). On val the
+files are pareto_predict_only_val.*, because pareto_val.* is the Phase 4 Step 3 chart (eval/checker_routing.py).
 """
 
 import argparse
@@ -66,6 +72,31 @@ def test_probabilities(rows: list, guess_task_type: bool) -> tuple:
     preds = predictor.predict_texts(texts, tasks)
     overhead_ms = (time.perf_counter() - start) * 1000 / len(rows)
     return {r.id: (p.p_low, p.p_medium) for r, p in zip(rows, preds)}, overhead_ms
+
+
+def predictor_probabilities(name: str, version: int, rows: list) -> dict:
+    """{prompt_id: (p_low, p_medium)} from the real Predictor name:version, hand-tagged task types.
+    For prompts the model never trained on (validation, for a model trained on the fit set)."""
+    import os
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")        # the embedding model must already be cached
+    from app.router.features import prompt_text
+    from app.router.predictor import Predictor
+    from eval.build_dataset import load_prompts
+    prompts = {p["id"]: p for p in load_prompts()}
+    preds = Predictor(name, version).predict_texts([prompt_text(prompts[r.id]) for r in rows],
+                                                   [prompts[r.id].get("task_type") for r in rows])
+    return {r.id: (p.p_low, p.p_medium) for r, p in zip(rows, preds)}
+
+
+def split_probabilities(name: str, version: int, split: str, rows: list) -> dict:
+    """Out-of-fold probabilities on train / fit; the real Predictor on val."""
+    if split == "val":
+        return predictor_probabilities(name, version, rows)
+    return oof_probabilities(name, version)
+
+
+def report_stem(split: str) -> str:
+    return "pareto_predict_only_val" if split == "val" else f"pareto_{split}"
 
 
 # ---------- the sweep ----------
@@ -178,6 +209,8 @@ def main():
                         help="tuning mode: name:version of each classifier to compare (out-of-fold, train split)")
     parser.add_argument("--final", action="store_true", help="the one-time final evaluation on the test split")
     parser.add_argument("--force", action="store_true", help="allow re-running the final evaluation")
+    parser.add_argument("--split", default="train", choices=["train", "fit", "val"],
+                        help="tuning split (default train, as before; val runs the real predictor)")
     args = parser.parse_args()
     REPORTS_DIR.mkdir(exist_ok=True)
  
@@ -192,11 +225,12 @@ def main():
             probs, overhead[label] = test_probabilities(rows, guess)
             curves[label] = sweep(rows, probs)
     else:
-        rows = load_eval_rows("train")
-        split, curves, overhead = "train", {}, {}
+        split = args.split
+        rows = load_eval_rows(split, allow_val=split == "val")
+        curves, overhead = {}, {}
         for spec in args.classifiers:
             name, _, version = spec.partition(":")
-            curves[f"{name} v{version or 1}"] = sweep(rows, oof_probabilities(name, int(version or 1)))
+            curves[f"{name} v{version or 1}"] = sweep(rows, split_probabilities(name, int(version or 1), split, rows))
  
     baselines = all_baselines(rows)
     print(f"{len(rows)} labeled {split} prompts | always-medium keeps {baselines['always_medium']['quality_retained']:.1%}"
@@ -214,8 +248,8 @@ def main():
     for label, ms in overhead.items():
         print(f"router overhead ({label}): {ms:.1f} ms per request")
  
-    (REPORTS_DIR / f"pareto_{split}.json").write_text(json.dumps(report, indent=2))
-    plot(curves, baselines, first_presets, REPORTS_DIR / f"pareto_{split}.png",
+    (REPORTS_DIR / f"{report_stem(split)}.json").write_text(json.dumps(report, indent=2))
+    plot(curves, baselines, first_presets, REPORTS_DIR / f"{report_stem(split)}.png",
          f"Triage: cost vs quality ({split} split, {len(rows)} prompts)")
     if args.final:
         FINAL_MARKER.write_text(json.dumps({"ran_at": report["created"], "prompts": len(rows)}))

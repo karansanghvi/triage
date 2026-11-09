@@ -8,7 +8,8 @@ baselines.py and pareto.py both score strategies with score(), so every strategy
 is measured exactly the same way.
  
 The test split can only be loaded with allow_test=True. That flag belongs in the FINAL evaluation
-only; tuning (choosing tau presets, picking classifier B or C) must use the train split.
+only. The validation split needs allow_val=True, so tuning on it is always a deliberate choice (Phase 4:
+tau presets and checker routing are tuned on validation, everything else on train or fit).
 """
 
 import json
@@ -39,15 +40,18 @@ class EvalRow:
 SPLITS = ("train", "fit", "val", "test")
 
 
-def load_eval_rows(split: str = "train", allow_test: bool = False) -> list:
+def load_eval_rows(split: str = "train", allow_test: bool = False, allow_val: bool = False) -> list:
     """Labeled prompts in one split, with every tier's pass/fail, cost and latency.
 
-    train = all of train_ids.txt; fit = train minus validation; val = validation (val_ids.txt); test = locked.
+    train = all of train_ids.txt; fit = train minus validation; val = validation (val_ids.txt, needs
+    allow_val=True); test = locked (needs allow_test=True).
     """
     if split not in SPLITS:
         raise ValueError(f"split must be one of {SPLITS}")
     if split == "test" and not allow_test:
         raise PermissionError("the test split is for the final evaluation only; pass allow_test=True there")
+    if split == "val" and not allow_val:
+        raise PermissionError("the validation split is for Phase 4 tuning; pass allow_val=True to use it")
     train_ids, test_ids = load_split()
     if split in ("fit", "val"):
         val_ids = load_validation_split()

@@ -127,7 +127,7 @@ def test_routing_sim_fit_and_val_splits():
     from eval.routing_sim import load_eval_rows
     train, test = load_split()
     val = load_validation_split()
-    fit_rows, val_rows = load_eval_rows("fit"), load_eval_rows("val")
+    fit_rows, val_rows = load_eval_rows("fit"), load_eval_rows("val", allow_val=True)
     fit, v = {r.id for r in fit_rows}, {r.id for r in val_rows}
     assert (len(fit), len(v)) == (481, 117)
     assert v <= val and not fit & val and not (fit | v) & test
