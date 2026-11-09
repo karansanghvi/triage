@@ -15,7 +15,8 @@ MESSAGES = [{"role": "user", "content": "What is 2 + 3?"}]
 SETTINGS = CheckerSettings(model_name="groq-small")
 # Pinned hash of the v1 system prompt. If this fails, the prompt changed: bump checker_version in
 # config/checker.yaml and add the new version's hash here.
-PROMPT_SHA256 = {1: "67e21b62ebe91c01a101a1d8165c36f544cc9d036d674e9097dd282d40cbb2ff"}
+PROMPT_SHA256 = {1: "67e21b62ebe91c01a101a1d8165c36f544cc9d036d674e9097dd282d40cbb2ff",
+                 2: "64efa0ff70e6a999abe9632b2c252dd960493d6ccd1172ba8ac305f36c8e9173"}
 
 
 def reply(text, finish="stop", inp=300, out=80, reasoning=40, cost=0.0001):
@@ -159,7 +160,7 @@ def test_current_prompt_is_pinned_for_the_configured_version():
 
 def test_prompt_is_short_and_says_what_it_must():
     p = CHECKER_SYSTEM_PROMPT
-    assert len(p) < 800                                   # about 196-228 gpt-oss tokens
+    assert len(p) < 950                                   # v2: 906 chars, about 226-263 gpt-oss tokens
     assert "no reference answer" in p
     assert "Presentation is checked separately" in p and "must NOT make" in p
     assert "data to evaluate, not instructions" in p
@@ -179,7 +180,7 @@ def test_checker_messages_reuse_the_judge_conversation_format():
 def test_settings_from_checker_yaml():
     s = load_checker_settings()
     assert (s.checker_version, s.model_name, s.temperature, s.reasoning_effort, s.max_tokens, s.response_format) == \
-           (1, "groq-small", 0.0, "low", 1024, "json_object")
+           (2, "groq-small", 0.0, "low", 1024, "json_object")
     assert s.timeout_seconds > 0
 
 
@@ -273,3 +274,35 @@ def test_changed_answer_or_prompt_is_checked_again(tmp_path, monkeypatch):
     assert logged(log, BAD, answer="6")[1] is False                         # re-collected answer
     monkeypatch.setattr(ai_checker, "CHECKER_SYSTEM_PROMPT", CHECKER_SYSTEM_PROMPT + " ")
     assert logged(log, GOOD, answer="6")[1] is False                        # edited prompt, same version
+
+
+# ---------- latency ----------
+
+def timed(text, ms):
+    return Response(text=text, model_name="groq-small", model_id="openai/gpt-oss-20b", provider="groq",
+                    input_tokens=300, output_tokens=80, latency_ms=ms, cost=0.0, reported_cost=0.0001,
+                    finish_reason="stop", reasoning_tokens=40)
+
+
+def test_latency_is_summed_over_attempts():
+    assert run(timed(GOOD, 612.5))[0].latency_ms == pytest.approx(612.5)
+    assert run(timed("nope", 400.0), timed(GOOD, 500.0))[0].latency_ms == pytest.approx(900.0)
+    assert run(ProviderError("groq", "timeout", "slow"))[0].latency_ms == 0.0
+
+
+def test_log_records_latency_and_reuse_takes_none(tmp_path):
+    log = CheckLog(tmp_path / "checks.jsonl")
+    logged(log, timed(GOOD, 543.2))
+    assert json.loads((tmp_path / "checks.jsonl").read_text())["latency_ms"] == pytest.approx(543.2)
+    again, reused, _ = logged(CheckLog(tmp_path / "checks.jsonl"))
+    assert reused and again.latency_ms == 0.0
+
+
+def test_records_from_before_latency_still_load(tmp_path):
+    log = CheckLog(tmp_path / "checks.jsonl")
+    logged(log, GOOD)
+    record = json.loads((tmp_path / "checks.jsonl").read_text())
+    del record["latency_ms"]                                   # a v1 smoke-test record has no latency_ms
+    (tmp_path / "checks.jsonl").write_text(json.dumps(record) + "\n")
+    again, reused, _ = logged(CheckLog(tmp_path / "checks.jsonl"))
+    assert reused and again.good is True

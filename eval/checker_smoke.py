@@ -1,22 +1,24 @@
 """Phase 4 Step 1 smoke test: a few REAL AI-checker calls, to check the plumbing and measure real cost.
 
 Usage:
-    python -m eval.checker_smoke
+    python -m eval.checker_smoke                     # the 5 smoke items (run once at checker v1)
+    python -m eval.checker_smoke --set format-trap   # 3 format-trap items (re-check after the v2 prompt fix)
 
-Five fit-set answers (picked once with a seeded draw; see ITEMS), checked by groq-small through CheckLog, so a
-rerun reuses the logged results and costs nothing. Hard cap: MAX_CALLS real calls in total, retries included;
+Fit-set answers (picked once with a seeded draw; see SETS), checked by groq-small through CheckLog, so a
+rerun reuses the logged results and costs nothing. Hard cap per set (5 or 3) real calls in total, retries included;
 the run stops before a call that would go over it. Calls are paced with the Phase 2 Pacer against groq-small's
 limits, counting its past usage (collector answers and earlier checks). If the daily budget is used up, it stops
 instead of waiting.
 
 Not an accuracy measurement: five calls say nothing about how often the checker is right.
-Writes data/checks/checks.jsonl (via CheckLog) and reports/checker_smoke.json.
+Writes data/checks/checks.jsonl (via CheckLog) and the set's report in reports/.
 """
+import argparse
 import json
 from datetime import datetime
 
 from app.registry import PROJECT_ROOT, load_registry
-from app.verifier.ai_checker import default_send, load_checker_settings
+from app.verifier.ai_checker import default_send, load_checker_settings, prompt_sha256
 from app.verifier.checker import check_answer
 from eval.build_dataset import FULL_DIR, Pacer, load_collection_config, load_prompts
 from eval.check_log import CHECKS_PATH, CheckLog, logged_check
@@ -24,8 +26,7 @@ from eval.score_answers import load_answers
 from eval.splits import fit_ids, load_split, load_validation_split
 
 OUTCOMES_PATH = PROJECT_ROOT / "data" / "outcomes.jsonl"
-REPORT_PATH = PROJECT_ROOT / "reports" / "checker_smoke.json"
-MAX_CALLS = 5
+REPORTS_DIR = PROJECT_ROOT / "reports"
 
 # Picked with random.Random(42).choice over each category's sorted fit-set candidates (val and test excluded,
 # and the old calibration items now in val dropped):
@@ -38,16 +39,25 @@ MAX_CALLS = 5
 ITEMS = [("a", "gsm8k_0142", "medium"), ("b", "gsm8k_0076", "medium"), ("c", "gsm8k_0014", "low"),
          ("d", "mmlu_0111", "medium"), ("e", "arena_0031", "medium")]
 
+# Format trap re-check (checker v2): smoke case c, plus random.Random(42).sample(the other 11 of the 12 format-trap
+# candidates, sorted, 2). All three are truly right and should be judged good.
+FORMAT_TRAP_ITEMS = [("c", "gsm8k_0014", "low"), ("c2", "gsm8k_0177", "low"), ("c3", "gsm8k_0065", "low")]
+
+SETS = {  # name: (items, max real calls, report file)
+    "smoke": (ITEMS, 5, "checker_smoke.json"),
+    "format-trap": (FORMAT_TRAP_ITEMS, 3, "checker_smoke_format_trap.json"),
+}
+
 
 class CallCapReached(Exception):
     pass
 
 
 class PacedCappedSend:
-    """default_send behind the Pacer and a hard call cap; remembers each call's latency."""
+    """default_send behind the Pacer and a hard call cap."""
 
     def __init__(self, pacer: Pacer, max_calls: int):
-        self.pacer, self.max_calls, self.calls, self.latencies = pacer, max_calls, 0, []
+        self.pacer, self.max_calls, self.calls = pacer, max_calls, 0
 
     def __call__(self, messages, model_name, settings):
         if self.calls >= self.max_calls:
@@ -59,7 +69,6 @@ class PacedCappedSend:
         self.calls += 1
         response = default_send(messages, model_name, settings)
         self.pacer.record(1, response.input_tokens + response.output_tokens)
-        self.latencies.append(response.latency_ms)
         return response
 
 
@@ -90,21 +99,25 @@ def fit_truth(ids: set) -> dict:
     return out
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="A few real AI-checker calls (plumbing and cost check).")
+    parser.add_argument("--set", choices=sorted(SETS), default="smoke")
+    args = parser.parse_args(argv)
+    items, max_calls, report_name = SETS[args.set]
+    report_path = REPORTS_DIR / report_name
     settings = load_checker_settings()
     model = settings.model_name
-    ids = {pid for _, pid, _ in ITEMS}
+    ids = {pid for _, pid, _ in items}
     truth = fit_truth(ids)
     prompts = {p["id"]: p for p in load_prompts()}
     answers = load_answers(FULL_DIR / "answers.jsonl")
     log = CheckLog(CHECKS_PATH)
     pacer = Pacer(load_collection_config(load_registry()).limits[model], usage_history(model, log))
-    send = PacedCappedSend(pacer, MAX_CALLS)
+    send = PacedCappedSend(pacer, max_calls)
 
     rows = []
-    for label, pid, tier in ITEMS:
+    for label, pid, tier in items:
         messages, answer = prompts[pid]["messages"], answers[(pid, tier)]
-        before = len(send.latencies)
         try:
             result, reused = logged_check(log, pid, tier, messages, answer["answer"], model=model, send=send,
                                           settings=settings)
@@ -120,7 +133,7 @@ def main():
             "attempts": result.attempts, "reused_from_log": reused,
             "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
             "reasoning_tokens": result.reasoning_tokens,
-            "latency_ms": round(sum(send.latencies[before:]), 1),
+            "latency_ms": round(result.latency_ms, 1),
             "check_cost": result.reported_cost, "answer_cost": answer.get("price_as_cost"),
             "answer_model": answer["model_name"],
         })
@@ -128,11 +141,12 @@ def main():
         print(f"[{label}] {pid} {tier}: truth {outcome['status']}, checker {verdict}"
               + (" (from log)" if reused else f", {result.attempts} call(s)") + f" | {result.reason}")
 
-    report = {"checker_model": model, "checker_version": settings.checker_version, "max_calls": MAX_CALLS,
+    report = {"set": args.set, "checker_model": model, "checker_version": settings.checker_version,
+              "prompt_sha256": prompt_sha256(), "max_calls": max_calls,
               "real_calls": send.calls, "rows": rows,
-              "note": "plumbing and cost check only; 5 calls say nothing about accuracy"}
-    REPORT_PATH.write_text(json.dumps(report, indent=2) + "\n")
-    print(f"\n{send.calls} real call(s); saved {REPORT_PATH.relative_to(PROJECT_ROOT)}")
+              "note": "plumbing and cost check only; a handful of calls says nothing about accuracy"}
+    report_path.write_text(json.dumps(report, indent=2) + "\n")
+    print(f"\n{send.calls} real call(s); saved {report_path.relative_to(PROJECT_ROOT)}")
 
 
 if __name__ == "__main__":

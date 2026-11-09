@@ -7,8 +7,11 @@
 # (and prompt_sha256, the hash of the system prompt), and the offline CheckLog only reuses results made by the
 # current version. tests/test_ai_checker.py pins the prompt hash for each version, so editing the prompt without
 # bumping the version fails a test.
-# v1 (2026-11-08): first version.
-checker_version: 1
+# v1 (2026-11-08): first version (5 smoke-test verdicts in data/checks/checks.jsonl).
+# v2 (2026-11-08): the "Presentation" paragraph says explicitly that how the final answer is written (a required
+#     "Answer: <number>" line with a $ sign, a period or extra words) must not make an answer bad; v1 failed the
+#     right answer gsm8k_0014 (low) for exactly that. v1 records are kept in the log.
+checker_version: 2
 model: groq-small          # openai/gpt-oss-20b on Groq (a name from models.yaml). Callers may pass another model.
 temperature: 0
 reasoning_effort: low      # gpt-oss counts reasoning toward max_tokens; low keeps it from eating the budget

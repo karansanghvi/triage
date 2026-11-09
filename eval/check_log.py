@@ -45,10 +45,11 @@ def make_check_record(prompt_id: str, tier: str, result: AICheckResult, input_ha
 
 
 def result_from_record(record: dict) -> AICheckResult:
-    """The logged result, with zero usage: reusing it costs nothing."""
+    """The logged result, with zero usage: reusing it costs nothing and takes no provider time.
+    (Records from before latency_ms existed load with its default.)"""
     kept = {k: record[k] for k in RESULT_FIELDS if k in record}
     return AICheckResult(**{**kept, "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": None,
-                            "reported_cost": 0.0, "attempts": 0})
+                            "reported_cost": 0.0, "latency_ms": 0.0, "attempts": 0})
 
 
 class CheckLog:
