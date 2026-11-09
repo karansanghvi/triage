@@ -1,0 +1,19 @@
+# AI answer checker settings (app/verifier/ai_checker.py). Phase 4 Step 1.
+#
+# The checker sees only what a live request has: the conversation and one answer, with NO reference answer.
+# It runs after the free checks (format checker, then agreement); see app/verifier/pipeline.py.
+#
+# Bump checker_version whenever the checker prompt, reply format or parsing changes. Every result records it
+# (and prompt_sha256, the hash of the system prompt), and the offline CheckLog only reuses results made by the
+# current version. tests/test_ai_checker.py pins the prompt hash for each version, so editing the prompt without
+# bumping the version fails a test.
+# v1 (2026-11-08): first version.
+checker_version: 1
+model: groq-small          # openai/gpt-oss-20b on Groq (a name from models.yaml). Callers may pass another model.
+temperature: 0
+reasoning_effort: low      # gpt-oss counts reasoning toward max_tokens; low keeps it from eating the budget
+max_tokens: 1024           # reasoning + the short JSON reply (Phase 2 judge replies: median 104, max 734 tokens)
+response_format: json_object
+# Provisional: there is no checker latency data yet. Set it from measured latency (as in Step 0) after the
+# smoke test. For comparison, groq-small answers in Phase 2 had p99 4.6 s; checker inputs are longer.
+timeout_seconds: 30
