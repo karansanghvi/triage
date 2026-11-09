@@ -1,4 +1,4 @@
-"""Confusion counts and rates for the AI checker (Phase 4 Step 2). To be written by hand."""
+"""Confusion counts and rates for the AI checker (Phase 4 Step 2)."""
 
 
 def checker_metrics(rows) -> dict:
@@ -24,4 +24,30 @@ def checker_metrics(rows) -> dict:
         false_alarm  fp / (fp + tn)   of truly good answers, the share the checker flagged
     A rate whose denominator is 0 is None (never 0.0, never an exception).
     """
-    raise NotImplementedError("checker_metrics is written by hand; see the docstring")
+    tp = fp = tn = fn = 0
+    
+    for row in rows:
+        truly_bad = row["truth_bad"]
+        flagged = row["checker_bad"]   # checker said "not good"
+        if flagged and truly_bad:
+            tp += 1     # caught a bad answer 
+        elif flagged and not truly_bad:
+            fp += 1     # false alarm on a good answer 
+        elif not flagged and truly_bad:
+            fn += 1     # missed a bad answer 
+        else:
+            tn += 1     # correctly passed a good answer
+    
+    def rate(numerator, denominator):
+        return numerator / denominator if denominator else None
+    
+    return {
+        "n": tp + fp + tn + fn,
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+        "catch_rate": rate(tp, tp + fn),     # caught / all truly bad
+        "trust_rate": rate(tp, tp + fp),     # caught / all flagged
+        "false_alarm": rate(fp, fp + tn),    # false alarms / all truly good
+    }
