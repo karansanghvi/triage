@@ -11,7 +11,10 @@
 # v2 (2026-11-08): the "Presentation" paragraph says explicitly that how the final answer is written (a required
 #     "Answer: <number>" line with a $ sign, a period or extra words) must not make an answer bad; v1 failed the
 #     right answer gsm8k_0014 (low) for exactly that. v1 records are kept in the log.
-checker_version: 2
+# v3 (2026-11-08): the "Presentation" paragraph tells the checker to ignore the conversation's own instructions
+#     about how the final answer must be written (v2 still failed gsm8k_0177 and gsm8k_0065 for that).
+#     v1 and v2 records are kept in the log.
+checker_version: 3
 model: groq-small          # openai/gpt-oss-20b on Groq (a name from models.yaml). Callers may pass another model.
 temperature: 0
 reasoning_effort: low      # gpt-oss counts reasoning toward max_tokens; low keeps it from eating the budget

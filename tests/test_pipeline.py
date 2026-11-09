@@ -124,7 +124,7 @@ def test_default_settings_come_from_checker_yaml(monkeypatch):
     monkeypatch.setattr(ai_checker, "default_send", lambda m, name, s: seen.append((name, s.checker_version)) or
                         FakeSend()(m, name, s))
     assert verify(ESSAY, "Rain.").decided_by == "ai_checker"
-    assert seen == [("groq-small", 2)]
+    assert seen == [("groq-small", 3)]
 
 
 # ---------- the Phase 2 judge is unchanged (its v3 verdicts are ground truth) ----------

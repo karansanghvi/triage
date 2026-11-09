@@ -32,3 +32,20 @@ Finding: task type barely affects routing, so the embedding-based task classifie
 - **Streaming timeouts (Step 5).** Streaming needs a time-to-first-token timeout, not a total-time timeout: a long answer that is streaming steadily should not be cut off, but a stream that never starts should fail over quickly.
 - **Split option for simulations (before Step 3).** `eval/pareto.py` and `eval/cascade.py` still score `load_eval_rows("train")`, which includes the validation prompts. `routing_sim.load_eval_rows` now accepts `fit` and `val`; add the option to those two scripts before tuning on validation.
 - **Tau presets (Step 3).** The cheap / balanced / high presets in `config/routing.yaml` were picked for classifier v1 on out-of-fold probabilities over all 598 train prompts. Re-pick them on the validation set using v2.
+
+## Step 1: AI answer checker (smoke tests)
+
+`app/verifier/ai_checker.py` asks a model (groq-small, gpt-oss-20b) whether an answer is good, with no reference answer; `app/verifier/pipeline.py` runs it last, after the free format checker and the agreement check. Results are logged in `data/checks/checks.jsonl` (v1, v2 and v3 records all kept). Twelve real calls were made in total, all on fit-set prompts; they check plumbing and cost only, not accuracy.
+
+| run | calls | result | report |
+|---|---|---|---|
+| v1 smoke (5 categories) | 5 | the right low-tier answer gsm8k_0014 was failed for formatting (the format trap) | `reports/checker_smoke.json` |
+| v2 format traps | 3 | 1 of 3 right answers judged good; gsm8k_0177 and gsm8k_0065 still failed for formatting | `reports/checker_smoke_format_trap.json` |
+| v3 format traps + wrong answer | 4 | 2 of 3 format traps judged good (gsm8k_0177 still failed for formatting); the wrong answer gsm8k_0076 was still judged not good | `reports/checker_smoke_v3.json` |
+
+No call was truncated, unparseable or retried. Checks took about 0.4–0.6 s and used at most 220 output tokens against the 1,024 allowed.
+
+### NOTES (for Steps 2 and 3)
+
+- **Don't run the AI checker on low-tier answers.** In the smoke tests, checking a low-tier answer cost 2–6× the answer itself (a check is about $0.00005–0.0001 at Groq's paid prices; a groq-allam answer about $0.00001–0.00003). Step 3 should not run the AI checker on low-tier answers. Questions with a final answer (an "Answer:" line or JSON) should use agreement first.
+- **Decision rule: stop prompt tuning.** If v3 still fails format traps, stop tuning the prompt and measure the wrong-fail rate (right answers judged not good) on the fit set in Step 2 instead. v3 still fails one of the three (gsm8k_0177), so the checker stays at v3 and Step 2 measures how often this happens.

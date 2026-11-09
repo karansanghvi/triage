@@ -3,9 +3,10 @@
 Usage:
     python -m eval.checker_smoke                     # the 5 smoke items (run once at checker v1)
     python -m eval.checker_smoke --set format-trap   # 3 format-trap items (re-check after the v2 prompt fix)
+    python -m eval.checker_smoke --set v3-recheck    # the 3 format traps + smoke case b (after the v3 fix)
 
 Fit-set answers (picked once with a seeded draw; see SETS), checked by groq-small through CheckLog, so a
-rerun reuses the logged results and costs nothing. Hard cap per set (5 or 3) real calls in total, retries included;
+rerun reuses the logged results and costs nothing. Hard cap per set (5, 3 or 4) real calls in total, retries included;
 the run stops before a call that would go over it. Calls are paced with the Phase 2 Pacer against groq-small's
 limits, counting its past usage (collector answers and earlier checks). If the daily budget is used up, it stops
 instead of waiting.
@@ -46,6 +47,9 @@ FORMAT_TRAP_ITEMS = [("c", "gsm8k_0014", "low"), ("c2", "gsm8k_0177", "low"), ("
 SETS = {  # name: (items, max real calls, report file)
     "smoke": (ITEMS, 5, "checker_smoke.json"),
     "format-trap": (FORMAT_TRAP_ITEMS, 3, "checker_smoke_format_trap.json"),
+    # v3 re-check: the format traps should be good, and the wrong answer gsm8k_0076 (smoke case b) must still be
+    # not good, so the fix hasn't simply made the checker lenient.
+    "v3-recheck": (FORMAT_TRAP_ITEMS + [("b", "gsm8k_0076", "medium")], 4, "checker_smoke_v3.json"),
 }
 
 
