@@ -8,6 +8,8 @@ The helpers below (GenerationSettings, RouteDecision, RoutedStream, aiter_in_thr
 """
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable, Optional
+from functools import partial
+from app.router.quality import route
 
 import anyio
 
@@ -136,4 +138,56 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
       .pieces    async iterator of text pieces (stream=False: the whole text as one piece)
       .response  None until .pieces is exhausted, then the full Response
     """
-    raise NotImplementedError("route_and_stream: write this one yourself")
+    is_auto = model == "auto"
+    
+    # 0. Unknown model: fail before calling anything 
+    if not is_auto and model not in deps.registry:
+        raise UnknownModel(model)
+    
+    kwargs = settings.as_kwargs()   # only what the caller set; the rest come from routing.yaml 
+    
+    if is_auto:
+        # 1. How likely are the cheap and medium models to get this right?
+        prediction = await anyio.to_thread.run_sync(
+            deps.predictor.predict_messages, messages, task_type)
+        
+        # 2. Pick the cheapest tier the quality dial (tau) trusts 
+        routing = route(prediction.p_low, prediction.p_medium, tau)
+        tier, reason = routing.tier, routing.reason
+        
+        # 3. Start that tier's model; the client falls back along the chain 
+        # and only returns once the first piece of the answer exists 
+        result = await anyio.to_thread.run_sync(
+            partial(deps.client.send, messages, tier, stream=stream, **kwargs))
+        
+        used_tau = tau
+        p_low, p_medium = prediction.p_low, prediction.p_medium
+        used_task, guessed = prediction.task_type, prediction.task_type_guessed 
+    else:
+        # Pass-through: exactly the model the caller named, no prediction, no fallback 
+        result = await anyio.to_thread.run_sync(
+            partial(deps.client.send_model, messages, model, stream=stream, **kwargs))
+        
+        tier, reason = deps.registry[model].tier, f"requested model {model}"
+        used_tau = p_low = p_medium = used_task = guessed = None
+    
+    # 4. The route is now final: record what actually happened 
+    decision = RouteDecision(
+        request_id=request_id,
+        requested_model=model,
+        tier=tier,
+        primary_model=result.primary,
+        model=result.model.name,
+        reason=reason,
+        tau=used_tau,
+        p_low=p_low,
+        p_medium=p_medium,
+        task_type=used_task,
+        task_type_guessed=guessed,
+        attempts=tuple(result.attempts),
+    )
+    
+    # 5. Hand back the live answer (stream) or the finished one (non-stream)
+    if stream:
+        return RoutedStream.from_stream(decision, result.response)
+    return RoutedStream.from_response(decision, result.response)
