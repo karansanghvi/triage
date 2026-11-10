@@ -5,3 +5,5 @@ pyyaml
 pytest
 google-genai
 datasets==5.1.0
+fastapi
+uvicorn

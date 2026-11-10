@@ -8,7 +8,8 @@ baselines.py and pareto.py both score strategies with score(), so every strategy
 is measured exactly the same way.
  
 The test split can only be loaded with allow_test=True. That flag belongs in the FINAL evaluation
-only; tuning (choosing tau presets, picking classifier B or C) must use the train split.
+only. The validation split needs allow_val=True, so tuning on it is always a deliberate choice (Phase 4:
+tau presets and checker routing are tuned on validation, everything else on train or fit).
 """
 
 import json
@@ -19,7 +20,7 @@ import numpy as np
 from app.registry import PROJECT_ROOT
 from eval.build_dataset import FULL_DIR
 from eval.score_answers import load_answers
-from eval.splits import load_split
+from eval.splits import load_split, load_validation_split
 
 OUTCOMES_PATH = PROJECT_ROOT / "data" / "outcomes.jsonl"
 TIERS = ("low", "medium", "high")
@@ -36,14 +37,27 @@ class EvalRow:
     latency_ms: dict = field(default_factory=dict)  # tier -> milliseconds (None if unknown)
 
 
-def load_eval_rows(split: str = "train", allow_test: bool = False) -> list:
-    """Labeled prompts in one split, with every tier's pass/fail, cost and latency"""
-    if split not in ("train", "test"):
-        raise ValueError("split must be 'train' or 'test'")
+SPLITS = ("train", "fit", "val", "test")
+
+
+def load_eval_rows(split: str = "train", allow_test: bool = False, allow_val: bool = False) -> list:
+    """Labeled prompts in one split, with every tier's pass/fail, cost and latency.
+
+    train = all of train_ids.txt; fit = train minus validation; val = validation (val_ids.txt, needs
+    allow_val=True); test = locked (needs allow_test=True).
+    """
+    if split not in SPLITS:
+        raise ValueError(f"split must be one of {SPLITS}")
     if split == "test" and not allow_test:
         raise PermissionError("the test split is for the final evaluation only; pass allow_test=True there")
+    if split == "val" and not allow_val:
+        raise PermissionError("the validation split is for Phase 4 tuning; pass allow_val=True to use it")
     train_ids, test_ids = load_split()
-    wanted = train_ids if split == "train" else test_ids
+    if split in ("fit", "val"):
+        val_ids = load_validation_split()
+        wanted = train_ids - val_ids if split == "fit" else val_ids
+    else:
+        wanted = train_ids if split == "train" else test_ids
     answers = load_answers(FULL_DIR / "answers.jsonl")
     
     rows, missing = [], 0

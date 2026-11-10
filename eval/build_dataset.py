@@ -311,6 +311,7 @@ class Collector:
             retry=config.retry,
             breaker=BreakerSettings(failure_threshold=3, cooldown_seconds=60),
             timeout_seconds=config.timeout_seconds,
+            model_params=config.model_params,     # per model (e.g. reasoning_effort for gpt-oss only)
         )
         self.client = ReliableClient(registry, routing, send_fn=self.sender)
         self.pacers = {name: Pacer(config.limits[name], log.usage_history(name)) for name in config.tiers.values()}
@@ -407,8 +408,9 @@ class Collector:
         }
         stop = False
         try:
+            # params (e.g. reasoning_effort) reach the model through RoutingConfig.model_params
             result = self.client.send(prompt["messages"], tier, temperature=self.config.temperature,
-                                      max_tokens=self.config.max_tokens, **params)
+                                      max_tokens=self.config.max_tokens)
         except AllModelsFailed as failure:
             last = next((a for a in reversed(failure.attempts) if a.outcome != "success"), None)
             kind = last.error_kind if last else "unknown"

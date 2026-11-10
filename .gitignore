@@ -39,6 +39,7 @@ data/outcomes.jsonl
 
 # Router inputs (rebuilt by app.router.features / app.router.embeddings)
 data/features.npz
+data/features_guessed.npz
 data/embeddings.npz
 
 # Judge calibration output (judge verdicts on exact-match answers; not committed)

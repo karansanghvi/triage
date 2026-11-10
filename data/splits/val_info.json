@@ -1,0 +1,71 @@
+{
+  "seed": 42,
+  "val_fraction": 0.2,
+  "stratified_by": [
+    "source",
+    "task_type"
+  ],
+  "pool": "labeled train prompts (outcomes.jsonl label_status == 'labeled' and in train_ids.txt)",
+  "pool_size": 598,
+  "fit": 481,
+  "val": 117,
+  "counts": {
+    "arena/classification": {
+      "fit": 1,
+      "val": 0
+    },
+    "arena/coding": {
+      "fit": 25,
+      "val": 6
+    },
+    "arena/creative": {
+      "fit": 14,
+      "val": 4
+    },
+    "arena/open_ended": {
+      "fit": 22,
+      "val": 6
+    },
+    "arena/qa": {
+      "fit": 49,
+      "val": 12
+    },
+    "arena/reasoning": {
+      "fit": 6,
+      "val": 1
+    },
+    "gsm8k/reasoning": {
+      "fit": 128,
+      "val": 32
+    },
+    "mmlu/qa": {
+      "fit": 128,
+      "val": 32
+    },
+    "own/classification": {
+      "fit": 18,
+      "val": 4
+    },
+    "own/creative": {
+      "fit": 18,
+      "val": 4
+    },
+    "own/extraction": {
+      "fit": 18,
+      "val": 4
+    },
+    "own/qa": {
+      "fit": 18,
+      "val": 4
+    },
+    "own/reasoning": {
+      "fit": 18,
+      "val": 4
+    },
+    "own/summarization": {
+      "fit": 18,
+      "val": 4
+    }
+  },
+  "val_ids_sha256": "e80e3861f802dbce72bb1e7ae243de6e2b5727c84eec75ea26147771bc80fb1d"
+}

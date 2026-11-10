@@ -15,6 +15,9 @@ Usage:
     python -m eval.cascade                       # checker without constraint lists (realistic)
     python -m eval.cascade --constraints         # also check the hand-written constraint lists
     python -m eval.cascade --classifier classifier_c_logreg_cv:1
+    python -m eval.cascade --split val --classifier classifier_c_logreg_cv:2   # Phase 4 (default: train)
+
+Reports: reports/cascade_<split>[_constraints].json/.png (train keeps its old names).
 """
 import argparse
 import json
@@ -25,7 +28,7 @@ from app.registry import PROJECT_ROOT
 from app.verifier.checker import check_answer
 from eval.baselines import all_baselines
 from eval.build_dataset import FULL_DIR, load_prompts
-from eval.pareto import TAUS, oof_probabilities, sweep
+from eval.pareto import TAUS, split_probabilities, sweep
 from eval.routing_sim import TIERS, load_eval_rows
 from eval.score_answers import load_answers
 
@@ -133,7 +136,7 @@ def print_table(results: dict) -> None:
               f"{r['cost_saved']:>7.0%}{r['latency_p50_ms'] or 0:>8.0f}{r['latency_p95_ms'] or 0:>8.0f}{esc:>8}   {mix}")
 
 
-def plot(baselines: dict, fixed: dict, curves: dict, path) -> None:
+def plot(baselines: dict, fixed: dict, curves: dict, path, split: str = "train") -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -153,7 +156,7 @@ def plot(baselines: dict, fixed: dict, curves: dict, path) -> None:
                    label=name.replace("_", " ").replace("oracle", "perfect router (oracle)"))
     ax.set_xlabel("cost per 1,000 requests (USD, Groq paid prices)")
     ax.set_ylabel("quality retained (% of always-strong)")
-    ax.set_title("Cascade vs predict-only routing (train split)")
+    ax.set_title(f"Cascade vs predict-only routing ({split} split)")
     ax.grid(alpha=0.3)
     ax.legend(fontsize=7, loc="lower right")
     fig.tight_layout()
@@ -165,14 +168,17 @@ def main():
     parser = argparse.ArgumentParser(description="Simulate cascade routing with the Phase 2 answers.")
     parser.add_argument("--classifier", default="classifier_c_logreg_cv:1")
     parser.add_argument("--constraints", action="store_true", help="also check hand-written constraint lists")
+    parser.add_argument("--split", default="train", choices=["train", "fit", "val"],
+                        help="tuning split (default train, as before; val runs the real predictor)")
     args = parser.parse_args()
     REPORTS_DIR.mkdir(exist_ok=True)
 
-    rows = load_eval_rows("train")
+    split = args.split
+    rows = load_eval_rows(split, allow_val=split == "val")
     checks = check_all(rows, args.constraints)
     report = checker_report(rows, checks)
 
-    print(f"{len(rows)} labeled train prompts | checker {'WITH' if args.constraints else 'without'} constraint lists\n")
+    print(f"{len(rows)} labeled {split} prompts | checker {'WITH' if args.constraints else 'without'} constraint lists\n")
     print("How good is the checker?")
     for tier in ("low", "medium"):
         c = report[tier]
@@ -182,7 +188,7 @@ def main():
     print("  most common reasons: " + ", ".join(f"{k} ({n})" for k, n in list(report["reasons"].items())[:6]))
 
     name, _, version = args.classifier.partition(":")
-    probs = oof_probabilities(name, int(version or 1))
+    probs = split_probabilities(name, int(version or 1), split, rows)
     baselines = all_baselines(rows)
     fixed = fixed_cascades(rows, checks)
     predict_only = sweep(rows, probs, random_repeats=20)
@@ -206,10 +212,10 @@ def main():
             print(f"{label}: never reaches 95% retained")
 
     suffix = "_constraints" if args.constraints else ""
-    (REPORTS_DIR / f"cascade_train{suffix}.json").write_text(json.dumps(
+    (REPORTS_DIR / f"cascade_{split}{suffix}.json").write_text(json.dumps(
         {"checker": report, "fixed": fixed, "hybrid": hybrid}, indent=2))
     plot(baselines, fixed, {f"predict-only ({name})": predict_only, "classifier start + cascade": hybrid},
-         REPORTS_DIR / f"cascade_train{suffix}.png")
+         REPORTS_DIR / f"cascade_{split}{suffix}.png", split)
 
 
 if __name__ == "__main__":

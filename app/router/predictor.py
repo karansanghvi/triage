@@ -61,9 +61,14 @@ class Predictor:
             if not stem.with_suffix(".joblib").exists() or not stem.with_suffix(".json").exists():
                 raise PredictorError(f"{stem.name}.joblib/.json not found in {models_dir}; "
                                      "train it with eval/train_classifier.py or fix routing.yaml")
-            self.models[tier] = joblib.load(stem.with_suffix(".joblib"))
             self.meta[tier] = json.loads(stem.with_suffix(".json").read_text(encoding="utf-8"))
-        
+            # The file name picks the model; the version saved INSIDE the JSON must agree with it too,
+            # so a renamed or copied file can't quietly serve a different model than routing.yaml names
+            if self.meta[tier].get("version") != version:
+                raise PredictorError(f"{stem.name}.json records version {self.meta[tier].get('version')!r}, "
+                                     f"but version {version!r} was requested (routing.yaml classifier.version)")
+            self.models[tier] = joblib.load(stem.with_suffix(".joblib"))
+
         feature_sets = {m["feature_set"] for m in self.meta.values()}
         if len(feature_sets) != 1:
             raise PredictorError(f"the low and medium models use different feature sets: {feature_sets}")

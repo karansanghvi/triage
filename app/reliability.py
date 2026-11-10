@@ -1,8 +1,9 @@
 """Reliability layer: timeouts, retries, fallback chains, and a circuit breaker."""
 import logging
 import random
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -39,12 +40,34 @@ class BreakerSettings:
     cooldown_seconds: float = 60.0
 
 
+# Generation settings that apply to every model, and request parameters that are set per MODEL
+# (never per call or per tier), so a fallback model never receives a parameter meant for another model.
+GENERATION_KEYS = {"temperature", "max_tokens"}
+MODEL_PARAM_KEYS = {"reasoning_effort"}
+# Providers whose adapter speaks OpenAI's format (the only ones that accept reasoning_effort)
+OPENAI_FORMAT_PROVIDERS = {"openai", "groq", "ollama", "openrouter"}
+
+
 @dataclass(frozen=True)
 class RoutingConfig:
     chains: dict                     # tier -> list of model names, primary first
     retry: RetryPolicy
     breaker: BreakerSettings
     timeout_seconds: float = 30.0
+    generation: dict = field(default_factory=dict)     # e.g. {"temperature": 0, "max_tokens": 4000}
+    model_params: dict = field(default_factory=dict)   # model name -> e.g. {"reasoning_effort": "low"}
+    model_timeouts: dict = field(default_factory=dict) # model name -> seconds, overrides timeout_seconds
+    # Streaming only: how long to wait for the FIRST piece before giving up on a model (then fall back).
+    # None = no first-token limit (the per-call timeout still applies to every read). There is never a
+    # total-time limit on a stream: a long answer that is arriving steadily is not cut off.
+    first_token_timeout_seconds: Optional[float] = None
+    model_first_token_timeouts: dict = field(default_factory=dict)
+
+    def timeout_for(self, model_name: str) -> float:
+        return self.model_timeouts.get(model_name, self.timeout_seconds)
+
+    def first_token_timeout_for(self, model_name: str) -> Optional[float]:
+        return self.model_first_token_timeouts.get(model_name, self.first_token_timeout_seconds)
 
 
 def _positive_number(value, field: str, *, whole: bool = False):
@@ -63,7 +86,13 @@ def load_routing(registry: dict, path=DEFAULT_ROUTING_PATH) -> RoutingConfig:
 
     with path.open() as file:
         data = yaml.safe_load(file) or {}
+    return routing_from_dict(data, registry)
 
+
+def routing_from_dict(data: dict, registry: dict) -> RoutingConfig:
+    """Validate an already-parsed routing.yaml (the API's live config update uses this too)."""
+    if not isinstance(data, dict):
+        raise ValueError("routing.yaml must be a mapping")
     raw_chains = data.get("fallback_chains")
     if not isinstance(raw_chains, dict):
         raise ValueError("routing.yaml needs a 'fallback_chains' section")
@@ -101,7 +130,81 @@ def load_routing(registry: dict, path=DEFAULT_ROUTING_PATH) -> RoutingConfig:
     )
 
     timeout = float(_positive_number(data.get("timeout_seconds", 30), "timeout_seconds"))
-    return RoutingConfig(chains=chains, retry=retry, breaker=breaker, timeout_seconds=timeout)
+    first_token, model_first_token = _load_streaming(data.get("streaming"), registry)
+    return RoutingConfig(chains=chains, retry=retry, breaker=breaker, timeout_seconds=timeout,
+                         generation=_load_generation(data.get("generation")),
+                         model_params=_load_model_params(data.get("model_params"), registry),
+                         model_timeouts=_load_model_timeouts(data.get("model_timeouts"), registry),
+                         first_token_timeout_seconds=first_token, model_first_token_timeouts=model_first_token)
+
+
+def _load_streaming(raw, registry: dict) -> tuple:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError("routing.yaml: 'streaming' must be a mapping")
+    unknown = set(raw) - {"first_token_timeout_seconds", "model_first_token_timeouts"}
+    if unknown:
+        raise ValueError(f"routing.yaml: unsupported streaming setting(s): {', '.join(sorted(unknown))}")
+    default = raw.get("first_token_timeout_seconds")
+    default = None if default is None else float(_positive_number(default, "streaming.first_token_timeout_seconds"))
+    per_model = raw.get("model_first_token_timeouts") or {}
+    if not isinstance(per_model, dict):
+        raise ValueError("routing.yaml: 'streaming.model_first_token_timeouts' must be a mapping")
+    out = {}
+    for name, seconds in per_model.items():
+        if name not in registry:
+            raise ValueError(f"routing.yaml: streaming.model_first_token_timeouts lists unknown model '{name}'")
+        out[name] = float(_positive_number(seconds, f"streaming.model_first_token_timeouts.{name}"))
+    return default, out
+
+
+def _load_model_timeouts(raw, registry: dict) -> dict:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError("routing.yaml: 'model_timeouts' must be a mapping of model name -> seconds")
+    out = {}
+    for name, seconds in raw.items():
+        if name not in registry:
+            raise ValueError(f"routing.yaml: model_timeouts lists unknown model '{name}'")
+        out[name] = float(_positive_number(seconds, f"model_timeouts.{name}"))
+    return out
+
+
+def _load_generation(raw) -> dict:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError("routing.yaml: 'generation' must be a mapping")
+    unknown = set(raw) - GENERATION_KEYS
+    if unknown:
+        raise ValueError(f"routing.yaml: unsupported generation setting(s): {', '.join(sorted(unknown))}")
+    out = {}
+    if "temperature" in raw:
+        t = raw["temperature"]
+        if isinstance(t, bool) or not isinstance(t, (int, float)) or t < 0:
+            raise ValueError(f"routing.yaml: 'generation.temperature' must be a number >= 0, got {t!r}")
+        out["temperature"] = float(t)
+    if "max_tokens" in raw:
+        out["max_tokens"] = _positive_number(raw["max_tokens"], "generation.max_tokens", whole=True)
+    return out
+
+
+def _load_model_params(raw, registry: dict) -> dict:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError("routing.yaml: 'model_params' must be a mapping of model name -> parameters")
+    out = {}
+    for name, params in raw.items():
+        if name not in registry:
+            raise ValueError(f"routing.yaml: model_params lists unknown model '{name}'")
+        if not isinstance(params, dict):
+            raise ValueError(f"routing.yaml: model_params for '{name}' must be a mapping")
+        unknown = set(params) - MODEL_PARAM_KEYS
+        if unknown:
+            raise ValueError(f"routing.yaml: unsupported model_params for '{name}': {', '.join(sorted(unknown))}")
+        if "reasoning_effort" in params and registry[name].provider not in OPENAI_FORMAT_PROVIDERS:
+            raise ValueError(f"routing.yaml: '{name}' ({registry[name].provider}) does not accept reasoning_effort")
+        out[name] = dict(params)
+    return out
 
 
 # ---------- Backoff with jitter ----------
@@ -139,22 +242,29 @@ class CircuitBreaker:
         self._clock = clock                  # monotonic: only moves forward, safe for durations
         self._failures: dict[str, int] = {}
         self._open_until: dict[str, float] = {}
+        self._lock = threading.Lock()        # the API shares one breaker across worker threads
 
     def is_open(self, key: str) -> bool:
-        return self._clock() < self._open_until.get(key, 0.0)
+        with self._lock:
+            return self._clock() < self._open_until.get(key, 0.0)
 
     def seconds_left(self, key: str) -> float:
-        return max(0.0, self._open_until.get(key, 0.0) - self._clock())
+        with self._lock:
+            return max(0.0, self._open_until.get(key, 0.0) - self._clock())
 
     def record_success(self, key: str) -> None:
-        self._failures[key] = 0
-        self._open_until.pop(key, None)
+        with self._lock:
+            self._failures[key] = 0
+            self._open_until.pop(key, None)
 
     def record_failure(self, key: str) -> None:
-        count = self._failures.get(key, 0) + 1
-        self._failures[key] = count
-        if count >= self._settings.failure_threshold:
-            self._open_until[key] = self._clock() + self._settings.cooldown_seconds
+        with self._lock:
+            count = self._failures.get(key, 0) + 1
+            self._failures[key] = count
+            tripped = count >= self._settings.failure_threshold
+            if tripped:
+                self._open_until[key] = self._clock() + self._settings.cooldown_seconds
+        if tripped:
             logger.warning(
                 "circuit open: skipping %s for %.0fs after %d failures in a row",
                 key, self._settings.cooldown_seconds, count,
@@ -263,8 +373,28 @@ class ReliableClient:
         """
         if tier not in self.routing.chains:
             raise ValueError(f"unknown tier '{tier}'. Use one of: low, medium, high")
+        per_model = MODEL_PARAM_KEYS & set(settings)
+        if per_model:
+            # A per-call value would also reach the fallback models (e.g. gemini-flash), which reject it
+            raise ValueError(f"{', '.join(sorted(per_model))} is set per model: put it under model_params "
+                             "in the routing config, not in send()")
 
         chain = [self.registry[name] for name in self.routing.chains[tier]]
+        return self._send_chain(chain, tier, messages, stream, settings)
+
+    def send_model(self, messages: list, model_name: str, stream: bool = False, **settings) -> ReliableResult:
+        """Send to ONE named model (a pass-through request): its timeout, retries and circuit breaker apply,
+        but there is no fallback to another model. Raises AllModelsFailed if it fails."""
+        if model_name not in self.registry:
+            raise ValueError(f"unknown model '{model_name}'")
+        per_model = MODEL_PARAM_KEYS & set(settings)
+        if per_model:
+            raise ValueError(f"{', '.join(sorted(per_model))} is set per model: put it under model_params "
+                             "in the routing config, not in send_model()")
+        model = self.registry[model_name]
+        return self._send_chain([model], model.tier, messages, stream, settings)
+
+    def _send_chain(self, chain: list, tier: str, messages: list, stream: bool, settings: dict) -> ReliableResult:
         attempts: list[Attempt] = []
 
         for index, model in enumerate(chain):
@@ -336,8 +466,10 @@ class ReliableClient:
         return None
 
     def _call(self, model, messages, stream, settings):
-        # Every call gets a timeout, unless the caller set their own
-        settings = {"timeout": self.routing.timeout_seconds, **settings}
+        # Every call gets the configured timeout (per model if set) and generation settings, unless the caller
+        # set their own, plus the parameters configured for THIS model only (so a fallback never inherits them)
+        settings = {"timeout": self.routing.timeout_for(model.name), **self.routing.generation, **settings,
+                    **self.routing.model_params.get(model.name, {})}
 
         if not stream:
             return self._send(messages, model, **settings)
@@ -346,7 +478,7 @@ class ReliableClient:
         iterator = iter(stream_response)
         # Errors before the first piece are raised here, so we can still fall back.
         # Errors after text has started arriving can't be undone, so they go to the caller.
-        first_piece = next(iterator, None)
+        first_piece = _first_piece(iterator, self.routing.first_token_timeout_for(model.name), model)
         return _PrimedStream(stream_response, iterator, first_piece)
 
     def _record_fallback(self, tier, from_model, to_model, reason):
@@ -355,6 +487,30 @@ class ReliableClient:
             logger.warning("fallback (%s tier): %s -> %s because of %s", tier, from_model, to_model, reason)
         else:
             logger.error("fallback (%s tier): %s failed (%s) and no models are left", tier, from_model, reason)
+
+
+def _first_piece(iterator, limit: Optional[float], model: ModelConfig):
+    """next(iterator, None), but give up after `limit` seconds with a timeout ProviderError (so the model
+    falls back). The waiting is done in a helper thread; a thread that times out can't be killed, so it is
+    abandoned and ends when the provider's own read timeout fires."""
+    if limit is None:
+        return next(iterator, None)
+    box, done = {}, threading.Event()
+
+    def pull():
+        try:
+            box["piece"] = next(iterator, None)
+        except BaseException as error:          # handed to the caller below
+            box["error"] = error
+        finally:
+            done.set()
+
+    threading.Thread(target=pull, name=f"first-token-{model.name}", daemon=True).start()
+    if not done.wait(limit):
+        raise ProviderError(model.provider, "timeout", f"no first token within {limit:g}s")
+    if "error" in box:
+        raise box["error"]
+    return box["piece"]
 
 
 def create_client(**kwargs) -> ReliableClient:

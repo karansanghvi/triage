@@ -1,0 +1,288 @@
+{
+  "split": "val (data/splits/val_ids.txt)",
+  "n_val": 117,
+  "tau": 0.86,
+  "tau_preset": "balanced",
+  "note": "tau presets were chosen for classifier v1; they will be re-picked on validation in Step 3",
+  "created": "2026-11-08T04:06:45.781592+00:00",
+  "baselines": {
+    "always_low": {
+      "n": 117,
+      "quality": 0.4188034188034188,
+      "quality_retained": 0.4336283185840708,
+      "cost_per_1k": 0.031244572649572647,
+      "cost_saved": 0.9079066070616569,
+      "latency_p50_ms": 460.6,
+      "latency_p95_ms": 940.0599999999986,
+      "mix": {
+        "low": 1.0,
+        "medium": 0.0,
+        "high": 0.0
+      }
+    },
+    "always_medium": {
+      "n": 117,
+      "quality": 0.905982905982906,
+      "quality_retained": 0.9380530973451328,
+      "cost_per_1k": 0.11988141025641026,
+      "cost_saved": 0.646649485510012,
+      "latency_p50_ms": 454.8,
+      "latency_p95_ms": 1841.039999999999,
+      "mix": {
+        "low": 0.0,
+        "medium": 1.0,
+        "high": 0.0
+      }
+    },
+    "always_high": {
+      "n": 117,
+      "quality": 0.9658119658119658,
+      "quality_retained": 1.0,
+      "cost_per_1k": 0.33927051282051285,
+      "cost_saved": -2.220446049250313e-16,
+      "latency_p50_ms": 577.7,
+      "latency_p95_ms": 5354.999999999998,
+      "mix": {
+        "low": 0.0,
+        "medium": 0.0,
+        "high": 1.0
+      }
+    },
+    "oracle": {
+      "n": 117,
+      "quality": 0.9914529914529915,
+      "quality_retained": 1.0265486725663717,
+      "cost_per_1k": 0.14592290598290594,
+      "cost_saved": 0.5698921643092961,
+      "latency_p50_ms": 468.7,
+      "latency_p95_ms": 2292.419999999989,
+      "mix": {
+        "low": 0.4188034188034188,
+        "medium": 0.49572649572649574,
+        "high": 0.08547008547008547
+      }
+    }
+  },
+  "candidates": {
+    "classifier_c_logreg_cv:2": {
+      "guessed": {
+        "routing": {
+          "n": 117,
+          "quality": 0.9658119658119658,
+          "quality_retained": 1.0,
+          "cost_per_1k": 0.24925256410256413,
+          "cost_saved": 0.2653279472170682,
+          "latency_p50_ms": 490.7,
+          "latency_p95_ms": 4853.559999999997,
+          "mix": {
+            "low": 0.0,
+            "medium": 0.5897435897435898,
+            "high": 0.41025641025641024
+          }
+        },
+        "probabilities": {
+          "low": {
+            "n": 117,
+            "pass_rate": 0.4188034188034188,
+            "log_loss": 0.6286588780428167,
+            "brier": 0.2186342420581595,
+            "roc_auc": 0.7397959183673468
+          },
+          "medium": {
+            "n": 117,
+            "pass_rate": 0.905982905982906,
+            "log_loss": 0.30416604484634885,
+            "brier": 0.08552137107684239,
+            "roc_auc": 0.7049742710120068
+          }
+        },
+        "task_type_agreement": 0.7350427350427351
+      },
+      "hand": {
+        "routing": {
+          "n": 117,
+          "quality": 0.9658119658119658,
+          "quality_retained": 1.0,
+          "cost_per_1k": 0.2429,
+          "cost_saved": 0.28405213297006016,
+          "latency_p50_ms": 491.3,
+          "latency_p95_ms": 4592.719999999997,
+          "mix": {
+            "low": 0.0,
+            "medium": 0.5811965811965812,
+            "high": 0.4188034188034188
+          }
+        },
+        "probabilities": {
+          "low": {
+            "n": 117,
+            "pass_rate": 0.4188034188034188,
+            "log_loss": 0.6260006331740066,
+            "brier": 0.21735965670857665,
+            "roc_auc": 0.7481992797118848
+          },
+          "medium": {
+            "n": 117,
+            "pass_rate": 0.905982905982906,
+            "log_loss": 0.3040830021650578,
+            "brier": 0.08552118741430205,
+            "roc_auc": 0.7084048027444253
+          }
+        }
+      }
+    },
+    "classifier_c_logreg_cv_guessed:1": {
+      "guessed": {
+        "routing": {
+          "n": 117,
+          "quality": 0.9658119658119658,
+          "quality_retained": 1.0,
+          "cost_per_1k": 0.23392051282051285,
+          "cost_saved": 0.3105191757579421,
+          "latency_p50_ms": 491.3,
+          "latency_p95_ms": 3759.4399999999887,
+          "mix": {
+            "low": 0.0,
+            "medium": 0.5982905982905983,
+            "high": 0.4017094017094017
+          }
+        },
+        "probabilities": {
+          "low": {
+            "n": 117,
+            "pass_rate": 0.4188034188034188,
+            "log_loss": 0.6282290146738015,
+            "brier": 0.21842395436516832,
+            "roc_auc": 0.7400960384153661
+          },
+          "medium": {
+            "n": 117,
+            "pass_rate": 0.905982905982906,
+            "log_loss": 0.30416362104196665,
+            "brier": 0.08541568707169812,
+            "roc_auc": 0.7075471698113207
+          }
+        },
+        "task_type_agreement": 0.7350427350427351
+      },
+      "hand": {
+        "routing": {
+          "n": 117,
+          "quality": 0.9658119658119658,
+          "quality_retained": 1.0,
+          "cost_per_1k": 0.2324794871794872,
+          "cost_saved": 0.31476659952915564,
+          "latency_p50_ms": 483.2,
+          "latency_p95_ms": 3759.4399999999887,
+          "mix": {
+            "low": 0.0,
+            "medium": 0.6239316239316239,
+            "high": 0.37606837606837606
+          }
+        },
+        "probabilities": {
+          "low": {
+            "n": 117,
+            "pass_rate": 0.4188034188034188,
+            "log_loss": 0.6319051753266329,
+            "brier": 0.22017527511743495,
+            "roc_auc": 0.7301920768307323
+          },
+          "medium": {
+            "n": 117,
+            "pass_rate": 0.905982905982906,
+            "log_loss": 0.3038529137117492,
+            "brier": 0.08531013549127694,
+            "roc_auc": 0.7041166380789022
+          }
+        }
+      }
+    }
+  },
+  "oof_fit": {
+    "classifier_c_logreg_cv:2": {
+      "trained_on": "fit",
+      "task_types": "hand",
+      "saved_cv": {
+        "low": {
+          "n": 481,
+          "pass_rate": 0.4365904365904366,
+          "log_loss": 0.6590973896678475,
+          "brier": 0.2341877208947725,
+          "roc_auc": 0.631681602530311,
+          "accuracy": 0.577962577962578
+        },
+        "medium": {
+          "n": 481,
+          "pass_rate": 0.8586278586278586,
+          "log_loss": 0.3830406056770632,
+          "brier": 0.11563352435347447,
+          "roc_auc": 0.6909984332716137,
+          "accuracy": 0.8586278586278586
+        }
+      }
+    },
+    "classifier_c_logreg_cv_guessed:1": {
+      "trained_on": "fit",
+      "task_types": "guessed",
+      "saved_cv": {
+        "low": {
+          "n": 481,
+          "pass_rate": 0.4365904365904366,
+          "log_loss": 0.6675099338665182,
+          "brier": 0.23795992326651316,
+          "roc_auc": 0.6117026884554561,
+          "accuracy": 0.5675675675675675
+        },
+        "medium": {
+          "n": 481,
+          "pass_rate": 0.8586278586278586,
+          "log_loss": 0.3840918284417239,
+          "brier": 0.11595173734668722,
+          "roc_auc": 0.6862626406494802,
+          "accuracy": 0.8586278586278586
+        }
+      }
+    },
+    "classifier_c_logreg_cv:1": {
+      "trained_on": "train (all 598, validation included)",
+      "task_types": "hand",
+      "saved_cv": {
+        "low": {
+          "n": 598,
+          "pass_rate": 0.4331103678929766,
+          "log_loss": 0.6367140540394362,
+          "brier": 0.22385292023452832,
+          "roc_auc": 0.6717121672873886,
+          "accuracy": 0.617056856187291
+        },
+        "medium": {
+          "n": 598,
+          "pass_rate": 0.8678929765886287,
+          "log_loss": 0.37076898220737725,
+          "brier": 0.11107261711478256,
+          "roc_auc": 0.6668617838589304,
+          "accuracy": 0.8678929765886287
+        }
+      },
+      "recomputed_on_fit_ids": {
+        "low": {
+          "n": 481,
+          "pass_rate": 0.4365904365904366,
+          "log_loss": 0.6473464344213721,
+          "brier": 0.22882266911060292,
+          "roc_auc": 0.6538833245475312,
+          "accuracy": 0.5987525987525988
+        },
+        "medium": {
+          "n": 481,
+          "pass_rate": 0.8586278586278586,
+          "log_loss": 0.38327122634861377,
+          "brier": 0.116326498804158,
+          "roc_auc": 0.6817939040022789,
+          "accuracy": 0.8586278586278586
+        }
+      }
+    }
+  }
+}
