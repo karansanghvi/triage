@@ -18,6 +18,7 @@ from app.router.predictor import Prediction
 from app.router.quality import route
 
 API_KEY, OTHER_KEY, ADMIN_KEY = "test-key-123", "other-key-456", "admin-key-789"
+TEST_HASH_SECRET = b"fixed-test-hash-secret"
 ASK = [{"role": "user", "content": "What is 2 + 3? End with: Answer: <number>"}]
 
 
@@ -40,7 +41,8 @@ def routing_raw(first_token=None) -> dict:
     return raw
 
 
-def make_deps(script=None, *, predictor=None, first_token=None, cache=None, model_sleep=time.sleep):
+def make_deps(script=None, *, predictor=None, first_token=None, cache=None, model_sleep=time.sleep, log=None,
+              hash_secret=TEST_HASH_SECRET):
     """Real registry, real routing.yaml (optionally a short first-token limit), real ReliableClient
     (backoff sleeps skipped), fake models."""
     from app.registry import load_registry
@@ -48,7 +50,8 @@ def make_deps(script=None, *, predictor=None, first_token=None, cache=None, mode
     fake = FakeModels(script, sleep=model_sleep)
     deps = build_deps(predictor or FakePredictor(), fake, registry=registry,
                       config=ActiveConfig(routing_raw(first_token), registry), cache=cache,
-                      classifier="classifier_c_logreg_cv v2", sleep=lambda s: None, fake_models=fake)
+                      classifier="classifier_c_logreg_cv v2", sleep=lambda s: None, fake_models=fake, log=log,
+                      hash_secret=hash_secret)
     return deps
 
 

@@ -47,3 +47,6 @@ data/judge_calibration/
 
 # Trained model files (rebuilt by eval.train_classifier); the .json metrics next to them are committed
 models/*.joblib
+
+# Request logs from the API (SQLite; no keys or text, but per-request data)
+data/logs/

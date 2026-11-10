@@ -1,10 +1,10 @@
 """Everything a request needs, built once at startup: predictor, ReliableClient, config, cache, log."""
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from app.api.config_state import ActiveConfig
-from app.api.request_log import InMemoryRequestLog
+from app.api.request_log import InMemoryRequestLog, SQLiteRequestLog, hash_secret_from_env, open_request_log
 from app.cache import DEFAULT_CACHE_PATH, CachedSender, ResponseCache
 from app.providers.base import send_request
 from app.registry import load_registry
@@ -23,6 +23,7 @@ class RouterDeps:
     classifier: str = ""                  # "name v<version>", for the log
     cached_sender: Optional[CachedSender] = None
     fake_models: Optional[object] = None
+    hash_secret: bytes = field(default=b"", repr=False)   # TRIAGE_HASH_SECRET: keys prompt_hmac; never logged
 
     def strong_model(self) -> str:
         return self.config.snapshot().routing.chains["high"][0]
@@ -35,14 +36,16 @@ class RouterDeps:
 
 def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConfig] = None,
                cache: Optional[ResponseCache] = None, log=None, classifier: str = "", sleep=None,
-               fake_models=None) -> RouterDeps:
+               fake_models=None, hash_secret: Optional[bytes] = None) -> RouterDeps:
     registry = registry or load_registry()
     config = config or ActiveConfig.from_file(registry)
     cached = CachedSender(cache, send_fn=send_fn) if cache is not None else None
     kwargs = {"sleep": sleep} if sleep is not None else {}
     client = ReliableClient(registry, config.snapshot().routing, send_fn=cached or send_fn, **kwargs)
-    return RouterDeps(registry, config, client, predictor, log or InMemoryRequestLog(), classifier, cached,
-                      fake_models)
+    log = log or InMemoryRequestLog()
+    if hash_secret is None:
+        hash_secret = hash_secret_from_env(required=isinstance(log, SQLiteRequestLog))
+    return RouterDeps(registry, config, client, predictor, log, classifier, cached, fake_models, hash_secret)
 
 
 def load_predictor_checked():
@@ -66,8 +69,11 @@ def load_deps() -> RouterDeps:
         send_fn = FakeModels()
     else:
         send_fn = send_request
+    log = open_request_log()
+    hash_secret = hash_secret_from_env(required=isinstance(log, SQLiteRequestLog))   # before loading anything slow
     cache = None
     if os.environ.get(CACHE_ENV, "on").lower() != "off":
         cache = ResponseCache(os.environ.get(CACHE_PATH_ENV) or DEFAULT_CACHE_PATH)
     predictor, classifier = load_predictor_checked()
-    return build_deps(predictor, send_fn, cache=cache, classifier=classifier, fake_models=send_fn if fake else None)
+    return build_deps(predictor, send_fn, cache=cache, classifier=classifier, log=log,
+                      fake_models=send_fn if fake else None, hash_secret=hash_secret)
