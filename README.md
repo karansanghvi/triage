@@ -81,7 +81,8 @@ that model directly.
 
 ```bash
 pip install -r requirements.txt
-TRIAGE_API_KEYS=dev-key TRIAGE_ADMIN_KEYS=admin-key uvicorn app.api.main:app --port 8000
+TRIAGE_API_KEYS=dev-key TRIAGE_ADMIN_KEYS=admin-key TRIAGE_HASH_SECRET="$(openssl rand -hex 32)" \
+  uvicorn app.api.main:app --port 8000
 # TRIAGE_FAKE_MODELS=1 answers with fake models (no provider keys, no API calls); TRIAGE_CACHE=off disables the cache
 ```
 
@@ -136,3 +137,31 @@ max_tokens 4000, so `auto` requests with other values are logged with `settings_
 After that, the stream ends with an error event (the openai SDKs raise `APIError`). A stream whose first token
 doesn't arrive within the limit in `routing.yaml` (`streaming:`) fails over. A long answer that streams steadily
 is never cut off.
+
+## Privacy: what the request log keeps
+
+Every API request writes one row to a SQLite file (`TRIAGE_LOG_DB`, default `data/logs/requests.sqlite3`,
+not committed) and one JSON line to the server log.
+
+**Stored:**
+- Routing and cost data: the tier and model used, predicted pass probabilities, fallbacks, tokens, costs,
+  latency, status and error kind.
+- `key_id`: the first 8 hex characters of the API key's SHA-256, so requests can be grouped by key.
+- `prompt_hmac`: an HMAC-SHA256 of the conversation, keyed with `TRIAGE_HASH_SECRET`. It shows when the same
+  prompt comes back. Without the secret, nobody can test a guessed prompt against it, as they could with a
+  plain hash. The server refuses to start with the SQLite log if the secret isn't set. Keep the secret out of
+  the database and out of version control. Changing it means new rows can't be matched with old ones.
+- For `model="auto"` requests that answered: the classifier's inputs, which are the 14 handcrafted features
+  (`FEATURE_VERSION`) and the 384-number sentence embedding (`all-MiniLM-L6-v2`). Step 8 retrains on rows
+  marked `training_eligible`.
+
+**Never stored:** prompt text, answer text, API keys, or provider error messages. That covers the database,
+the JSON lines and `GET /v1/requests/{id}`, which leaves out the features and embedding. The tests search the
+raw database files and the log lines for keys, prompt text and answer text.
+
+**Treat the log as sensitive anyway.** An embedding isn't the text, but it isn't anonymous either. Similar
+prompts get similar vectors, so anyone with the database can group requests by topic. They can also find
+which stored requests resemble a sentence they choose, and with enough effort recover parts of a prompt's
+meaning. The handcrafted features reveal length, format and task type. Restrict who can read the file, back it
+up like user data, and delete it when it's no longer needed. A later demo mode will store raw text, and only
+behind a visible notice to the user. That isn't built yet.

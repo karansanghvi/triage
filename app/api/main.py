@@ -1,7 +1,8 @@
 """Triage's OpenAI-compatible API (Phase 4 Step 5).
 
 Run it:
-    TRIAGE_API_KEYS=dev-key TRIAGE_ADMIN_KEYS=admin-key TRIAGE_FAKE_MODELS=1 uvicorn app.api.main:app
+    TRIAGE_API_KEYS=dev-key TRIAGE_ADMIN_KEYS=admin-key TRIAGE_HASH_SECRET=<random> TRIAGE_FAKE_MODELS=1 \
+        uvicorn app.api.main:app
 (drop TRIAGE_FAKE_MODELS for real models; TRIAGE_CACHE=off disables the response cache)
 
 Endpoints
@@ -17,6 +18,7 @@ and on non-streaming responses -Cost and -Saved. A stream's headers are sent onc
 model, tier and fallback are real; its cost isn't known yet, so -Cost and -Saved are left out (never faked).
 The real figures are in GET /v1/requests/{id} once the stream ends, and in /v1/stats.
 """
+import dataclasses
 import hashlib
 import json
 import logging
@@ -36,7 +38,7 @@ from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_e
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
 from app.api.errors import APIError, bad_request, stream_error_event
 from app.api.headers import parse_quality, parse_task, parse_verify
-from app.api.request_log import RequestRow
+from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.api.stats import summarize
 from app.cache import is_cacheable
 from app.providers.base import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
@@ -44,6 +46,51 @@ from app.providers.common import ProviderError
 from app.reliability import AllModelsFailed
 
 logger = logging.getLogger("triage.api")
+# One JSON line per request (Step 10): ids, routing, status, latency and cost only. Never keys or text.
+request_logger = logging.getLogger("triage.requests")
+JSON_LOG_FIELDS = ("request_id", "timestamp", "key_id", "requested_model", "stream", "tier", "served_model",
+                   "fell_back", "cache_hit", "status", "http_status", "error_kind", "latency_ms", "ttft_ms",
+                   "price_as_cost", "saved", "training_eligible")
+
+
+def json_log_line(row: RequestRow) -> str:
+    return json.dumps({k: getattr(row, k) for k in JSON_LOG_FIELDS}, separators=(",", ":"))
+
+
+def _ensure_json_handler() -> None:
+    """Print the JSON lines to stderr unless logging is already configured for them (added once)."""
+    if not request_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        request_logger.addHandler(handler)
+        request_logger.setLevel(logging.INFO)
+        request_logger.propagate = False
+
+
+class _RecordingPredictor:
+    """Wraps the shared predictor for ONE request and keeps the Prediction it returned, so the log can store
+    the features and embedding the classifier already computed (nothing is computed twice). route_and_stream
+    gets a per-request copy of deps holding this wrapper; it is otherwise the same predictor."""
+
+    def __init__(self, predictor):
+        self._predictor = predictor
+        self.prediction = None
+
+    def predict_messages(self, messages, task_type=None):
+        self.prediction = self._predictor.predict_messages(messages, task_type)
+        return self.prediction
+
+
+def _apply_inputs(row: RequestRow, prediction) -> None:
+    """Step 8 storage: only for model="auto" requests that answered."""
+    if prediction is None or row.requested_model != "auto" or row.status != "ok":
+        return
+    from app.router.embeddings import MODEL_NAME
+    from app.router.features import FEATURE_VERSION
+    if prediction.features is not None:
+        row.features, row.feature_version = list(prediction.features), FEATURE_VERSION
+    if prediction.embedding is not None:
+        row.embedding, row.embedding_model = embedding_to_bytes(prediction.embedding), MODEL_NAME
 
 # Request fields Triage understands. Anything else in the body is a 400 naming it, rather than silently ignored.
 ACCEPTED_FIELDS = {"model", "messages", "stream", "stream_options", "temperature", "max_tokens",
@@ -81,10 +128,6 @@ def _money(x: float) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _prompt_sha(messages: list) -> str:
-    return hashlib.sha256(json.dumps(messages, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def _header_safe(text: str) -> str:
@@ -149,6 +192,7 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             app.state.deps = load_deps()          # predictor + embedding model, once
         yield
 
+    _ensure_json_handler()
     app = FastAPI(title="Triage", version="0.5", lifespan=lifespan)
     app.state.deps, app.state.auth = deps, auth
 
@@ -190,8 +234,6 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         task = parse_task(x_triage_task)
         parse_verify(x_triage_verify, body.stream)
         auto = body.model == "auto"
-        if not auto and body.model not in deps.registry:
-            raise APIError(404, str(core.UnknownModel(body.model)), param="model", code="model_not_found")
 
         messages = [m.model_dump() for m in body.messages]
         settings = core.GenerationSettings(body.temperature, body.max_tokens or body.max_completion_tokens)
@@ -206,9 +248,11 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                          config_version=snapshot.version, temperature=temperature, max_tokens=max_tokens,
                          settings_match_training=(temperature == training.get("temperature")
                                                   and max_tokens == training.get("max_tokens")) if auto else None,
-                         prompt_sha256=_prompt_sha(messages))
+                         prompt_hmac=prompt_hmac(messages, deps.hash_secret))
 
         logged = []
+        recorder = _RecordingPredictor(deps.predictor)
+        request_deps = dataclasses.replace(deps, predictor=recorder)    # same client, registry and log
 
         def finish(status="ok", http_status=200, error_kind=None):
             if logged:
@@ -216,12 +260,19 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             logged.append(True)
             row.status, row.http_status, row.error_kind = status, http_status, error_kind
             row.latency_ms = round((time.perf_counter() - started) * 1000, 1)
+            _apply_inputs(row, recorder.prediction)
+            row.training_eligible = is_training_eligible(row)
             deps.log.write(row)
+            request_logger.info(json_log_line(row))
+
+        if not auto and body.model not in deps.registry:              # logged, then an OpenAI-style 404
+            finish("error", 404, "model_not_found")
+            raise APIError(404, str(core.UnknownModel(body.model)), param="model", code="model_not_found")
 
         try:
             routed = await core.route_and_stream(messages, tau=tau if auto else None, task_type=task,
                                                  model=body.model, stream=body.stream, settings=settings,
-                                                 deps=deps, request_id=request_id)
+                                                 deps=request_deps, request_id=request_id)
         except core.UnknownModel as error:
             finish("error", 404, "model_not_found")
             raise APIError(404, str(error), param="model", code="model_not_found") from None
@@ -303,16 +354,16 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
 
     @app.get("/v1/stats")
     async def stats(who: Caller = Depends(caller)):
-        rows = app.state.deps.log.rows()
-        mine = rows if who.admin else [r for r in rows if r.key_id == who.key_id]
+        # read from the log (survives restarts), without the feature and embedding columns
+        mine = app.state.deps.log.rows(None if who.admin else who.key_id, include_vectors=False)
         return {"scope": "all keys" if who.admin else "your key", **summarize(mine)}
 
     @app.get("/v1/requests/{request_id}")
     async def get_request(request_id: str, who: Caller = Depends(caller)):
-        row = app.state.deps.log.get(request_id)
+        row = app.state.deps.log.get(request_id, include_vectors=False)
         if row is None or row.key_id != who.key_id:          # someone else's request looks like a missing one
             raise APIError(404, f"No request {request_id!r} for this key.", param="request_id", code="not_found")
-        return row.to_dict()
+        return row.public_dict()
 
     # ----- live routing config -----
 

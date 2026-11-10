@@ -367,7 +367,8 @@ def test_log_row_fields(http, app_deps):
     row = app_deps[1].log.get(rid).to_dict()
     assert row["requested_model"] == "auto" and row["tier"] == "medium" and row["served_model"] == "groq-small"
     assert row["classifier"] == "classifier_c_logreg_cv v2" and row["config_version"] == 1
-    assert (row["p_low"], row["p_medium"]) == (0.4, 0.95) and len(row["prompt_sha256"]) == 64
+    assert (row["p_low"], row["p_medium"]) == (0.4, 0.95) and len(row["prompt_hmac"]) == 64
+    assert "prompt_sha256" not in row
     for later in ("checker_verdict", "decided_by", "checker_version", "mode"):
         assert later in row and row[later] is None
 
@@ -398,7 +399,9 @@ def test_startup_refuses_a_predictor_that_fails_its_checks(monkeypatch):
         deps_module.load_predictor_checked()
 
 
-def test_startup_loads_the_predictor_once_with_fake_models(monkeypatch):
+def test_startup_loads_the_predictor_once_with_fake_models(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRIAGE_LOG_DB", str(tmp_path / "requests.sqlite3"))     # never the real data/logs
+    monkeypatch.setenv("TRIAGE_HASH_SECRET", "startup-test-secret")
     loads = []
     monkeypatch.setattr(deps_module, "load_predictor_checked",
                         lambda: loads.append(1) or (FakePredictor(), "fake v0"))

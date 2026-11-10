@@ -18,7 +18,7 @@ from __future__ import annotations
  
 import argparse
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -49,6 +49,10 @@ class Prediction:
     raw_p_medium: float         # what the medium model said before that adjustment 
     task_type: str              
     task_type_guessed: bool     # True if nobody told us the task type and the keyword guesser picked it 
+    # The inputs the classifier saw, kept so the request log can store them without computing them twice
+    # (Phase 4 Step 8 storage). None when this predictor's feature set doesn't include them.
+    features: Optional[tuple] = field(default=None, compare=False, repr=False)       # the 14 FEATURE_NAMES values
+    embedding: Optional[np.ndarray] = field(default=None, compare=False, repr=False)  # float32, embeddings.MODEL_NAME
 
 
 class Predictor:
@@ -133,10 +137,28 @@ class Predictor:
         X, tasks, guessed = self._rows(texts, task_types)
         p_low = self.models["low"].predict_proba(X)[:, 1]
         p_med = self.models["medium"].predict_proba(X)[:, 1]
+        features, embeddings = self._split_inputs(X)
         # The two models are trained seperately and can disagree oddly ("cheap 70%, medium 60%")
         # Medium is the stronger model, so it should never look less likely to pass than cheap 
-        return [Prediction(p_low=float(lo), p_medium=float(max(md, lo)), raw_p_medium=float(md), task_type=task, task_type_guessed=g)
-                for lo, md, task, g in zip(p_low, p_med, tasks, guessed)]
+        return [Prediction(p_low=float(lo), p_medium=float(max(md, lo)), raw_p_medium=float(md), task_type=task, task_type_guessed=g,
+                           features=features[i], embedding=embeddings[i])
+                for i, (lo, md, task, g) in enumerate(zip(p_low, p_med, tasks, guessed))]
+
+    def _split_inputs(self, X: np.ndarray) -> tuple:
+        """Per row: (the 14 handcrafted features or None, the float32 embedding or None), sliced out of the
+        matrix the models just used, so nothing is computed twice. Column order is _rows' order."""
+        n = len(X)
+        width = 0
+        features = [None] * n
+        if self.feature_set in USES_FEATURES:
+            width = len(self.task_columns) if self.feature_set == "task_only" else len(FEATURE_NAMES)
+            if self.feature_set != "task_only":
+                features = [tuple(float(v) for v in row) for row in X[:, :width]]
+        embeddings = [None] * n
+        if self.feature_set in USES_EMBEDDINGS:
+            # embed_texts returns float32; _rows widened it to float64 exactly, so this narrowing is lossless
+            embeddings = [row.astype(np.float32) for row in X[:, width:]]
+        return features, embeddings
     
     def predict_text(self, text: str, task_type: Optional[str] = None) -> Prediction:
         return self.predict_texts([text], [task_type])[0]
