@@ -50,7 +50,12 @@ def _check_tau(value: float, where: str) -> float:
 def load_quality_settings(path: Path = ROUTING_CONFIG_PATH) -> QualitySettings:
     """Read the `quality:` section of routing.yaml and validate it, so a bad config fails at startup"""
     config = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    section = config.get("quality")
+    return quality_settings_from_dict(config, path)
+
+
+def quality_settings_from_dict(config: dict, path="routing.yaml") -> QualitySettings:
+    """Validate the `quality:` section of an already-parsed routing.yaml (also used by live config updates)"""
+    section = (config or {}).get("quality")
     if not isinstance(section, dict):
         raise QualityError(f"{path}: missing a `quality:` section")
     presets = section.get("presets") or {}

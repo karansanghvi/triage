@@ -44,6 +44,18 @@ model_timeouts:
   # with 32 s, 4.8%. Phase 2 ran it alongside the other tiers on the same machine.
   ollama-llama: 32
 
+# Streaming (Phase 4 Step 5): a time-to-first-token limit, not a total-time limit. A stream whose first
+# piece doesn't arrive in time fails over to the next model in the chain (only possible before any text is
+# sent); a long answer that is streaming steadily is never cut off. The per-call timeout above still applies
+# to each read, so it also limits the gap between pieces. There is no Phase 2 time-to-first-token data yet
+# (collection did not stream), so these start at the same values as the timeouts above. Revisit with live data.
+streaming:
+  first_token_timeout_seconds: 8
+  model_first_token_timeouts:
+    groq-large: 10
+    gemini-flash: 30
+    ollama-llama: 32
+
 # Request settings. These MUST match the Phase 2 collection (config/collection.yaml): the classifier
 # predicts "will this model pass with THESE settings?" (tests/test_live_settings.py checks they match).
 # Callers may override generation per call; model_params can only be set here.

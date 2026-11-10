@@ -73,3 +73,66 @@ python -m scripts.final_check        # end-to-end test with a real outage
 - **Only temperature 0 is cached**, because only then is a saved answer a fair substitute. Empty or cut-off answers are never saved.
 - **The cache wraps `send_request()`** instead of changing it, and plugs into the reliability layer through `send_fn`.
 - **Prices live in config**, so a provider price change is a two-number edit, not a code change.
+## The OpenAI-compatible API (Phase 4)
+
+Triage speaks OpenAI's chat completions API, so any OpenAI client works by changing its base URL. Use
+`model="auto"` to let Triage pick the cheapest model likely to pass, or a name from `GET /v1/models` to call
+that model directly.
+
+```bash
+pip install -r requirements.txt
+TRIAGE_API_KEYS=dev-key TRIAGE_ADMIN_KEYS=admin-key uvicorn app.api.main:app --port 8000
+# TRIAGE_FAKE_MODELS=1 answers with fake models (no provider keys, no API calls); TRIAGE_CACHE=off disables the cache
+```
+
+Python:
+
+```python
+from openai import OpenAI
+print(OpenAI(base_url="http://localhost:8000/v1", api_key="dev-key").chat.completions.create(model="auto", messages=[{"role": "user", "content": "What is 2 + 3?"}]).choices[0].message.content)
+```
+
+JavaScript (`npm install openai`):
+
+```js
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "dev-key" });
+const stream = await client.chat.completions.create({
+  model: "auto",
+  messages: [{ role: "user", content: "What is 2 + 3?" }],
+  stream: true,
+});
+for await (const chunk of stream) process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
+```
+
+**Request headers** (all optional):
+
+| header | values | |
+|---|---|---|
+| `X-Triage-Quality` | `cheap`, `balanced`, `high`, or a number from 0 to 1 | the quality dial (tau); default `balanced` |
+| `X-Triage-Task` | `qa`, `coding`, `reasoning`, `extraction`, `summarization`, `classification`, `creative`, `open_ended` | skips the task-type guess |
+| `X-Triage-Verify` | `off` | `sync` arrives in a later step (501 for now; 400 with `stream=true`) |
+
+Anything else is a 400 that names the header.
+
+**Response headers:** `X-Triage-Request-Id`, `X-Triage-Model` (the model that answered), `X-Triage-Tier`,
+`X-Triage-Reason`, `X-Triage-Fallback` (`primary->backup`, or `none`), `X-Triage-Cache` (`hit`, `miss`,
+`bypass`), `X-Triage-Verified`, `X-Triage-Escalated`, and on non-streaming responses `X-Triage-Cost` and
+`X-Triage-Saved` (US dollars at paid prices). On a stream, the headers go out once the first token exists,
+so model, tier and fallback are real, but cost isn't known yet. Those two headers are left out rather than
+guessed. Fetch the real figures with `GET /v1/requests/<request id>` once the stream ends. `Saved` assumes the
+strong model would have used the same number of tokens, so it's an estimate.
+
+**Other endpoints:** `GET /v1/models` (with prices), `GET /v1/stats` (savings for your key),
+`GET /v1/requests/{id}` (one of your own requests), and for admin keys `GET`/`PUT /v1/routing-config`, which
+changes the quality presets and backup models without a restart. Those changes are kept in memory only. The
+first model of each tier can't be changed, because the classifier predicts for that exact model.
+
+**Settings:** `temperature` and `max_tokens` are honoured. The classifier learned from temperature 0 and
+max_tokens 4000, so `auto` requests with other values are logged with `settings_match_training: false`.
+
+**Reliability:** a failing model falls back to the tier's backup, but only before the first token is sent.
+After that, the stream ends with an error event (the openai SDKs raise `APIError`). A stream whose first token
+doesn't arrive within the limit in `routing.yaml` (`streaming:`) fails over. A long answer that streams steadily
+is never cut off.
