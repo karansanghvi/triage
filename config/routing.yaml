@@ -71,6 +71,12 @@ verification:
       medium:
         checks: [format, ai_checker]
         escalate_to: high
+        # Selective checking (off): skip the AI check when the classifier's p_medium is at least this
+        # (null = always check; 1.0 also always checks), or when medium's answer is shorter than
+        # min_answer_tokens visible tokens (0 = off). A skip shows as X-Triage-Check: skipped_confident /
+        # skipped_short. Pick values from the Step 3 sweep (eval/checker_routing.py, strategy e) first.
+        skip_check_above: null
+        min_answer_tokens: 0
       high:
         checks: []                 # the strong answer is final and never checked
     on_error: escalate             # the AI checker errored or gave no verdict: escalate | accept

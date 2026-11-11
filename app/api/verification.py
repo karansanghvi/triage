@@ -12,6 +12,13 @@ The AI checker is app/verifier/ai_checker.py with config/checker.yaml (v3, groq-
 the API's ReliableClient (retries, circuit breaker, cache, per-model timeouts from routing.yaml). When it
 errors or gives no verdict, on_error decides: "escalate" (treat as bad) or "accept" (treat as good).
 
+Selective checking (off by default): a tier with ai_checker may set
+    skip_check_above   skip the AI check when the classifier's pass probability for that tier is at least this
+                       (null = never skip; 1.0 also never skips)
+    min_answer_tokens  skip it when the answer is shorter than this many visible tokens (0 = never)
+A skipped check is recorded as decided_by / X-Triage-Check "skipped_confident" or "skipped_short". The free
+format check still runs first, so a badly formatted answer is escalated either way.
+
 agreement_on_comparable is reserved for "agreement on comparable prompts" (Step 3's strategy b). It is not
 built: setting it to true is a config error, so nobody thinks it is running.
 """
@@ -55,6 +62,8 @@ class VerificationConfigError(ValueError):
 class TierPolicy:
     checks: tuple = ()                    # run in this order; the first "bad" stops the rest
     escalate_to: Optional[str] = None     # None: this tier's answer is final
+    skip_check_above: Optional[float] = None   # skip the AI check when p(tier passes) >= this (None = off)
+    min_answer_tokens: int = 0                  # skip it when the answer is shorter than this (0 = off)
 
 
 @dataclass(frozen=True)
@@ -101,8 +110,9 @@ def verification_from_dict(raw: dict) -> VerificationPolicy:
     tiers = {}
     for tier in TIERS:
         t = raw_tiers[tier] or {}
-        if not isinstance(t, dict) or set(t) - {"checks", "escalate_to"}:
-            raise VerificationConfigError(f"routing.yaml: verification.sync.tiers.{tier} takes checks, escalate_to")
+        if not isinstance(t, dict) or set(t) - {"checks", "escalate_to", "skip_check_above", "min_answer_tokens"}:
+            raise VerificationConfigError(f"routing.yaml: verification.sync.tiers.{tier} takes checks, escalate_to, "
+                                          "skip_check_above, min_answer_tokens")
         checks = t.get("checks") or []
         if not isinstance(checks, list) or set(checks) - set(CHECKS) or len(set(checks)) != len(checks):
             raise VerificationConfigError(f"routing.yaml: verification.sync.tiers.{tier}.checks must be a list "
@@ -114,7 +124,18 @@ def verification_from_dict(raw: dict) -> VerificationPolicy:
         if checks and to is None:
             raise VerificationConfigError(f"routing.yaml: verification.sync.tiers.{tier} runs checks but has no "
                                           "escalate_to: a bad verdict would have nowhere to go")
-        tiers[tier] = TierPolicy(tuple(checks), to)
+        skip_above, min_tokens = t.get("skip_check_above"), t.get("min_answer_tokens", 0)
+        if (skip_above is not None or min_tokens) and "ai_checker" not in checks:
+            raise VerificationConfigError(f"routing.yaml: verification.sync.tiers.{tier} sets skip_check_above or "
+                                          "min_answer_tokens but runs no ai_checker to skip")
+        if skip_above is not None:
+            skip_above = float(_number(skip_above, f"verification.sync.tiers.{tier}.skip_check_above", high=1.0))
+            if skip_above <= 0:
+                raise VerificationConfigError(f"routing.yaml: verification.sync.tiers.{tier}.skip_check_above must "
+                                              "be above 0 (0 would skip every check); use null to turn it off")
+        min_tokens = _number(min_tokens if min_tokens is not None else 0,
+                             f"verification.sync.tiers.{tier}.min_answer_tokens", whole=True)
+        tiers[tier] = TierPolicy(tuple(checks), to, skip_above, min_tokens)
     on_error = sync.get("on_error", "escalate")
     if on_error not in ON_ERROR:
         raise VerificationConfigError(f"routing.yaml: verification.sync.on_error must be escalate or accept, "
@@ -198,7 +219,7 @@ class SyncOutcome:
     escalated: bool = False
     escalated_from: Optional[str] = None
     escalated_to: Optional[str] = None
-    decided_by: str = "none"              # format | ai_checker | ai_checker_error | none
+    decided_by: str = "none"              # format | ai_checker | ai_checker_error | skipped_confident | skipped_short | none
     checker_verdict: Optional[str] = None # the deciding check's verdict: good | bad | error
     checker_version: Optional[int] = None # set when the AI checker ran
     check_cost: float = 0.0               # AI checks, price_as
@@ -215,8 +236,30 @@ def _truncated(response) -> bool:
     return (getattr(response, "finish_reason", None) or "").lower() in TRUNCATED_FINISH_REASONS
 
 
-async def verify_sync(messages: list, first: Served, policy: SyncPolicy, deps, settings) -> SyncOutcome:
-    """Check `first` (the routed answer) by its tier's policy; escalate while a check says bad."""
+def visible_tokens(response) -> Optional[int]:
+    """The answer's own tokens: output tokens minus hidden reasoning tokens (None if unknown)."""
+    out = getattr(response, "output_tokens", None)
+    if out is None:
+        return None
+    return max(0, int(out) - int(getattr(response, "reasoning_tokens", None) or 0))
+
+
+def check_skip(tier_policy: TierPolicy, p_pass: Optional[float], response) -> Optional[str]:
+    """"skipped_confident", "skipped_short" or None (run the AI check). Same rule as the Step 3 simulation."""
+    above = tier_policy.skip_check_above
+    if above is not None and above < 1.0 and p_pass is not None and p_pass >= above:
+        return "skipped_confident"
+    tokens = visible_tokens(response)
+    if tier_policy.min_answer_tokens and tokens is not None and tokens < tier_policy.min_answer_tokens:
+        return "skipped_short"
+    return None
+
+
+async def verify_sync(messages: list, first: Served, policy: SyncPolicy, deps, settings,
+                      probabilities: Optional[dict] = None) -> SyncOutcome:
+    """Check `first` (the routed answer) by its tier's policy; escalate while a check says bad.
+    probabilities {tier: the classifier's pass probability}, for skip_check_above."""
+    probabilities = probabilities or {}
     out = SyncOutcome(final=first)
     current = first
     while True:
@@ -227,6 +270,11 @@ async def verify_sync(messages: list, first: Served, policy: SyncPolicy, deps, s
                 ok = check_answer(messages, current.text, truncated=_truncated(current.response)).ok
                 out.decided_by, out.checker_verdict, bad = "format", "good" if ok else "bad", not ok
             else:
+                skipped = check_skip(tier_policy, probabilities.get(current.tier), current.response)
+                if skipped:                       # accept without the paid check
+                    out.decided_by, out.checker_verdict = skipped, None
+                    out.steps.append((current.tier, check, skipped))
+                    continue
                 send = ClientCheckSend(deps.client)
                 started = time.perf_counter()
                 result = await anyio.to_thread.run_sync(partial(

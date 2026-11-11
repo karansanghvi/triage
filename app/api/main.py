@@ -188,6 +188,8 @@ def _verified_reason(d: core.RouteDecision, outcome) -> str:
         return d.reason
     if outcome.escalated:
         return f"{d.reason}; verified: {outcome.escalated_from}->{outcome.escalated_to} ({outcome.decided_by})"
+    if outcome.decided_by.startswith("skipped_"):
+        return f"{d.reason}; verified: kept {d.tier} (AI check {outcome.decided_by})"
     return f"{d.reason}; verified: kept {d.tier} ({outcome.decided_by}: {outcome.checker_verdict})"
 
 
@@ -335,7 +337,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             served_model, served_tier, reason, check, escalated = decision.model, decision.tier, None, "none", False
             if verify == "sync":
                 outcome = await verify_sync(messages, Served(decision.tier, decision.model, response, text),
-                                            snapshot.verification.sync, deps, settings)
+                                            snapshot.verification.sync, deps, settings,
+                                            probabilities={"low": decision.p_low, "medium": decision.p_medium})
                 _apply_verification(row, response, outcome, deps)
                 response, text = outcome.final.response, outcome.final.text
                 served_model, served_tier, check, escalated = (outcome.final.model, outcome.final.tier,

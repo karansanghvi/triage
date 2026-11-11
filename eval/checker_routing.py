@@ -20,6 +20,11 @@ Strategies
                                                the answer). Bad -> medium, then (a)'s checks.
                                         medium (a)
                                         high   high's answer, unchecked
+  e. medium_then_check_selective     like (a), but skip the AI check (accept medium, pay nothing extra) when the
+                                      classifier's p_medium >= skip_above, and optionally when medium's answer is
+                                      shorter than min_answer_tokens (visible tokens: output minus reasoning).
+                                      The free format check always runs. Swept over SKIP_ABOVE x MIN_ANSWER_TOKENS;
+                                      skip_above 1.00 means "always check" (exactly strategy a).
   d. baselines                        always_low / always_medium / always_high, the oracle, predict-only
                                       Triage (v2, tau sweep), and random routing at the same cost as each
                                       strategy: the line through always_low, always_medium and always_high.
@@ -60,6 +65,8 @@ from eval.splits import assert_no_test_ids
 REPORTS_DIR = PROJECT_ROOT / "reports"
 CLASSIFIER = ("classifier_c_logreg_cv", 2)
 CHECKED_TIERS = ("low", "medium")
+SKIP_ABOVE = (0.90, 0.92, 0.94, 0.96, 0.98, 1.00)   # 1.00 = never skip = always check
+MIN_ANSWER_TOKENS = (0, 100)                         # 0 = never skip for length
 
 
 # ---------- inputs: format checks, agreement keys, extra's cost ----------
@@ -174,6 +181,84 @@ def classifier_start_then_check_path(row, start, verdicts, format_ok, keys, is_c
     return final, [first] + as_rounds(calls)
 
 
+def answer_tokens(answer: dict):
+    """Visible tokens of a Phase 2 answer: output tokens minus hidden reasoning (gpt-oss reports both).
+    None when unknown (then a length rule never skips)."""
+    out = (answer or {}).get("output_tokens")
+    if out is None:
+        return None
+    return max(0, int(out) - int(answer.get("reasoning_tokens") or 0))
+
+
+def medium_answer_tokens(rows: list, answers: dict) -> dict:
+    return {r.id: answer_tokens(answers.get((r.id, "medium"))) for r in rows}
+
+
+def skip_reason(p_medium, tokens, skip_above: float, min_answer_tokens: int):
+    """Why the AI check would be skipped ("confident" / "short"), or None to run it."""
+    if skip_above < 1.0 and p_medium is not None and p_medium >= skip_above:
+        return "confident"
+    if min_answer_tokens and tokens is not None and tokens < min_answer_tokens:
+        return "short"
+    return None
+
+
+def medium_then_check_selective_path(row, verdicts, format_ok, *, p_medium, tokens, skip_above: float,
+                                     min_answer_tokens: int = 0, on_error: str = "escalate") -> tuple:
+    """(e): (final tier, calls, skipped) where skipped is None, "confident" or "short".
+
+    The free format check still runs first: a format failure escalates as in (a), whatever the classifier says.
+    Otherwise, if skip_reason() says so, medium's answer is accepted with no AI check (no extra cost);
+    if not, this is exactly medium_then_check_path."""
+    if on_error not in ON_ERROR:
+        raise ValueError(f"on_error must be one of {ON_ERROR}")
+    if format_ok[(row.id, "medium")]:
+        why = skip_reason(p_medium, tokens, skip_above, min_answer_tokens)
+        if why:
+            return "medium", [Call(ANSWER, "medium")], why
+    final, calls = medium_then_check_path(row, verdicts, format_ok, on_error)
+    return final, calls, None
+
+
+def selective_point(rows, decisions, skipped, verdicts) -> dict:
+    """Score one (skip_above, min_answer_tokens) setting, plus what happened to the truly bad answers."""
+    s = score_decisions(rows, decisions, verdicts)
+    bad = [i for i, r in enumerate(rows) if not r.passed["medium"]]
+    checked = [any(c.kind == CHECK for c in as_flat(d[1])) for d in decisions]
+    caught = sum(decisions[i][0] != "medium" for i in bad)                 # escalated: by format or checker
+    skipped_bad = sum(decisions[i][0] == "medium" and skipped[i] is not None for i in bad)
+    return {**s,
+            "checked_share": float(np.mean(checked)),
+            "escalated_share": s["escalation_rate"],
+            "skipped_confident": int(sum(x == "confident" for x in skipped)),
+            "skipped_short": int(sum(x == "short" for x in skipped)),
+            "bad_total": len(bad), "bad_caught": int(caught), "bad_skipped": int(skipped_bad),
+            "bad_missed_by_checker": int(len(bad) - caught - skipped_bad),
+            "good_escalated": int(sum(d[0] != "medium" for i, d in enumerate(decisions) if rows[i].passed["medium"]))}
+
+
+def as_flat(calls) -> list:
+    return [c for rnd in as_rounds(calls) for c in rnd]
+
+
+def sweep_selective(rows, probs, verdicts, format_ok, tokens: dict, *, on_error="escalate",
+                    skip_above=SKIP_ABOVE, min_answer_tokens=MIN_ANSWER_TOKENS) -> dict:
+    """{min_answer_tokens: [one point per skip_above]} for strategy (e)."""
+    out = {}
+    for min_tokens in min_answer_tokens:
+        points = []
+        for above in skip_above:
+            results = [medium_then_check_selective_path(r, verdicts, format_ok, p_medium=probs[r.id][1],
+                                                        tokens=tokens.get(r.id), skip_above=above,
+                                                        min_answer_tokens=min_tokens, on_error=on_error)
+                       for r in rows]
+            decisions = [(final, calls) for final, calls, _ in results]
+            points.append({"skip_above": above, "min_answer_tokens": min_tokens,
+                           **selective_point(rows, decisions, [why for _, _, why in results], verdicts)})
+        out[min_tokens] = points
+    return out
+
+
 def run_a(rows, verdicts, format_ok, on_error):
     return [medium_then_check_path(r, verdicts, format_ok, on_error) for r in rows]
 
@@ -229,8 +314,9 @@ def beats_always_medium(point: dict, base: dict) -> bool:
 # ---------- everything ----------
 
 def simulate(rows: list, probs: dict, verdicts: dict, format_ok: dict, keys: dict, is_comparable: dict,
-             taus=TAUS) -> dict:
-    """Every strategy and baseline on the same rows. Returns {"baselines", "fixed", "curves"}."""
+             taus=TAUS, answer_tokens: dict = None) -> dict:
+    """Every strategy and baseline on the same rows. Returns {"baselines", "fixed", "curves", "selective"}.
+    answer_tokens {id: visible tokens of medium's answer}; missing or None = unknown (never skipped for length)."""
     assert_no_test_ids({r.id for r in rows})
     missing = [r.id for r in rows if r.id not in probs]
     if missing:
@@ -245,9 +331,22 @@ def simulate(rows: list, probs: dict, verdicts: dict, format_ok: dict, keys: dic
         curves[f"c. classifier_start_then_check (on_error={on_error})"] = \
             sweep_c(rows, probs, verdicts, format_ok, keys, is_comparable, on_error, taus)
     curves["d. predict-only Triage (v2)"] = sweep_predict_only(rows, probs, taus)
+    selective = {f"e. medium_then_check_selective (min_answer_tokens={n})": pts for n, pts in
+                 sweep_selective(rows, probs, verdicts, format_ok, answer_tokens or {}).items()}
     fixed = {k: with_random_bar(v, base) for k, v in fixed.items()}
     curves = {k: [with_random_bar(p, base) for p in pts] for k, pts in curves.items()}
-    return {"baselines": base, "fixed": fixed, "curves": curves}
+    selective = {k: [with_random_bar(p, base) for p in pts] for k, pts in selective.items()}
+    return {"baselines": base, "fixed": fixed, "curves": curves, "selective": selective}
+
+
+def summarize_selective(result: dict) -> dict:
+    """Per selective line: every point's headline numbers, and whether any point beats always-medium."""
+    base = result["baselines"]
+    keys = ("skip_above", "min_answer_tokens", "quality_retained", "cost_saved", "checked_share", "escalated_share",
+            "bad_total", "bad_caught", "bad_skipped", "bad_missed_by_checker", "good_escalated")
+    return {name: {"beats_always_medium": any(beats_always_medium(p, base) for p in pts),
+                   "points": [{k: p[k] for k in keys} for p in pts]}
+            for name, pts in result.get("selective", {}).items()}
 
 
 def summarize(result: dict) -> dict:
@@ -284,6 +383,9 @@ def plot(result: dict, path: Path, title: str) -> None:
     for name, points in result["curves"].items():
         ax.plot([pct(p["cost_saved"]) for p in points], [pct(p["quality_retained"]) for p in points], lw=2,
                 label=name, ls="-" if "predict-only" not in name else "-.")
+    for name, points in result.get("selective", {}).items():
+        ax.plot([pct(p["cost_saved"]) for p in points], [pct(p["quality_retained"]) for p in points], lw=1.6,
+                ls=":", marker=".", label=f"{name}, skip_above {points[0]['skip_above']:.2f}-{points[-1]['skip_above']:.2f}")
     fixed_markers = ["o", "P", "D", "X"]
     for (name, r), marker in zip(result["fixed"].items(), fixed_markers):
         ax.scatter(pct(r["cost_saved"]), pct(r["quality_retained"]), marker=marker, s=80, zorder=6,
@@ -362,17 +464,26 @@ def main(argv=None):
         raise SystemExit(f"{info['by_reason']['missing']} needed verdicts are missing; run eval.checker_val_run "
                          f"--model {model} first, or pass --allow-missing")
 
-    result = simulate(rows, val_probabilities(rows), verdicts, format_ok, keys, is_comparable)
+    result = simulate(rows, val_probabilities(rows), verdicts, format_ok, keys, is_comparable,
+                      answer_tokens=medium_answer_tokens(rows, answers))
     report = {"split": "val", "n": len(rows), "created": datetime.now(timezone.utc).isoformat(),
               "fake_verdicts": args.fake_verdicts, "checker": {"model": model, "version": settings.checker_version,
                                                                "prompt_sha256": prompt_sha256(), "needed": info},
-              "classifier": f"{CLASSIFIER[0]} v{CLASSIFIER[1]}", "summary": summarize(result), **result}
+              "classifier": f"{CLASSIFIER[0]} v{CLASSIFIER[1]}", "summary": summarize(result),
+              "selective_summary": summarize_selective(result), **result}
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "pareto_val.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     plot(result, out_dir / "pareto_val.png",
          f"Checker routing vs predict-only (validation, {len(rows)} prompts){tag}")
     for name, s in report["summary"].items():
         print(f"  {name}: beats always-medium: {'yes' if s['beats_always_medium'] else 'no'}")
+    for name, s in report["selective_summary"].items():
+        print(f"  {name}:")
+        for p in s["points"]:
+            print(f"    skip_above {p['skip_above']:.2f}: kept {p['quality_retained']:.1%}, saved {p['cost_saved']:.1%}, "
+                  f"checked {p['checked_share']:.0%}, escalated {p['escalated_share']:.0%}, bad answers: "
+                  f"{p['bad_caught']} caught / {p['bad_skipped']} skipped / {p['bad_missed_by_checker']} missed "
+                  f"of {p['bad_total']}")
     print(f"saved {(out_dir / 'pareto_val.json').relative_to(PROJECT_ROOT)} and pareto_val.png")
 
 
