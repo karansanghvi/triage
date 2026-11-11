@@ -119,14 +119,14 @@ def test_falls_back_after_retries_run_out():
     assert (event.from_model, event.to_model, event.reason) == ("a1", "b1", "server")
 
 
-def test_circuit_breaker_skips_provider_then_recovers():
+def test_circuit_breaker_skips_the_failing_model_then_recovers():
     clock = FakeClock()
     client, fake, _ = make_client({"a1": ["server"]}, clock=clock)
 
-    client.send(MESSAGES, "low")              # a1 fails 3 times in a row: breaker trips
+    client.send(MESSAGES, "low")              # a1 fails 3 times in a row: its breaker trips
     fake.calls.clear()
 
-    result = client.send(MESSAGES, "low")     # alpha is skipped entirely
+    result = client.send(MESSAGES, "low")     # a1 is skipped
     assert fake.calls == ["b1"]
     assert result.attempts[0].outcome == "skipped"
 
@@ -136,12 +136,39 @@ def test_circuit_breaker_skips_provider_then_recovers():
     assert result.model.name == "a1"
 
 
-def test_breaker_skips_every_model_on_that_provider():
-    client, fake, _ = make_client({"a1": ["server"]}, chains={"low": ["a1", "a2", "b1"]})
+@pytest.mark.parametrize("kind", ["connection", "auth"])
+def test_provider_wide_failures_skip_every_model_on_that_provider(kind):
+    # Both alpha models fail (connection and auth errors aren't retried): a1, a2, then a1 again is the
+    # third provider failure in a row, so alpha trips during the second request and a2 is skipped there.
+    client, fake, _ = make_client({"a1": [kind], "a2": [kind]}, chains={"low": ["a1", "a2", "b1"]})
+    client.send(MESSAGES, "low")
     result = client.send(MESSAGES, "low")
-    assert fake.calls == ["a1", "a1", "a1", "b1"]   # a2 shares alpha, so it's skipped too
-    assert result.attempts[3].model_name == "a2"
-    assert result.attempts[3].outcome == "skipped"
+    assert fake.calls == ["a1", "a2", "b1", "a1", "b1"]
+    skipped = [a for a in result.attempts if a.outcome == "skipped"]
+    assert [a.model_name for a in skipped] == ["a2"] and skipped[0].error_kind == "circuit_open"
+    assert client.breaker.is_open("alpha")
+    fake.calls.clear()
+    client.send(MESSAGES, "low")                  # now every alpha model is skipped
+    assert fake.calls == ["b1"]
+
+
+@pytest.mark.parametrize("kind", ["server", "timeout", "rate_limit"])
+def test_model_failures_skip_only_that_model(kind):
+    # a1 keeps failing; a2 is on the same provider but is fine and must still be used
+    client, fake, _ = make_client({"a1": [kind]}, chains={"low": ["a1", "a2", "b1"]})
+    for _ in range(3):
+        result = client.send(MESSAGES, "low")
+        assert result.model.name == "a2"          # same provider, still used
+    assert client.breaker.is_open("model:a1") and not client.breaker.is_open("alpha")
+    fake.calls.clear()
+    result = client.send(MESSAGES, "low")         # only a1 is skipped now
+    assert fake.calls == ["a2"] and result.attempts[0].outcome == "skipped"
+
+
+def test_status_codes_map_to_error_kinds():
+    from app.providers.common import kind_from_status
+    assert [kind_from_status(c) for c in (401, 403, 404, 400, 413, 429, 500, 503)] == \
+        ["auth", "auth", "client", "client", "client", "rate_limit", "server", "server"]
 
 
 def test_all_models_failing_raises():

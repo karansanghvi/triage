@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from app.reliability import DEFAULT_ROUTING_PATH, RoutingConfig, routing_from_dict
+from app.api.verification import VerificationConfigError, VerificationPolicy, verification_from_dict
 from app.router.quality import QualityError, QualitySettings, quality_settings_from_dict
 
 UPDATABLE = ("quality", "fallback_chains")
@@ -31,6 +32,7 @@ class ConfigSnapshot:
     raw: dict                       # the parsed routing.yaml with updates applied
     quality: QualitySettings
     routing: RoutingConfig
+    verification: VerificationPolicy       # routing.yaml `verification:` (not changeable while running)
 
     def public(self) -> dict:
         return {"quality": copy.deepcopy(self.raw["quality"]),
@@ -42,7 +44,7 @@ class ActiveConfig:
         self.registry = registry
         self._lock = threading.Lock()
         self._snapshot = ConfigSnapshot(1, copy.deepcopy(raw), quality_settings_from_dict(raw),
-                                        routing_from_dict(raw, registry))
+                                        routing_from_dict(raw, registry), verification_from_dict(raw))
 
     @classmethod
     def from_file(cls, registry: dict, path: Path = DEFAULT_ROUTING_PATH) -> "ActiveConfig":
@@ -84,5 +86,5 @@ class ActiveConfig:
                 routing = routing_from_dict(raw, self.registry)
             except (QualityError, ValueError) as error:
                 raise ConfigUpdateError(str(error)) from None
-            self._snapshot = ConfigSnapshot(current.version + 1, raw, quality, routing)
+            self._snapshot = ConfigSnapshot(current.version + 1, raw, quality, routing, current.verification)
             return self._snapshot

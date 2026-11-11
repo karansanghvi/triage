@@ -205,8 +205,8 @@ def test_task_header_is_normalized_and_bad_ones_are_400(http, app_deps):
 
 def test_verify_header(http):
     assert post(http, headers={"X-Triage-Verify": "off"}).status_code == 200
-    sync = post(http, headers={"X-Triage-Verify": "sync"})
-    assert sync.status_code == 501 and "not available yet" in sync.json()["error"]["message"]
+    sync = post(http, headers={"X-Triage-Verify": "sync"})                 # Step 7: sync is built now
+    assert sync.status_code == 200 and sync.headers["x-triage-verified"] == "sync"
     both = post(http, {"model": "auto", "messages": ASK, "stream": True}, headers={"X-Triage-Verify": "sync"})
     assert both.status_code == 400 and both.json()["error"]["code"] == "unsupported_combination"
     assert post(http, headers={"X-Triage-Verify": "later"}).status_code == 400
@@ -317,13 +317,15 @@ def test_first_model_of_a_chain_cannot_change(http, app_deps):
 
 
 def test_backup_models_can_change_and_the_client_uses_them():
-    # a client error: not retried and doesn't trip the provider-wide breaker, so the groq backup is tried
-    app, deps = make_app({"groq-small": FakeBehavior(fail_before="client")}, predictor=FakePredictor(0.4, 0.95))
+    # groq-small's server errors trip only groq-small's breaker, so the groq-large backup is still tried
+    app, deps = make_app({"groq-small": FakeBehavior(fail_before="server")}, predictor=FakePredictor(0.4, 0.95))
     http = TestClient(app)
     r = http.put("/v1/routing-config", headers=auth(ADMIN_KEY),
                  json={"fallback_chains": {"medium": ["groq-small", "groq-large"]}})
     assert r.status_code == 200 and deps.client.routing.chains["medium"] == ["groq-small", "groq-large"]
     assert post(http).headers["x-triage-model"] == "groq-large"
+    assert deps.client.breaker.is_open("model:groq-small") and not deps.client.breaker.is_open("groq")
+    assert post(http).headers["x-triage-model"] == "groq-large"     # groq-small skipped, groq-large still used
 
 
 def test_config_update_is_validated_like_startup():
@@ -369,8 +371,9 @@ def test_log_row_fields(http, app_deps):
     assert row["classifier"] == "classifier_c_logreg_cv v2" and row["config_version"] == 1
     assert (row["p_low"], row["p_medium"]) == (0.4, 0.95) and len(row["prompt_hmac"]) == 64
     assert "prompt_sha256" not in row
-    for later in ("checker_verdict", "decided_by", "checker_version", "mode"):
+    for later in ("checker_verdict", "decided_by", "checker_version"):    # filled only by sync verification
         assert later in row and row[later] is None
+    assert row["mode"] == "api" and row["verified"] == "off"
 
 
 # ---------- settings_match_training ----------
@@ -463,10 +466,11 @@ def test_bad_streaming_config_is_rejected(streaming):
 
 
 def test_send_model_is_one_model_without_fallback():
-    client = client_with({"groq-small": FakeBehavior(fail_before="client")})
+    client = client_with({"groq-small": FakeBehavior(fail_before="server")})
     with pytest.raises(Exception, match="groq-small"):
-        client.send_model(ASK, "groq-small")
-    assert client.send_model(ASK, "groq-large").model.name == "groq-large"
+        client.send_model(ASK, "groq-small")                        # 3 server errors: groq-small's breaker trips
+    assert client.breaker.is_open("model:groq-small")
+    assert client.send_model(ASK, "groq-large").model.name == "groq-large"   # same provider, still used
     with pytest.raises(ValueError):
         client.send_model(ASK, "nope")
 

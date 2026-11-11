@@ -15,7 +15,7 @@ An LLM router that sends each request to the cheapest model that can handle it.
   - a timeout on every call
   - retries with exponential backoff and full jitter, only for rate limits (429) and server errors (5xx)
   - fallback chains per tier in `config/routing.yaml`, with backups on a different provider
-  - a circuit breaker: 3 failures in a row skip a provider for 60 seconds (rate limits skip only that model, since limits are per model)
+  - a circuit breaker: 3 failures in a row skip a model for 60 seconds (server errors, timeouts and rate limits are about one model); connection and auth errors skip every model on that provider
   - every fallback logged for the dashboard
 - **Exact-match cache** (`app/cache.py`): repeated `temperature=0` requests are answered from a SQLite file in about a millisecond, for $0, with a 24-hour expiry and hit/savings tracking.
 
@@ -113,13 +113,14 @@ for await (const chunk of stream) process.stdout.write(chunk.choices[0]?.delta?.
 |---|---|---|
 | `X-Triage-Quality` | `cheap`, `balanced`, `high`, or a number from 0 to 1 | the quality dial (tau); default `balanced` |
 | `X-Triage-Task` | `qa`, `coding`, `reasoning`, `extraction`, `summarization`, `classification`, `creative`, `open_ended` | skips the task-type guess |
-| `X-Triage-Verify` | `off` | `sync` arrives in a later step (501 for now; 400 with `stream=true`) |
+| `X-Triage-Verify` | `off`, `sync` | `sync` checks the answer before sending it and escalates a bad one (`model="auto"`, non-streaming only; 400 otherwise). Policy: `verification:` in `config/routing.yaml` |
 
 Anything else is a 400 that names the header.
 
 **Response headers:** `X-Triage-Request-Id`, `X-Triage-Model` (the model that answered), `X-Triage-Tier`,
 `X-Triage-Reason`, `X-Triage-Fallback` (`primary->backup`, or `none`), `X-Triage-Cache` (`hit`, `miss`,
-`bypass`), `X-Triage-Verified`, `X-Triage-Escalated`, and on non-streaming responses `X-Triage-Cost` and
+`bypass`), `X-Triage-Verified`, `X-Triage-Escalated`, `X-Triage-Check` (the check that decided: `format`,
+`ai_checker`, `ai_checker_error` or `none`), and on non-streaming responses `X-Triage-Cost` and
 `X-Triage-Saved` (US dollars at paid prices). On a stream, the headers go out once the first token exists,
 so model, tier and fallback are real, but cost isn't known yet. Those two headers are left out rather than
 guessed. Fetch the real figures with `GET /v1/requests/<request id>` once the stream ends. `Saved` assumes the
