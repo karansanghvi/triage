@@ -139,6 +139,20 @@ After that, the stream ends with an error event (the openai SDKs raise `APIError
 doesn't arrive within the limit in `routing.yaml` (`streaming:`) fails over. A long answer that streams steadily
 is never cut off.
 
+## Retraining the classifier (Phase 4)
+
+`python -m scripts.retrain` retrains the live classifier with the background labels in the request log. It
+adds them to the original fit set, keeps any validation or test prompt out (matched by HMAC, so it needs the
+API's `TRIAGE_HASH_SECRET`), and trains a candidate as the next model version. It then compares the candidate
+with the live model on the validation set. The candidate replaces the live model only if it's no worse on quality
+and clearly cheaper, or better on quality and no more expensive. Every run is recorded in
+`reports/retrain_history.jsonl`, and old model files are never overwritten. `--dry-run` trains and compares but
+changes nothing except the candidate's model files.
+
+**A new version is only used after a restart.** The API server loads the classifier once at startup. When
+retraining points `config/routing.yaml` at a new version, restart the server (for example, stop and rerun
+`uvicorn app.api.main:app`) to start routing with it. Until then, the running server keeps the old model.
+
 ## Privacy: what the request log keeps
 
 Every API request writes one row to a SQLite file (`TRIAGE_LOG_DB`, default `data/logs/requests.sqlite3`,
