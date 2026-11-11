@@ -26,7 +26,8 @@ class ProviderError(Exception):
       server      5xx, a problem on the provider's side
       timeout     no answer in time
       connection  couldn't reach the provider
-      client      4xx, e.g. bad key or bad model name
+      auth        401 / 403: the key is missing, wrong or not allowed (provider-wide)
+      client      other 4xx, e.g. a bad request or model name
       config      a problem on our side, e.g. a missing API key
     """
     RETRYABLE_KINDS = {"rate_limit", "server"}
@@ -54,6 +55,8 @@ def kind_from_status(status_code: int) -> str:
         return "rate_limit"
     if status_code >= 500:
         return "server"
+    if status_code in (401, 403):
+        return "auth"
     return "client"
 
 def split_system(messages: list[dict]) -> tuple[str, list[dict]]:

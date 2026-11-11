@@ -9,6 +9,8 @@ from app.cache import DEFAULT_CACHE_PATH, CachedSender, ResponseCache
 from app.providers.base import send_request
 from app.registry import load_registry
 from app.reliability import ReliableClient
+from app.verifier.ai_checker import CheckerSettings, load_checker_settings
+from app.verifier.judge import JudgeSettings, load_judge_settings
 
 FAKE_MODELS_ENV, CACHE_ENV, CACHE_PATH_ENV = "TRIAGE_FAKE_MODELS", "TRIAGE_CACHE", "TRIAGE_CACHE_PATH"
 
@@ -24,6 +26,9 @@ class RouterDeps:
     cached_sender: Optional[CachedSender] = None
     fake_models: Optional[object] = None
     hash_secret: bytes = field(default=b"", repr=False)   # TRIAGE_HASH_SECRET: keys prompt_hmac; never logged
+    checker_settings: Optional[CheckerSettings] = None   # config/checker.yaml (sync verification)
+    judge_settings: Optional[JudgeSettings] = None       # config/judge.yaml (background labels)
+    labeler: Optional[object] = None                     # background.BackgroundLabeler
 
     def strong_model(self) -> str:
         return self.config.snapshot().routing.chains["high"][0]
@@ -36,7 +41,9 @@ class RouterDeps:
 
 def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConfig] = None,
                cache: Optional[ResponseCache] = None, log=None, classifier: str = "", sleep=None,
-               fake_models=None, hash_secret: Optional[bytes] = None) -> RouterDeps:
+               fake_models=None, hash_secret: Optional[bytes] = None, labeler=None,
+               checker_settings: Optional[CheckerSettings] = None,
+               judge_settings: Optional[JudgeSettings] = None) -> RouterDeps:
     registry = registry or load_registry()
     config = config or ActiveConfig.from_file(registry)
     cached = CachedSender(cache, send_fn=send_fn) if cache is not None else None
@@ -45,7 +52,15 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
     log = log or InMemoryRequestLog()
     if hash_secret is None:
         hash_secret = hash_secret_from_env(required=isinstance(log, SQLiteRequestLog))
-    return RouterDeps(registry, config, client, predictor, log, classifier, cached, fake_models, hash_secret)
+    from app.api.background import BackgroundLabeler
+    from app.api.verification import check_background_budget
+    judge_settings = judge_settings or load_judge_settings()
+    deps = RouterDeps(registry, config, client, predictor, log, classifier, cached, fake_models, hash_secret,
+                      checker_settings or load_checker_settings(registry=registry), judge_settings,
+                      labeler or BackgroundLabeler())
+    # refuse to start if background labels could eat more than half of the strong or judge model's daily budget
+    check_background_budget(config.snapshot().verification.background, [deps.strong_model(), judge_settings.model_name])
+    return deps
 
 
 def load_predictor_checked():

@@ -17,12 +17,16 @@ logger = logging.getLogger("triage.reliability")
 
 DEFAULT_ROUTING_PATH = PROJECT_ROOT / "config" / "routing.yaml"
 
-# Errors that mean "this whole provider is unhealthy right now": skip all its models.
-PROVIDER_BREAKER_KINDS = {"server", "timeout", "connection"}
-# Rate limits are usually per model (Groq limits each model separately),
-# so a rate limit only skips the one model that hit it.
-MODEL_BREAKER_KINDS = {"rate_limit"}
-# Client errors (like a bad request) are usually our fault, so they don't count.
+# Errors that mean "this whole provider is unreachable or refusing us": skip all its models.
+# A connection error means the provider can't be reached at all; an auth error (401/403) means its key is
+# wrong or revoked, which no other model on that provider will get past either.
+PROVIDER_BREAKER_KINDS = {"connection", "auth"}
+# Errors that are about ONE model: skip only that model. Server errors (5xx) and timeouts usually come from
+# one overloaded or slow model (a long groq-large answer timing out says nothing about groq-small), and rate
+# limits are per model on Groq. Before Phase 4 Step 7 these tripped the whole provider, so one bad model could
+# take every Groq tier down for the cooldown.
+MODEL_BREAKER_KINDS = {"server", "timeout", "rate_limit"}
+# Client errors (like a bad request) are usually our fault, so they don't count. Neither do config errors.
 
 
 # ---------- Settings (loaded from routing.yaml) ----------

@@ -398,7 +398,7 @@ def test_schema_v2_has_prompt_hmac_and_no_plain_hash(tmp_path):
     SQLiteRequestLog(tmp_path / "r.sqlite3").close()
     db = sqlite3.connect(tmp_path / "r.sqlite3")
     cols = {c[1] for c in db.execute("PRAGMA table_info(requests)")}
-    assert SCHEMA_VERSION == 2 and "prompt_hmac" in cols and "prompt_sha256" not in cols
+    assert SCHEMA_VERSION >= 2 and "prompt_hmac" in cols and "prompt_sha256" not in cols
 
 
 # ---------- stats and lookups don't read the vectors ----------

@@ -14,7 +14,7 @@ Endpoints
     PUT  /v1/routing-config       update quality presets/default and backup models live (admin; not persisted)
 
 Response headers: X-Triage-Request-Id, -Model, -Tier, -Reason, -Fallback, -Cache, -Verified, -Escalated,
-and on non-streaming responses -Cost and -Saved. A stream's headers are sent once its first token exists, so
+-Check, and on non-streaming responses -Cost and -Saved (including any checks and escalation). A stream's headers are sent once its first token exists, so
 model, tier and fallback are real; its cost isn't known yet, so -Cost and -Saved are left out (never faked).
 The real figures are in GET /v1/requests/{id} once the stream ends, and in /v1/stats.
 """
@@ -32,14 +32,16 @@ from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.background import BackgroundTask
 
 from app.api import core
 from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_env
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
 from app.api.errors import APIError, bad_request, stream_error_event
-from app.api.headers import parse_quality, parse_task, parse_verify
+from app.api.headers import check_verify_model, parse_quality, parse_task, parse_verify
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.api.stats import summarize
+from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
 from app.providers.base import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
 from app.providers.common import ProviderError
@@ -50,7 +52,7 @@ logger = logging.getLogger("triage.api")
 request_logger = logging.getLogger("triage.requests")
 JSON_LOG_FIELDS = ("request_id", "timestamp", "key_id", "requested_model", "stream", "tier", "served_model",
                    "fell_back", "cache_hit", "status", "http_status", "error_kind", "latency_ms", "ttft_ms",
-                   "price_as_cost", "saved", "training_eligible")
+                   "price_as_cost", "saved", "verified", "escalated", "decided_by", "training_eligible")
 
 
 def json_log_line(row: RequestRow) -> str:
@@ -153,11 +155,40 @@ def _apply_decision(row: RequestRow, d: core.RouteDecision) -> None:
     row.attempts = [{"model": a.model_name, "outcome": a.outcome, "error_kind": a.error_kind} for a in d.attempts]
 
 
-def _triage_headers(d: core.RouteDecision, cache: str) -> dict:
-    return {"X-Triage-Request-Id": d.request_id, "X-Triage-Model": d.model, "X-Triage-Tier": d.tier,
-            "X-Triage-Reason": _header_safe(d.reason),
+def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] = None, tier: Optional[str] = None,
+                    reason: Optional[str] = None, verified: str = "off", escalated: bool = False,
+                    check: str = "none") -> dict:
+    return {"X-Triage-Request-Id": d.request_id, "X-Triage-Model": model or d.model, "X-Triage-Tier": tier or d.tier,
+            "X-Triage-Reason": _header_safe(reason or d.reason),
             "X-Triage-Fallback": f"{d.primary_model}->{d.model}" if d.fell_back else "none",
-            "X-Triage-Cache": cache, "X-Triage-Verified": "off", "X-Triage-Escalated": "false"}
+            "X-Triage-Cache": cache, "X-Triage-Verified": verified,
+            "X-Triage-Escalated": "true" if escalated else "false", "X-Triage-Check": check}
+
+
+def _apply_verification(row: RequestRow, first, outcome, deps) -> None:
+    """Costs and log fields after sync verification: the served answer's tokens, every call's cost."""
+    final = outcome.final.response
+    _apply_costs(row, final, deps)                     # tokens, cache and strong_cost from the served answer
+    row.price_as_cost = first.reported_cost + outcome.check_cost + outcome.escalation_cost
+    row.cost = first.cost + outcome.check_actual_cost + outcome.escalation_actual_cost
+    row.saved = row.strong_cost - row.price_as_cost
+    row.escalated, row.decided_by = outcome.escalated, outcome.decided_by
+    row.checker_verdict, row.checker_version = outcome.checker_verdict, outcome.checker_version
+    row.escalated_from, row.escalated_to = outcome.escalated_from, outcome.escalated_to
+    row.escalation_extra_cost = outcome.escalation_cost
+    row.escalation_extra_latency_ms = round(outcome.escalation_latency_ms, 1)
+    row.check_cost, row.check_latency_ms = outcome.check_cost, round(outcome.check_latency_ms, 1)
+    if outcome.escalation_error:
+        row.error_kind = outcome.escalation_error      # served the last answer; the escalation found no model
+    row.tier, row.served_model = outcome.final.tier, outcome.final.model
+
+
+def _verified_reason(d: core.RouteDecision, outcome) -> str:
+    if not outcome.steps:
+        return d.reason
+    if outcome.escalated:
+        return f"{d.reason}; verified: {outcome.escalated_from}->{outcome.escalated_to} ({outcome.decided_by})"
+    return f"{d.reason}; verified: kept {d.tier} ({outcome.decided_by}: {outcome.checker_verdict})"
 
 
 def _usage(response) -> dict:
@@ -232,7 +263,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         snapshot = deps.config.snapshot()
         tau = parse_quality(x_triage_quality, snapshot.quality)
         task = parse_task(x_triage_task)
-        parse_verify(x_triage_verify, body.stream)
+        verify = parse_verify(x_triage_verify, body.stream)
+        check_verify_model(verify, body.model)
         auto = body.model == "auto"
 
         messages = [m.model_dump() for m in body.messages]
@@ -248,7 +280,7 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                          config_version=snapshot.version, temperature=temperature, max_tokens=max_tokens,
                          settings_match_training=(temperature == training.get("temperature")
                                                   and max_tokens == training.get("max_tokens")) if auto else None,
-                         prompt_hmac=prompt_hmac(messages, deps.hash_secret))
+                         prompt_hmac=prompt_hmac(messages, deps.hash_secret), verified=verify, mode="api")
 
         logged = []
         recorder = _RecordingPredictor(deps.predictor)
@@ -258,7 +290,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             if logged:
                 return
             logged.append(True)
-            row.status, row.http_status, row.error_kind = status, http_status, error_kind
+            row.status, row.http_status = status, http_status
+            row.error_kind = error_kind if error_kind is not None else row.error_kind   # keep a verification note
             row.latency_ms = round((time.perf_counter() - started) * 1000, 1)
             _apply_inputs(row, recorder.prediction)
             row.training_eligible = is_training_eligible(row)
@@ -284,6 +317,13 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         row.ttft_ms = round((time.perf_counter() - started) * 1000, 1)
         created = int(time.time())
 
+        # Background labels: only for auto requests with verification off. The labeler decides (eligibility,
+        # sampling, daily cap) after the response has been sent; it gets the text from memory only.
+        def background(answer_text):
+            if not auto or verify != "off" or deps.labeler is None:
+                return None
+            return BackgroundTask(deps.labeler.run, deps, row, messages, answer_text)
+
         if not body.stream:
             try:
                 text = "".join([piece async for piece in routed.pieces])
@@ -292,18 +332,30 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                 raise APIError(502, f"The model failed while answering: {error.kind}", "server_error",
                                code="model_error") from None
             response = routed.response
-            _apply_costs(row, response, deps)
+            served_model, served_tier, reason, check, escalated = decision.model, decision.tier, None, "none", False
+            if verify == "sync":
+                outcome = await verify_sync(messages, Served(decision.tier, decision.model, response, text),
+                                            snapshot.verification.sync, deps, settings)
+                _apply_verification(row, response, outcome, deps)
+                response, text = outcome.final.response, outcome.final.text
+                served_model, served_tier, check, escalated = (outcome.final.model, outcome.final.tier,
+                                                               outcome.decided_by, outcome.escalated)
+                reason = _verified_reason(decision, outcome)
+            else:
+                _apply_costs(row, response, deps)
             finish()
             cache = "hit" if response.cached else ("miss" if is_cacheable(temperature, False) else "bypass")
-            headers = _triage_headers(decision, cache) | {"X-Triage-Cost": _money(row.price_as_cost),
-                                                          "X-Triage-Saved": _money(row.saved)}
-            completion = {"id": request_id, "object": "chat.completion", "created": created, "model": decision.model,
+            headers = _triage_headers(decision, cache, model=served_model, tier=served_tier, reason=reason,
+                                      verified=verify, escalated=escalated, check=check) | {
+                "X-Triage-Cost": _money(row.price_as_cost), "X-Triage-Saved": _money(row.saved)}
+            completion = {"id": request_id, "object": "chat.completion", "created": created, "model": served_model,
                           "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
                                        "finish_reason": response.finish_reason or "stop"}],
                           "usage": _usage(response)}
-            return JSONResponse(completion, headers=headers)
+            return JSONResponse(completion, headers=headers, background=background(text))
 
         include_usage = bool(body.stream_options and body.stream_options.include_usage)
+        streamed = []                                         # the answer, in memory only, for a background label
 
         async def events():
             try:
@@ -316,6 +368,7 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             yield _chunk(request_id, created, decision.model, {"role": "assistant", "content": ""})
             try:
                 async for piece in routed.pieces:
+                    streamed.append(piece)
                     yield _chunk(request_id, created, decision.model, {"content": piece})
             except Exception as error:                           # after the first token: no fallback
                 kind = getattr(error, "kind", type(error).__name__)
@@ -332,8 +385,13 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                 yield _chunk(request_id, created, decision.model, None, usage=_usage(response), choices=False)
             yield "data: [DONE]\n\n"
 
+        async def stream_background():                       # runs after the last byte has been sent
+            if background(None) is not None:
+                await deps.labeler.run(deps, row, messages, "".join(streamed) if row.status == "ok" else None)
+
         return StreamingResponse(events(), media_type="text/event-stream",
-                                 headers=_triage_headers(decision, "bypass") | {"Cache-Control": "no-cache"})
+                                 headers=_triage_headers(decision, "bypass") | {"Cache-Control": "no-cache"},
+                                 background=BackgroundTask(stream_background))
 
     # ----- models, stats, requests -----
 

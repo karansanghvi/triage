@@ -13,6 +13,7 @@ from app.api import core
 from app.api.config_state import ActiveConfig
 from app.api.deps import build_deps
 from app.api.fake_models import FakeModels
+from app.api.verification import DEFAULT_SECTION as DEFAULT_VERIFICATION
 from app.reliability import DEFAULT_ROUTING_PATH
 from app.router.predictor import Prediction
 from app.router.quality import route
@@ -42,14 +43,17 @@ def routing_raw(first_token=None) -> dict:
 
 
 def make_deps(script=None, *, predictor=None, first_token=None, cache=None, model_sleep=time.sleep, log=None,
-              hash_secret=TEST_HASH_SECRET):
+              hash_secret=TEST_HASH_SECRET, sample_rate=0.0, labeler=None, raw=None):
     """Real registry, real routing.yaml (optionally a short first-token limit), real ReliableClient
     (backoff sleeps skipped), fake models."""
     from app.registry import load_registry
     registry = load_registry()
     fake = FakeModels(script, sleep=model_sleep)
+    raw = raw or routing_raw(first_token)
+    raw.setdefault("verification", copy.deepcopy(DEFAULT_VERIFICATION))
+    raw["verification"].setdefault("background", {})["sample_rate"] = sample_rate   # background labels off by default
     deps = build_deps(predictor or FakePredictor(), fake, registry=registry,
-                      config=ActiveConfig(routing_raw(first_token), registry), cache=cache,
+                      config=ActiveConfig(raw, registry), cache=cache, labeler=labeler,
                       classifier="classifier_c_logreg_cv v2", sleep=lambda s: None, fake_models=fake, log=log,
                       hash_secret=hash_secret)
     return deps

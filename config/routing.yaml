@@ -56,6 +56,37 @@ streaming:
     gemini-flash: 30
     ollama-llama: 32
 
+# Answer verification in the API (Phase 4 Step 7; app/api/verification.py, app/api/background.py).
+# Not changeable with PUT /v1/routing-config: edit this file and restart.
+verification:
+  # X-Triage-Verify: sync (model "auto", non-streaming). For the tier that answered: the checks to run, in order
+  # (format = the free format checker; ai_checker = config/checker.yaml, v3, groq-small), and where a "bad"
+  # answer goes. The escalated tier then gets its own checks. Default: no AI checker on low (a check costs 2-6x a
+  # low answer, reports/PHASE_4.md Step 1 notes). To be revisited once Step 3 picks a strategy on validation.
+  sync:
+    tiers:
+      low:
+        checks: [format]
+        escalate_to: medium
+      medium:
+        checks: [format, ai_checker]
+        escalate_to: high
+      high:
+        checks: []                 # the strong answer is final and never checked
+    on_error: escalate             # the AI checker errored or gave no verdict: escalate | accept
+    agreement_on_comparable: false # reserved: agreement instead of the AI checker on comparable prompts
+                                   # (Step 3 strategy b). Not built; true is rejected at startup.
+  # Default mode (no X-Triage-Verify, or off): after the response is sent, a sample of "auto" requests (served
+  # tier low or medium, no fallback) is graded against the strong model's answer by the judge (v3) and written
+  # to the labels table. Noisy labels: see app/api/background.py.
+  background:
+    sample_rate: 0.1
+    # groq-large's whole free budget is 200K tokens/day (config/collection.yaml limits), and it is shared with
+    # live high-tier traffic and sync escalations, so background labeling gets at most a quarter of it.
+    # Startup refuses a token cap above half of the strong or judge model's daily budget.
+    daily_max_calls: 50            # strong answers + judge calls per UTC day (both use groq-large)
+    daily_max_tokens: 50000
+
 # Request settings. These MUST match the Phase 2 collection (config/collection.yaml): the classifier
 # predicts "will this model pass with THESE settings?" (tests/test_live_settings.py checks they match).
 # Callers may override generation per call; model_params can only be set here.

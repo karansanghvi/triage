@@ -28,7 +28,7 @@ from app.registry import PROJECT_ROOT
 
 LOG_DB_ENV, LOG_KIND_ENV, HASH_SECRET_ENV = "TRIAGE_LOG_DB", "TRIAGE_LOG", "TRIAGE_HASH_SECRET"
 DEFAULT_LOG_DB = PROJECT_ROOT / "data" / "logs" / "requests.sqlite3"
-SCHEMA_VERSION = 2        # 2: prompt_sha256 replaced by prompt_hmac (keyed with TRIAGE_HASH_SECRET)
+SCHEMA_VERSION = 3        # 2: prompt_sha256 -> prompt_hmac. 3: verification fields and the labels table (Step 7)
 VECTOR_FIELDS = ("features", "embedding")          # skipped by reads that don't need them (stats, lookups)
 
 
@@ -73,13 +73,19 @@ class RequestRow:
     latency_ms: Optional[float] = None
     ttft_ms: Optional[float] = None
     prompt_hmac: Optional[str] = None      # HMAC-SHA256 of the messages, keyed with TRIAGE_HASH_SECRET
-    # verification (filled in from Step 7 on)
-    verified: Optional[str] = "off"
+    # verification (Step 7)
+    verified: Optional[str] = "off"        # off | sync (background labels live in the labels table)
     escalated: Optional[bool] = False
-    checker_verdict: Optional[str] = None
-    decided_by: Optional[str] = None
-    checker_version: Optional[int] = None  # or the judge's version, whichever decided
-    mode: Optional[str] = None             # demo | byok | api (filled in later)
+    checker_verdict: Optional[str] = None  # the deciding check's verdict: good | bad | error
+    decided_by: Optional[str] = None       # format | ai_checker | ai_checker_error | none (sync only)
+    checker_version: Optional[int] = None  # the AI checker's version, when it ran
+    mode: Optional[str] = None             # demo | byok | api ("api" for key-authenticated requests)
+    escalated_from: Optional[str] = None   # the tier the router picked
+    escalated_to: Optional[str] = None     # the tier whose answer was served
+    escalation_extra_cost: Optional[float] = None       # price_as cost of the extra answers
+    escalation_extra_latency_ms: Optional[float] = None
+    check_cost: Optional[float] = None     # price_as cost of the AI checks
+    check_latency_ms: Optional[float] = None
     # Step 8 storage (auto requests that answered; None otherwise)
     features: Optional[list] = None        # the 14 handcrafted features, in features.FEATURE_NAMES order
     embedding: Optional[bytes] = None      # float32 little-endian, 384 values (embedding_from_bytes)
@@ -125,9 +131,30 @@ def embedding_from_bytes(blob: bytes) -> np.ndarray:
 
 def is_training_eligible(row: RequestRow) -> bool:
     """Only answers the classifier's labels would describe: model="auto", answered without an error, by the
-    tier's own first model (no fallback), with the settings the classifier learned from (Phase 2's)."""
+    tier's own first model (no fallback), not escalated by verification (then the served answer isn't from the
+    model the classifier predicted for), with the settings the classifier learned from (Phase 2's)."""
     return (row.requested_model == "auto" and row.status == "ok" and row.fell_back is False
-            and row.settings_match_training is True)
+            and not row.escalated and row.settings_match_training is True)
+
+
+@dataclass
+class LabelRow:
+    """A background label (app/api/background.py): the served answer graded against the strong model's
+    answer. No text. NOISY: the reference can be wrong too (see background.py)."""
+    request_id: str
+    created_at: str                        # UTC ISO 8601
+    status: str                            # labeled | skipped
+    skip_reason: Optional[str] = None      # daily_cap, no_reference, error, model_failed, error:<type>
+    passed: Optional[bool] = None
+    judge_score: Optional[int] = None      # 1-5, after the constraint cap
+    judge_version: Optional[int] = None
+    judge_model: Optional[str] = None
+    reference_model: Optional[str] = None  # the strong model that wrote the reference answer
+    served_model: Optional[str] = None
+    served_tier: Optional[str] = None
+    calls: int = 0                         # strong answer + judge calls this label used
+    tokens: int = 0
+    cost: Optional[float] = None           # price_as
 
 
 class RequestLog(Protocol):
@@ -135,12 +162,28 @@ class RequestLog(Protocol):
     # oldest first; key_id = only that key's; include_vectors=False leaves features and embedding None
     def rows(self, key_id: Optional[str] = None, include_vectors: bool = True) -> list: ...
     def get(self, request_id: str, include_vectors: bool = True) -> Optional[RequestRow]: ...
+    def write_label(self, label: LabelRow) -> None: ...
+    def labels(self, request_id: Optional[str] = None) -> list: ...
+    def label_usage_since(self, created_at: str) -> tuple: ...      # (calls, tokens) of labels since then
 
 
 class InMemoryRequestLog:
     def __init__(self):
-        self._rows, self._by_id = [], {}
+        self._rows, self._by_id, self._labels = [], {}, []
         self._lock = threading.Lock()
+
+    def write_label(self, label: LabelRow) -> None:
+        with self._lock:
+            self._labels.append(label)
+
+    def labels(self, request_id: Optional[str] = None) -> list:
+        with self._lock:
+            return [l for l in self._labels if request_id is None or l.request_id == request_id]
+
+    def label_usage_since(self, created_at: str) -> tuple:
+        with self._lock:
+            recent = [l for l in self._labels if l.created_at >= created_at]
+        return sum(l.calls for l in recent), sum(l.tokens for l in recent)
 
     def write(self, row: RequestRow) -> None:
         with self._lock:
@@ -164,6 +207,7 @@ class InMemoryRequestLog:
 # ---------- SQLite ----------
 
 _FIELDS = [f for f in fields(RequestRow)]
+_LABEL_FIELDS = [f for f in fields(LabelRow)]
 
 
 def _base_type(t):
@@ -174,7 +218,7 @@ def _base_type(t):
 
 _SQL_TYPE = {str: "TEXT", int: "INTEGER", float: "REAL", bool: "INTEGER", bytes: "BLOB", list: "TEXT"}
 _JSON = {"attempts", "features"}            # stored as JSON text
-_BOOL = {f.name for f in _FIELDS if _base_type(f.type) is bool}
+_BOOL = {f.name for f in _FIELDS + _LABEL_FIELDS if _base_type(f.type) is bool}
 
 
 def _column(f) -> str:
@@ -188,6 +232,10 @@ SCHEMA = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_request_id ON requests (request_id)",
     "CREATE INDEX IF NOT EXISTS idx_requests_key_id ON requests (key_id)",
     "CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests (timestamp)",
+    "CREATE TABLE IF NOT EXISTS labels (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    + ", ".join(_column(f) for f in _LABEL_FIELDS) + ")",
+    "CREATE INDEX IF NOT EXISTS idx_labels_request_id ON labels (request_id)",
+    "CREATE INDEX IF NOT EXISTS idx_labels_created_at ON labels (created_at)",
 )
 
 
@@ -267,6 +315,28 @@ class SQLiteRequestLog:
     def get(self, request_id: str, include_vectors: bool = True) -> Optional[RequestRow]:
         found = self._select("WHERE request_id = ?", (request_id,), include_vectors)
         return found[0] if found else None
+
+    # ----- labels -----
+
+    def write_label(self, label: LabelRow) -> None:
+        names = [f.name for f in _LABEL_FIELDS]
+        values = [self._to_sql(n, getattr(label, n)) for n in names]
+        sql = f"INSERT INTO labels ({', '.join(names)}) VALUES ({', '.join('?' * len(names))})"
+        with self._lock:
+            self._db.execute(sql, values)
+
+    def labels(self, request_id: Optional[str] = None) -> list:
+        names = [f.name for f in _LABEL_FIELDS]
+        where, args = ("WHERE request_id = ?", (request_id,)) if request_id is not None else ("", ())
+        with self._lock:
+            found = self._db.execute(f"SELECT {', '.join(names)} FROM labels {where} ORDER BY id", args).fetchall()
+        return [LabelRow(**{n: self._from_sql(n, v) for n, v in zip(names, values)}) for values in found]
+
+    def label_usage_since(self, created_at: str) -> tuple:
+        with self._lock:
+            calls, tokens = self._db.execute("SELECT COALESCE(SUM(calls), 0), COALESCE(SUM(tokens), 0) FROM labels "
+                                             "WHERE created_at >= ?", (created_at,)).fetchone()
+        return int(calls), int(tokens)
 
     def close(self) -> None:
         with self._lock:

@@ -33,7 +33,12 @@ def parse_verify(value: Optional[str], stream: bool) -> str:
     if mode == "sync" and stream:
         raise bad_request(f"{VERIFY}: sync can't be combined with stream=true: the answer has to be checked "
                           "before any of it is sent", VERIFY, "unsupported_combination")
-    if mode == "sync":
-        raise APIError(501, f"{VERIFY}: sync is not available yet (Phase 4 Step 7). Use off, or leave the header out.",
-                       "not_implemented", VERIFY, "not_available_yet")
     return mode
+
+
+def check_verify_model(mode: str, model: str) -> None:
+    """Sync verification may escalate to a stronger model, so it only works when Triage picks the model."""
+    if mode == "sync" and model != "auto":
+        raise bad_request(f"{VERIFY}: sync only works with model \"auto\". With a named model ({model!r}) Triage "
+                          "won't switch to a model you didn't choose; drop the header or use model \"auto\".",
+                          VERIFY, "unsupported_combination")
