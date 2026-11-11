@@ -50,3 +50,6 @@ models/*.joblib
 
 # Request logs from the API (SQLite; no keys or text, but per-request data)
 data/logs/
+
+# Calibration run locks (temporary; not committed)
+data/checker_calibration/*.pid
