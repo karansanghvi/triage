@@ -53,3 +53,5 @@ data/logs/
 
 # Calibration run locks (temporary; not committed)
 data/checker_calibration/*.pid
+
+data/checker_val/*.pid
