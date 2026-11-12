@@ -43,7 +43,10 @@ ON_ERROR = ("escalate", "accept")
 DEFAULT_SECTION = {
     "sync": {
         "tiers": {"low": {"checks": ["format"], "escalate_to": "medium"},
-                  "medium": {"checks": ["format", "ai_checker"], "escalate_to": "high"},
+                  # skip_check_above 0.90: chosen on validation in Phase 4 Step 3, the best skip_above at every
+                  # high/medium price ratio tried (reports/price_sensitivity_val.json); min_answer_tokens stays off
+                  "medium": {"checks": ["format", "ai_checker"], "escalate_to": "high",
+                             "skip_check_above": 0.90, "min_answer_tokens": 0},
                   "high": {"checks": []}},
         "on_error": "escalate",
         "agreement_on_comparable": False,

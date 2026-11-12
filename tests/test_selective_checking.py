@@ -174,13 +174,14 @@ def checks(deps):
     return [c for c in deps.fake_models.calls if c["kind"] == "check"]
 
 
-def test_defaults_are_off_and_unchanged():
+def test_default_skips_above_0_90_with_no_length_rule():
     from app.api.config_state import ActiveConfig
     from app.registry import load_registry
     medium = ActiveConfig.from_file(load_registry()).snapshot().verification.sync.tiers["medium"]
-    assert (medium.skip_check_above, medium.min_answer_tokens) == (None, 0)
-    assert medium == TierPolicy(("format", "ai_checker"), "high")
-    http, deps = app_with({"groq-small": FakeBehavior(check_reply=BAD_CHECK)}, p_medium=0.999)
+    assert (medium.skip_check_above, medium.min_answer_tokens) == (0.90, 0)
+    assert medium == TierPolicy(("format", "ai_checker"), "high", skip_check_above=0.90, min_answer_tokens=0)
+    assert DEFAULT_SECTION["sync"]["tiers"]["medium"]["skip_check_above"] == 0.90
+    http, deps = app_with({"groq-small": FakeBehavior(check_reply=BAD_CHECK)}, p_medium=0.999, skip_above=None)
     r = post(http)                                                       # very confident, but skipping is off
     assert r.headers["x-triage-check"] == "ai_checker" and r.json()["model"] == "groq-large" and len(checks(deps)) == 1
 
@@ -209,12 +210,12 @@ def test_a_borderline_medium_answer_is_still_checked():
 
 def test_a_short_answer_skips_the_check_in_sync_mode():
     # the fake answer has about 17 visible tokens
-    http, deps = app_with({"groq-small": FakeBehavior(check_reply=BAD_CHECK)}, p_medium=0.90, min_tokens=100)
+    http, deps = app_with({"groq-small": FakeBehavior(check_reply=BAD_CHECK)}, p_medium=0.90, min_tokens=100, skip_above=None)
     r = post(http)
     assert r.headers["x-triage-check"] == "skipped_short" and r.json()["model"] == "groq-small"
     assert checks(deps) == [] and deps.log.rows()[-1].decided_by == "skipped_short"
     long_answer = FakeBehavior(text="word " * 600, check_reply=BAD_CHECK)
-    http, deps = app_with({"groq-small": long_answer}, p_medium=0.90, min_tokens=100)
+    http, deps = app_with({"groq-small": long_answer}, p_medium=0.90, min_tokens=100, skip_above=None)
     assert post(http).headers["x-triage-check"] == "ai_checker"
 
 

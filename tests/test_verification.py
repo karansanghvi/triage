@@ -30,9 +30,12 @@ MEDIUM, LOW, HIGH = FakePredictor(0.4, 0.95), FakePredictor(0.95, 0.97), FakePre
 
 
 def app_with(script=None, *, predictor=MEDIUM, on_error=None, background=None, sample_rate=0.0, labeler=None,
-             log=None, cache=None):
+             log=None, cache=None, skip_check_above=None):
     raw = routing_raw()
     raw["verification"] = copy.deepcopy(DEFAULT_SECTION)
+    # These tests are about the check itself, so medium always checks (None) unless a test says otherwise; the
+    # shipped default (0.90) would skip it for MEDIUM's confident p_medium 0.95
+    raw["verification"]["sync"]["tiers"]["medium"]["skip_check_above"] = skip_check_above
     if on_error:
         raw["verification"]["sync"]["on_error"] = on_error
     if background:

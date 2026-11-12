@@ -75,7 +75,7 @@ verification:
         # (null = always check; 1.0 also always checks), or when medium's answer is shorter than
         # min_answer_tokens visible tokens (0 = off). A skip shows as X-Triage-Check: skipped_confident /
         # skipped_short. Pick values from the Step 3 sweep (eval/checker_routing.py, strategy e) first.
-        skip_check_above: null
+        skip_check_above: 0.90 # Step 3: best setting at every price ratio (validation)
         min_answer_tokens: 0
       high:
         checks: []                 # the strong answer is final and never checked
