@@ -99,11 +99,21 @@ def dry_run(model: str, items: list, skipped: Counter, prompts: dict, answers: d
     registry = registry or load_registry()
     left = todo(items, read_records(log_path(model, val_dir)), model, settings.checker_version)   # read-only
     calib = read_records(Path(CALIB_DIR) / f"checks_{model}.jsonl")
-    estimate = make_estimate(model, calib, registry)        # output tokens / latency from calibration, if any
+    done = read_records(log_path(model, val_dir))
+    estimate = make_estimate(model, calib, registry)        # prices, and a fallback output length
+    # A total uses the mean output length of real calls (this run's own if any, else calibration's). Input tokens
+    # come from each check's own length (CheckEstimate: within 1% of the real input on the first 58 checks).
+    real = [r["output_tokens"] for r in (done or calib) if r.get("checker_model") == model and r.get("api_calls")
+            and r.get("output_tokens")]
+    out_per_call = sum(real) / len(real) if real else estimate.output_tokens
+    basis = ("mean of this run's calls" if done and real else "mean of calibration calls" if real else "default")
     in_tokens = [CheckEstimate.input_tokens_for(prompts[c["prompt_id"]]["messages"],
                                                 answers[(c["prompt_id"], c["tier"])]["answer"]) for c in left]
-    tokens = sum(in_tokens) + estimate.output_tokens * len(left)
-    tpd = load_collection_config(registry).limits[model].tpd
+    tokens = sum(in_tokens) + out_per_call * len(left)
+    limits = load_collection_config(registry).limits[model]
+    tpd = limits.tpd
+    pacer = Pacer(limits, usage_history(model) + check_log_usage(log_path(model, val_dir), model))
+    used_calls, used_tokens = pacer._day_usage()
     by_tier = Counter(c["tier"] for c in items)
     left_by_tier = Counter(c["tier"] for c in left)
     return {
@@ -111,10 +121,13 @@ def dry_run(model: str, items: list, skipped: Counter, prompts: dict, answers: d
         "answers_to_check": dict(sorted(by_tier.items())), "skipped": dict(sorted(skipped.items())),
         "already_finished": len(items) - len(left), "calls_to_make": len(left),
         "calls_to_make_by_tier": dict(sorted(left_by_tier.items())),
-        "estimated_tokens": round(tokens), "estimated_cost_usd": round(sum(estimate.cost(t) for t in in_tokens), 4),
+        "estimated_tokens": round(tokens),
+        "estimated_cost_usd": round(sum((t * estimate.input_price + out_per_call * estimate.output_price) / 1e6
+                                        for t in in_tokens), 4),
         "estimated_days_at_tpd": round(tokens / tpd, 2) if tpd else None,
-        "estimate_basis": f"output {estimate.output_tokens:.0f} tokens per call "
-                          f"({'median of calibration' if calib else 'default'}); retries not included",
+        "estimate_basis": f"output {out_per_call:.0f} tokens per call ({basis}); retries not included",
+        "budget_used_last_24h": {"tokens": used_tokens, "calls": used_calls, "tpd": tpd,
+                                 "note": "every Triage run on this model counts (calibration, judging, Phase 2)"},
     }
 
 
@@ -183,6 +196,8 @@ def main(argv=None):
     pid_path.write_text(str(os.getpid()))
     try:
         print(run(args.model, items, prompts, answers, limit=args.limit, wait=not args.no_wait))
+    except KeyboardInterrupt:
+        raise SystemExit("\nstopped. Finished checks are saved; rerun the same command to continue.") from None
     finally:
         if running_pid(pid_path) == os.getpid():
             pid_path.unlink()

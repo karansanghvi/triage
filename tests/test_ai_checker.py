@@ -308,3 +308,33 @@ def test_records_from_before_latency_still_load(tmp_path):
     (tmp_path / "checks.jsonl").write_text(json.dumps(record) + "\n")
     again, reused, _ = logged(CheckLog(tmp_path / "checks.jsonl"))
     assert reused and again.good is True
+
+
+# ---------- Groq JSON mode refusing a non-JSON reply (seen live on arena_0002) ----------
+
+GROQ_JSON_400 = ProviderError("groq", "client", "Error code: 400 - {'error': {'message': \"Failed to validate JSON. "
+                              "Please adjust your prompt. See 'failed_generation' for more details.\", 'type': "
+                              "'invalid_request_error', 'code': 'json_validate_failed'}}", 400)
+
+
+def test_a_json_mode_rejection_is_a_finished_invalid_json_error():
+    result, fake = run(GROQ_JSON_400, GOOD)
+    assert (result.status, result.good, result.error_kind) == ("error", None, "invalid_json")
+    assert result.attempts == 1 and len(fake.calls) == 1          # it reached the model; no pointless retry
+    assert "json_validate_failed" in result.reason
+
+
+def test_other_client_errors_stay_provider_errors():
+    result, _ = run(ProviderError("groq", "client", "Error code: 400 - model not found"))
+    assert result.error_kind == "provider:client" and result.attempts == 0
+
+
+def test_a_json_mode_rejection_is_not_retried_on_the_next_run(tmp_path):
+    log = CheckLog(tmp_path / "checks.jsonl")
+    first, reused, _ = logged(log, GROQ_JSON_400)
+    assert not reused and first.error_kind == "invalid_json"
+    assert set(k[0] for k in log.finished()) == {"p1"}                    # finished: never charged again
+    again, reused, fake = logged(CheckLog(tmp_path / "checks.jsonl"))
+    assert reused and fake.calls == []
+    record = json.loads((tmp_path / "checks.jsonl").read_text())
+    assert record["api_calls"] == 1                                      # counted by the pacer as a request

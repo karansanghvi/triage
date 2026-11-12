@@ -113,7 +113,7 @@ class PacedSend:
                     raise BudgetExhausted(f"{model_name}'s daily budget is used up")
                 seconds = self.pacer.seconds_until_daily_room(estimate) + 30
                 until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
-                self.say(f"daily limit for {model_name} reached; waiting {seconds / 3600:.1f}h")
+                self.say(waiting_message(model_name, self.pacer, seconds, until))
                 self.waiter(until)
             self.pacer.wait_for_minute_slot(estimate)
         response = self.send_fn(messages, model_name, settings)
@@ -121,6 +121,19 @@ class PacedSend:
         if self.pacer is not None:
             self.pacer.record(1, (response.input_tokens or 0) + (response.output_tokens or 0))
         return response
+
+
+def waiting_message(model_name: str, pacer, seconds: float, until: datetime) -> str:
+    used = ""
+    if hasattr(pacer, "_day_usage") and hasattr(pacer, "limits"):
+        calls, tokens = pacer._day_usage()
+        tpd = pacer.limits.tpd
+        used = (f" ({tokens:,} of {tpd:,} tokens" if tpd else f" ({tokens:,} tokens") + \
+            f" and {calls} calls in the last 24h, every Triage run counted)"
+    local = until.astimezone().strftime("%H:%M %Z")
+    return (f"daily limit for {model_name} reached{used}; waiting {seconds / 3600:.1f}h, until about {local}. "
+            "Finished checks are saved: Ctrl+C is safe, and rerunning the same command continues where it stopped "
+            "(--no-wait stops instead of waiting)")
 
 
 class BudgetExhausted(Exception):
@@ -233,6 +246,8 @@ def main(argv=None):
     pid_path.write_text(str(os.getpid()))
     try:
         print(run(args.model, repeat=args.repeat, limit=args.limit, wait=not args.no_wait))
+    except KeyboardInterrupt:
+        raise SystemExit("\nstopped. Finished checks are saved; rerun the same command to continue.") from None
     finally:
         if running_pid(pid_path) == os.getpid():
             pid_path.unlink()

@@ -369,3 +369,13 @@ def test_results_from_another_prompt_are_not_counted(tmp_path, metrics, monkeypa
     monkeypatch.setattr(rep, "prompt_sha256", lambda: "a different prompt")
     report = rep.build_report(models=["groq-small"], sample_path=sample_path, calib_dir=tmp_path, settings=SETTINGS)
     assert report["models"]["groq-small"]["errors"]["all"]["missing"] == 4
+
+
+def test_the_waiting_message_says_how_much_is_used_and_that_stopping_is_safe():
+    from datetime import datetime, timedelta, timezone
+    from eval.build_dataset import Limits, Pacer
+    now = datetime.now(timezone.utc)
+    pacer = Pacer(Limits(tpd=200_000), [(now - timedelta(hours=1), 165, 198_805)])
+    msg = cc.waiting_message("groq-small", pacer, 5.4 * 3600, now + timedelta(hours=5.4))
+    assert "198,805 of 200,000 tokens" in msg and "165 calls" in msg and "5.4h" in msg
+    assert "Ctrl+C is safe" in msg and "--no-wait" in msg
