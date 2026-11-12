@@ -84,6 +84,8 @@ pip install -r requirements.txt
 TRIAGE_API_KEYS=dev-key TRIAGE_ADMIN_KEYS=admin-key TRIAGE_HASH_SECRET="$(openssl rand -hex 32)" \
   uvicorn app.api.main:app --port 8000
 # TRIAGE_FAKE_MODELS=1 answers with fake models (no provider keys, no API calls); TRIAGE_CACHE=off disables the cache
+# Fake mode keeps its own cache and request log (data/cache/fake_responses.sqlite3, data/logs/fake_requests.sqlite3)
+# and refuses to start if pointed at the real ones, so a fake answer can never be served or logged as real
 ```
 
 Python:

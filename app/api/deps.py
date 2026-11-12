@@ -5,7 +5,9 @@ from typing import Optional
 
 from app.api.config_state import ActiveConfig
 from app.api.request_log import InMemoryRequestLog, SQLiteRequestLog, hash_secret_from_env, open_request_log
-from app.cache import DEFAULT_CACHE_PATH, CachedSender, ResponseCache
+from pathlib import Path
+
+from app.cache import DEFAULT_CACHE_PATH, FAKE_CACHE_PATH, CachedSender, ResponseCache
 from app.providers.base import send_request
 from app.registry import load_registry
 from app.reliability import ReliableClient
@@ -76,6 +78,21 @@ def load_predictor_checked():
     return predictor, f"{name} v{version}"
 
 
+def cache_path(fake: bool):
+    """The response cache file, or None when TRIAGE_CACHE=off. Fake-model mode gets its own file
+    (FAKE_CACHE_PATH): real and fake answers are cached under the same keys (model name + prompt + settings), so
+    sharing one file would let a fake answer be served in real mode, or the reverse. Each mode refuses the other's
+    file even when TRIAGE_CACHE_PATH names it explicitly."""
+    if os.environ.get(CACHE_ENV, "on").lower() == "off":
+        return None
+    path = Path(os.environ.get(CACHE_PATH_ENV) or (FAKE_CACHE_PATH if fake else DEFAULT_CACHE_PATH))
+    forbidden = DEFAULT_CACHE_PATH if fake else FAKE_CACHE_PATH
+    if path.resolve() == forbidden.resolve():
+        raise RuntimeError(f"refusing to start: {'fake' if fake else 'real'}-model mode can't use the "
+                           f"{forbidden.name} cache ({CACHE_PATH_ENV}); fake and real answers must be cached apart")
+    return path
+
+
 def load_deps() -> RouterDeps:
     """Production (or TRIAGE_FAKE_MODELS=1) dependencies from config files and the environment."""
     fake = os.environ.get(FAKE_MODELS_ENV) == "1"
@@ -84,11 +101,10 @@ def load_deps() -> RouterDeps:
         send_fn = FakeModels()
     else:
         send_fn = send_request
-    log = open_request_log()
+    log = open_request_log(fake=fake)
     hash_secret = hash_secret_from_env(required=isinstance(log, SQLiteRequestLog))   # before loading anything slow
-    cache = None
-    if os.environ.get(CACHE_ENV, "on").lower() != "off":
-        cache = ResponseCache(os.environ.get(CACHE_PATH_ENV) or DEFAULT_CACHE_PATH)
+    path = cache_path(fake)
+    cache = ResponseCache(path) if path else None
     predictor, classifier = load_predictor_checked()
     return build_deps(predictor, send_fn, cache=cache, classifier=classifier, log=log,
                       fake_models=send_fn if fake else None, hash_secret=hash_secret)

@@ -44,9 +44,9 @@ class VectorPredictor:
                           features=self.features, embedding=self.embedding)
 
 
-def app_with(tmp_path, script=None, predictor=None, name="requests.sqlite3"):
+def app_with(tmp_path, script=None, predictor=None, name="requests.sqlite3", cache=None):
     log = SQLiteRequestLog(tmp_path / name)
-    deps = make_deps(script, predictor=predictor or VectorPredictor(), log=log)
+    deps = make_deps(script, predictor=predictor or VectorPredictor(), log=log, cache=cache)
     return TestClient(create_app(deps=deps, auth=AUTH)), deps, log
 
 
@@ -299,8 +299,20 @@ def test_training_eligible_rule():
     ok = row(status="ok", fell_back=False, settings_match_training=True)
     assert is_training_eligible(ok)
     for change in ({"requested_model": "groq-small"}, {"status": "error"}, {"fell_back": True},
-                   {"fell_back": None}, {"settings_match_training": False}, {"settings_match_training": None}):
+                   {"fell_back": None}, {"settings_match_training": False}, {"settings_match_training": None},
+                   {"cache_hit": True}):
         assert not is_training_eligible(RequestRow(**(ok.to_dict() | change))), change
+    assert is_training_eligible(RequestRow(**(ok.to_dict() | {"cache_hit": False})))
+
+
+def test_a_cache_hit_is_not_training_eligible(tmp_path):
+    from app.cache import ResponseCache
+    http, deps, log = app_with(tmp_path, cache=ResponseCache(tmp_path / "cache.sqlite3"))
+    assert post(http).headers["x-triage-cache"] == "miss"
+    assert post(http).headers["x-triage-cache"] == "hit"                 # the same prompt again: a repeat
+    first, repeat = log.rows()
+    assert (first.cache_hit, first.training_eligible) == (False, True)
+    assert (repeat.cache_hit, repeat.training_eligible) == (True, False)
 
 
 # ---------- no keys, prompt text or answer text anywhere ----------

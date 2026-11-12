@@ -28,6 +28,7 @@ from app.registry import PROJECT_ROOT
 
 LOG_DB_ENV, LOG_KIND_ENV, HASH_SECRET_ENV = "TRIAGE_LOG_DB", "TRIAGE_LOG", "TRIAGE_HASH_SECRET"
 DEFAULT_LOG_DB = PROJECT_ROOT / "data" / "logs" / "requests.sqlite3"
+FAKE_LOG_DB = PROJECT_ROOT / "data" / "logs" / "fake_requests.sqlite3"   # TRIAGE_FAKE_MODELS=1 runs log here
 SCHEMA_VERSION = 3        # 2: prompt_sha256 -> prompt_hmac. 3: verification fields and the labels table (Step 7)
 VECTOR_FIELDS = ("features", "embedding")          # skipped by reads that don't need them (stats, lookups)
 
@@ -91,7 +92,7 @@ class RequestRow:
     embedding: Optional[bytes] = None      # float32 little-endian, 384 values (embedding_from_bytes)
     feature_version: Optional[str] = None  # features.FEATURE_VERSION
     embedding_model: Optional[str] = None  # embeddings.MODEL_NAME
-    training_eligible: bool = False        # auto, ok, no fallback, Phase 2 settings (Step 8 retrains on these)
+    training_eligible: bool = False        # auto, ok, no fallback, Phase 2 settings, not a cache hit (Step 8)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -132,9 +133,11 @@ def embedding_from_bytes(blob: bytes) -> np.ndarray:
 def is_training_eligible(row: RequestRow) -> bool:
     """Only answers the classifier's labels would describe: model="auto", answered without an error, by the
     tier's own first model (no fallback), not escalated by verification (then the served answer isn't from the
-    model the classifier predicted for), with the settings the classifier learned from (Phase 2's)."""
+    model the classifier predicted for), with the settings the classifier learned from (Phase 2's), and not
+    served from the response cache (a cached answer is a repeat: it adds no new information and would
+    over-weight repeated prompts in retraining)."""
     return (row.requested_model == "auto" and row.status == "ok" and row.fell_back is False
-            and not row.escalated and row.settings_match_training is True)
+            and not row.escalated and row.settings_match_training is True and not row.cache_hit)
 
 
 @dataclass
@@ -343,8 +346,16 @@ class SQLiteRequestLog:
             self._db.close()
 
 
-def open_request_log():
-    """The app's log: SQLite unless TRIAGE_LOG=memory."""
+def open_request_log(fake: bool = False):
+    """The app's log: SQLite unless TRIAGE_LOG=memory. The file is TRIAGE_LOG_DB if set, else the real log, or
+    FAKE_LOG_DB in fake-model mode, so fake answers never land in the real log (they would look like real
+    traffic to stats and retraining). Fake mode refuses the real log's path even when it is set explicitly,
+    and real mode refuses the fake log's path."""
     if os.environ.get(LOG_KIND_ENV, "sqlite").lower() == "memory":
         return InMemoryRequestLog()
-    return SQLiteRequestLog()
+    path = Path(os.environ.get(LOG_DB_ENV) or (FAKE_LOG_DB if fake else DEFAULT_LOG_DB))
+    forbidden = DEFAULT_LOG_DB if fake else FAKE_LOG_DB
+    if path.resolve() == forbidden.resolve():
+        raise RuntimeError(f"refusing to start: {'fake' if fake else 'real'}-model mode can't use {forbidden.name} "
+                           f"({LOG_DB_ENV}); fake and real requests must be logged apart")
+    return SQLiteRequestLog(path)
