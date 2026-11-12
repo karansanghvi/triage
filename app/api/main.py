@@ -3,7 +3,8 @@
 Run it:
     TRIAGE_API_KEYS=dev-key TRIAGE_ADMIN_KEYS=admin-key TRIAGE_HASH_SECRET=<random> TRIAGE_FAKE_MODELS=1 \
         uvicorn app.api.main:app
-(drop TRIAGE_FAKE_MODELS for real models; TRIAGE_CACHE=off disables the response cache)
+(drop TRIAGE_FAKE_MODELS for real models; TRIAGE_CACHE=off disables the response cache. Fake mode uses its own
+cache and log, data/cache/fake_responses.sqlite3 and data/logs/fake_requests.sqlite3, never the real ones)
 
 Endpoints
     POST /v1/chat/completions     OpenAI chat completions, stream or not; model "auto" or a models.yaml name

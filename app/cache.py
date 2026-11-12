@@ -17,6 +17,7 @@ from app.registry import PROJECT_ROOT, ModelConfig
 logger = logging.getLogger("triage.cache")
 
 DEFAULT_CACHE_PATH = PROJECT_ROOT / "data" / "cache" / "responses.sqlite3"
+FAKE_CACHE_PATH = PROJECT_ROOT / "data" / "cache" / "fake_responses.sqlite3"   # TRIAGE_FAKE_MODELS=1 only
 DEFAULT_TTL_SECONDS = 24 * 60 * 60       # saved answers expire after 24 hours
 CACHE_VERSION = 1                        # bump this to throw away every old entry at once
 

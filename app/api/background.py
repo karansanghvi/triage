@@ -42,9 +42,11 @@ def _now() -> datetime:
 
 
 def eligible(row) -> bool:
-    """Requests whose answer the classifier's labels would describe, and which aren't already strong."""
+    """Requests whose answer the classifier's labels would describe, and which aren't already strong. Cache hits
+    are skipped: the answer is a repeat of one already served (and possibly already labeled)."""
     return (row.requested_model == "auto" and row.status == "ok" and row.verified == "off"
-            and row.tier in ("low", "medium") and row.fell_back is False and not row.escalated)
+            and row.tier in ("low", "medium") and row.fell_back is False and not row.escalated
+            and not row.cache_hit)
 
 
 class JudgeSend:

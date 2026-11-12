@@ -302,9 +302,10 @@ class CountingRandom(random.Random):
         return super().random()
 
 
-def bg_app(script=None, *, rate=1.0, rng=None, background=None, log=None, predictor=MEDIUM, clock=None):
+def bg_app(script=None, *, rate=1.0, rng=None, background=None, log=None, predictor=MEDIUM, clock=None, cache=None):
     labeler = BackgroundLabeler(rng or CountingRandom(), **({"clock": clock} if clock else {}))
-    return app_with(script, predictor=predictor, sample_rate=rate, labeler=labeler, background=background, log=log)
+    return app_with(script, predictor=predictor, sample_rate=rate, labeler=labeler, background=background, log=log,
+                    cache=cache)
 
 
 def test_a_sampled_request_gets_a_label_row():
@@ -350,6 +351,16 @@ def test_ineligible_requests_are_never_sampled(case):
     http, deps = bg_app(script, predictor=HIGH if case == "high tier" else MEDIUM)
     post(http, verify="sync" if case == "sync" else None, model="groq-small" if case == "pass-through" else "auto")
     assert deps.log.labels() == [] and deps.labeler.rng.draws == 0
+
+
+def test_a_cache_hit_is_never_sampled_for_a_background_label(tmp_path):
+    http, deps = bg_app(cache=ResponseCache(tmp_path / "cache.sqlite3"))
+    first = post(http, verify=None)
+    repeat = post(http, verify=None)
+    assert (first.headers["x-triage-cache"], repeat.headers["x-triage-cache"]) == ("miss", "hit")
+    assert len(deps.log.labels(first.headers["x-triage-request-id"])) == 1
+    assert deps.log.labels(repeat.headers["x-triage-request-id"]) == []
+    assert deps.labeler.rng.draws == 1                                   # the repeat never reached sampling
 
 
 def test_the_daily_cap_stops_sampling_and_logs_the_skip():
