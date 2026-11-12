@@ -153,6 +153,14 @@ def default_send(messages: list, model_name: str, settings: CheckerSettings):
                         response_format=response_format)
 
 
+JSON_REJECTION_MARKERS = ("json_validate_failed", "Failed to validate JSON")
+
+
+def is_json_rejection(error: ProviderError) -> bool:
+    """A 400 from the provider's JSON mode: the model's reply wasn't valid JSON (not a provider problem)."""
+    return error.kind == "client" and any(m in str(error) for m in JSON_REJECTION_MARKERS)
+
+
 def check_answer_ai(messages: list, answer: str, *, model: str, send: Optional[Callable] = None,
                     settings: Optional[CheckerSettings] = None) -> AICheckResult:
     """Ask `model` (a models.yaml name) whether `answer` is good. send(messages, model_name, settings) must
@@ -174,6 +182,13 @@ def check_answer_ai(messages: list, answer: str, *, model: str, send: Optional[C
         try:
             response = send(sent, model, settings)
         except ProviderError as error:
+            if is_json_rejection(error):
+                # The model answered, but not in JSON, and the provider refused to return it (Groq's JSON mode
+                # answers 400 json_validate_failed). At temperature 0 a retry fails the same way, so this is a
+                # finished invalid_json error, not a provider error that is retried on every run.
+                attempts += 1
+                return result("error", reason="the provider rejected the reply as invalid JSON (json_validate_failed)",
+                              error_kind="invalid_json")
             return result("error", reason=f"provider error: {str(error)[:200]}", error_kind=f"provider:{error.kind}")
         attempts += 1
         usage["input_tokens"] += response.input_tokens or 0
