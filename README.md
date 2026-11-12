@@ -2,7 +2,18 @@
 
 An LLM router that sends each request to the cheapest model that can handle it.
 
-**Status:** Phase 1 complete (providers, reliability, and caching). Routing comes in Phase 2.
+**Status:** Phases 1–4 complete: providers and reliability, data collection, the routing classifier, and an
+OpenAI-compatible API with verification, logging and retraining. The sections below describe each part in more detail.
+
+## Results so far (Phase 4)
+
+Phase 4 tested whether checking the medium model's answers, and escalating only the bad ones, could match the strong
+model for less. On the validation set it looked promising. The pre-registered test run (149 prompts, used once) did not
+confirm it: selective checking got 139/149 right, about what random routing at the same cost gets, while predict-only
+routing got 144/149 against 145 for always using the strong model, but saved only 12.4% of the strong model's cost
+(28.4% on validation). The groq-small checker caught only 4 of the 12 bad
+answers it saw. Predict-only routing stays the default, and checking stays opt-in. Full numbers, caveats and next
+steps are in [reports/PHASE_4.md](reports/PHASE_4.md).
 
 ## What Phase 1 does
 
