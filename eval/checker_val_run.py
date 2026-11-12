@@ -134,7 +134,7 @@ def dry_run(model: str, items: list, skipped: Counter, prompts: dict, answers: d
 def run(model: str, items: list, prompts: dict, answers: dict, *, limit: int = 0, wait: bool = True,
         send_fn: Optional[Callable] = None, pacer: Optional[Pacer] = None, use_pacer: bool = True,
         val_dir: Path = VAL_DIR, settings=None, sleep: Callable = time.sleep, say=print,
-        passes: int = MAX_PASSES) -> dict:
+        passes: int = MAX_PASSES, split_name: str = "validation") -> dict:
     registry = load_registry()
     settings = settings or load_checker_settings()
     log = CheckLog(log_path(model, val_dir))
@@ -149,7 +149,7 @@ def run(model: str, items: list, prompts: dict, answers: dict, *, limit: int = 0
             left = left[:max(0, limit - summary["checked"])]
         if not left:
             break
-        say(f"{model} validation pass {attempt}: checking {len(left)}")
+        say(f"{model} {split_name} pass {attempt}: checking {len(left)}")
         for c in left:
             pid, tier = c["prompt_id"], c["tier"]
             try:

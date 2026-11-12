@@ -55,3 +55,5 @@ data/logs/
 data/checker_calibration/*.pid
 
 data/checker_val/*.pid
+
+data/checker_test/*.pid

@@ -1,0 +1,720 @@
+{
+  "split": "test",
+  "use": "second use of the test set (first: Phase 3 final, reports/FINAL_TEST_DONE.json)",
+  "n": 149,
+  "created": "2026-11-12T01:35:14.159734+00:00",
+  "preregistration": {
+    "path": "PHASE4_PREREGISTRATION.json",
+    "registered_at": "2026-11-12T01:16:35.603429+00:00",
+    "verified": [
+      "same items (100)",
+      "same checker model, version and prompt hash",
+      "same classifier",
+      "every registered check finished ok on that exact answer",
+      "scoring checks exactly the registered items"
+    ]
+  },
+  "strategy": {
+    "name": "medium_then_check_selective",
+    "skip_above": 0.9,
+    "min_answer_tokens": 0,
+    "on_error": "escalate",
+    "checker_model": "groq-small",
+    "checker_version": 3
+  },
+  "classifier": "classifier_c_logreg_cv v2",
+  "predict_only_tau": 0.86,
+  "selection": {
+    "p_medium >= 0.90 (accepted, no check)": 47,
+    "format checker fails it (escalates, no check)": 2
+  },
+  "real_prices": {
+    "always_medium": {
+      "n": 149,
+      "quality": 0.8926174496644296,
+      "quality_retained": 0.9172413793103449,
+      "cost_per_1k": 0.1385501677852349,
+      "cost_saved": 0.6103362750677391,
+      "latency_p50_ms": 469.6,
+      "latency_p95_ms": 2314.019999999999,
+      "mix": {
+        "low": 0.0,
+        "medium": 1.0,
+        "high": 0.0
+      },
+      "correct": 133,
+      "pct_of_always_high_cost": 38.96637249322608,
+      "x_always_medium_cost": 1.0,
+      "escalated_share": 0.0
+    },
+    "always_high": {
+      "n": 149,
+      "quality": 0.9731543624161074,
+      "quality_retained": 1.0,
+      "cost_per_1k": 0.35556342281879194,
+      "cost_saved": -2.220446049250313e-16,
+      "latency_p50_ms": 664.5,
+      "latency_p95_ms": 5739.619999999998,
+      "mix": {
+        "low": 0.0,
+        "medium": 0.0,
+        "high": 1.0
+      },
+      "correct": 145,
+      "pct_of_always_high_cost": 100.0,
+      "x_always_medium_cost": 2.566315353511133,
+      "escalated_share": 1.0
+    },
+    "predict_only_balanced": {
+      "n": 149,
+      "quality": 0.9664429530201343,
+      "quality_retained": 0.993103448275862,
+      "cost_per_1k": 0.3114850671140939,
+      "cost_saved": 0.12396763242759634,
+      "latency_p50_ms": 515.7,
+      "latency_p95_ms": 5739.619999999998,
+      "mix": {
+        "low": 0.0,
+        "medium": 0.44966442953020136,
+        "high": 0.5503355704697986
+      },
+      "tau": 0.86,
+      "correct": 144,
+      "pct_of_always_high_cost": 87.60323675724035,
+      "x_always_medium_cost": 2.2481753150737678,
+      "escalated_share": 0.5503355704697986
+    },
+    "selective_checking": {
+      "n": 149,
+      "quality": 0.9328859060402684,
+      "quality_retained": 0.9586206896551723,
+      "cost_per_1k": 0.2503474832214765,
+      "cost_saved": 0.2959132825395747,
+      "check_cost_per_1k": 0.0680486577181208,
+      "checks_per_request": 0.6711409395973155,
+      "latency_p50_ms": 776.4,
+      "latency_p95_ms": 3757.4399999999987,
+      "mix": {
+        "low": 0.0,
+        "medium": 0.9328859060402684,
+        "high": 0.06711409395973154
+      },
+      "escalation_rate": 0.06711409395973154,
+      "checked_share": 0.6711409395973155,
+      "escalated_share": 0.06711409395973154,
+      "skipped_confident": 47,
+      "skipped_short": 0,
+      "bad_total": 16,
+      "bad_caught": 6,
+      "bad_skipped": 2,
+      "bad_missed_by_checker": 8,
+      "good_escalated": 4,
+      "correct": 139,
+      "pct_of_always_high_cost": 70.40867174604253,
+      "x_always_medium_cost": 1.8069085532219447
+    },
+    "oracle": {
+      "n": 149,
+      "quality": 1.0,
+      "quality_retained": 1.0275862068965518,
+      "cost_per_1k": 0.15283359060402685,
+      "cost_saved": 0.570165037245925,
+      "latency_p50_ms": 471.6,
+      "latency_p95_ms": 3398.7599999999975,
+      "mix": {
+        "low": 0.4966442953020134,
+        "medium": 0.40939597315436244,
+        "high": 0.09395973154362416
+      },
+      "correct": 149,
+      "pct_of_always_high_cost": 42.9834962754075,
+      "x_always_medium_cost": 1.1030920643916686,
+      "escalated_share": 0.09395973154362416
+    }
+  },
+  "by_ratio": {
+    "2": {
+      "always_medium": {
+        "n": 149,
+        "quality": 0.8926174496644296,
+        "quality_retained": 0.9172413793103449,
+        "cost_per_1k": 0.1385501677852349,
+        "cost_saved": 0.6103362750677391,
+        "latency_p50_ms": 469.6,
+        "latency_p95_ms": 2314.019999999999,
+        "mix": {
+          "low": 0.0,
+          "medium": 1.0,
+          "high": 0.0
+        },
+        "correct": 133,
+        "pct_of_always_high_cost": 38.96637249322608,
+        "x_always_medium_cost": 1.0,
+        "escalated_share": 0.0
+      },
+      "always_high": {
+        "n": 149,
+        "quality": 0.9731543624161074,
+        "quality_retained": 1.0,
+        "cost_per_1k": 0.35556342281879194,
+        "cost_saved": -2.220446049250313e-16,
+        "latency_p50_ms": 664.5,
+        "latency_p95_ms": 5739.619999999998,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.0,
+          "high": 1.0
+        },
+        "correct": 145,
+        "pct_of_always_high_cost": 100.0,
+        "x_always_medium_cost": 2.566315353511133,
+        "escalated_share": 1.0
+      },
+      "predict_only_balanced": {
+        "n": 149,
+        "quality": 0.9664429530201343,
+        "quality_retained": 0.993103448275862,
+        "cost_per_1k": 0.3114850671140939,
+        "cost_saved": 0.12396763242759634,
+        "latency_p50_ms": 515.7,
+        "latency_p95_ms": 5739.619999999998,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.44966442953020136,
+          "high": 0.5503355704697986
+        },
+        "tau": 0.86,
+        "correct": 144,
+        "pct_of_always_high_cost": 87.60323675724035,
+        "x_always_medium_cost": 2.2481753150737678,
+        "escalated_share": 0.5503355704697986
+      },
+      "selective_checking": {
+        "n": 149,
+        "quality": 0.9328859060402684,
+        "quality_retained": 0.9586206896551723,
+        "cost_per_1k": 0.2503474832214765,
+        "cost_saved": 0.2959132825395747,
+        "check_cost_per_1k": 0.0680486577181208,
+        "checks_per_request": 0.6711409395973155,
+        "latency_p50_ms": 776.4,
+        "latency_p95_ms": 3757.4399999999987,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.9328859060402684,
+          "high": 0.06711409395973154
+        },
+        "escalation_rate": 0.06711409395973154,
+        "checked_share": 0.6711409395973155,
+        "escalated_share": 0.06711409395973154,
+        "skipped_confident": 47,
+        "skipped_short": 0,
+        "bad_total": 16,
+        "bad_caught": 6,
+        "bad_skipped": 2,
+        "bad_missed_by_checker": 8,
+        "good_escalated": 4,
+        "correct": 139,
+        "pct_of_always_high_cost": 70.40867174604253,
+        "x_always_medium_cost": 1.8069085532219447
+      },
+      "oracle": {
+        "n": 149,
+        "quality": 1.0,
+        "quality_retained": 1.0275862068965518,
+        "cost_per_1k": 0.15283359060402685,
+        "cost_saved": 0.570165037245925,
+        "latency_p50_ms": 471.6,
+        "latency_p95_ms": 3398.7599999999975,
+        "mix": {
+          "low": 0.4966442953020134,
+          "medium": 0.40939597315436244,
+          "high": 0.09395973154362416
+        },
+        "correct": 149,
+        "pct_of_always_high_cost": 42.9834962754075,
+        "x_always_medium_cost": 1.1030920643916686,
+        "escalated_share": 0.09395973154362416
+      },
+      "beats_always_medium": [],
+      "selective_cheaper_than_predict_only": true
+    },
+    "3": {
+      "always_medium": {
+        "n": 149,
+        "quality": 0.8926174496644296,
+        "quality_retained": 0.9172413793103449,
+        "cost_per_1k": 0.1385501677852349,
+        "cost_saved": 0.7402241833784927,
+        "latency_p50_ms": 469.6,
+        "latency_p95_ms": 2314.019999999999,
+        "mix": {
+          "low": 0.0,
+          "medium": 1.0,
+          "high": 0.0
+        },
+        "correct": 133,
+        "pct_of_always_high_cost": 25.977581662150726,
+        "x_always_medium_cost": 1.0,
+        "escalated_share": 0.0
+      },
+      "always_high": {
+        "n": 149,
+        "quality": 0.9731543624161074,
+        "quality_retained": 1.0,
+        "cost_per_1k": 0.5333451342281879,
+        "cost_saved": 0.0,
+        "latency_p50_ms": 664.5,
+        "latency_p95_ms": 5739.619999999998,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.0,
+          "high": 1.0
+        },
+        "correct": 145,
+        "pct_of_always_high_cost": 100.0,
+        "x_always_medium_cost": 3.8494730302666995,
+        "escalated_share": 1.0
+      },
+      "predict_only_balanced": {
+        "n": 149,
+        "quality": 0.9664429530201343,
+        "quality_retained": 0.993103448275862,
+        "cost_per_1k": 0.44910654362416097,
+        "cost_saved": 0.1579438626095837,
+        "latency_p50_ms": 515.7,
+        "latency_p95_ms": 5739.619999999998,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.44966442953020136,
+          "high": 0.5503355704697986
+        },
+        "tau": 0.86,
+        "correct": 144,
+        "pct_of_always_high_cost": 84.20561373904162,
+        "x_always_medium_cost": 3.241472390854958,
+        "escalated_share": 0.5503355704697986
+      },
+      "selective_checking": {
+        "n": 149,
+        "quality": 0.9328859060402684,
+        "quality_retained": 0.9586206896551723,
+        "cost_per_1k": 0.2722218120805369,
+        "cost_saved": 0.4895953959072423,
+        "check_cost_per_1k": 0.0680486577181208,
+        "checks_per_request": 0.6711409395973155,
+        "latency_p50_ms": 776.4,
+        "latency_p95_ms": 3757.4399999999987,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.9328859060402684,
+          "high": 0.06711409395973154
+        },
+        "escalation_rate": 0.06711409395973154,
+        "checked_share": 0.6711409395973155,
+        "escalated_share": 0.06711409395973154,
+        "skipped_confident": 47,
+        "skipped_short": 0,
+        "bad_total": 16,
+        "bad_caught": 6,
+        "bad_skipped": 2,
+        "bad_missed_by_checker": 8,
+        "good_escalated": 4,
+        "correct": 139,
+        "pct_of_always_high_cost": 51.04046040927577,
+        "x_always_medium_cost": 1.9647887579790229
+      },
+      "oracle": {
+        "n": 149,
+        "quality": 1.0,
+        "quality_retained": 1.0275862068965518,
+        "cost_per_1k": 0.1869158053691275,
+        "cost_saved": 0.6495406194347,
+        "latency_p50_ms": 471.6,
+        "latency_p95_ms": 3398.7599999999975,
+        "mix": {
+          "low": 0.4966442953020134,
+          "medium": 0.40939597315436244,
+          "high": 0.09395973154362416
+        },
+        "correct": 149,
+        "pct_of_always_high_cost": 35.04593805653,
+        "x_always_medium_cost": 1.3490839336900957,
+        "escalated_share": 0.09395973154362416
+      },
+      "beats_always_medium": [],
+      "selective_cheaper_than_predict_only": true
+    },
+    "5": {
+      "always_medium": {
+        "n": 149,
+        "quality": 0.8926174496644296,
+        "quality_retained": 0.9172413793103449,
+        "cost_per_1k": 0.1385501677852349,
+        "cost_saved": 0.8441345100270956,
+        "latency_p50_ms": 469.6,
+        "latency_p95_ms": 2314.019999999999,
+        "mix": {
+          "low": 0.0,
+          "medium": 1.0,
+          "high": 0.0
+        },
+        "correct": 133,
+        "pct_of_always_high_cost": 15.586548997290432,
+        "x_always_medium_cost": 1.0,
+        "escalated_share": 0.0
+      },
+      "always_high": {
+        "n": 149,
+        "quality": 0.9731543624161074,
+        "quality_retained": 1.0,
+        "cost_per_1k": 0.8889085570469799,
+        "cost_saved": 0.0,
+        "latency_p50_ms": 664.5,
+        "latency_p95_ms": 5739.619999999998,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.0,
+          "high": 1.0
+        },
+        "correct": 145,
+        "pct_of_always_high_cost": 100.00000000000001,
+        "x_always_medium_cost": 6.415788383777834,
+        "escalated_share": 1.0
+      },
+      "predict_only_balanced": {
+        "n": 149,
+        "quality": 0.9664429530201343,
+        "quality_retained": 0.993103448275862,
+        "cost_per_1k": 0.7243494966442953,
+        "cost_saved": 0.1851248467551736,
+        "latency_p50_ms": 515.7,
+        "latency_p95_ms": 5739.619999999998,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.44966442953020136,
+          "high": 0.5503355704697986
+        },
+        "tau": 0.86,
+        "correct": 144,
+        "pct_of_always_high_cost": 81.48751532448264,
+        "x_always_medium_cost": 5.228066542417339,
+        "escalated_share": 0.5503355704697986
+      },
+      "selective_checking": {
+        "n": 149,
+        "quality": 0.9328859060402684,
+        "quality_retained": 0.9586206896551723,
+        "cost_per_1k": 0.3159704697986577,
+        "cost_saved": 0.6445410866013765,
+        "check_cost_per_1k": 0.0680486577181208,
+        "checks_per_request": 0.6711409395973155,
+        "latency_p50_ms": 776.4,
+        "latency_p95_ms": 3757.4399999999987,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.9328859060402684,
+          "high": 0.06711409395973154
+        },
+        "escalation_rate": 0.06711409395973154,
+        "checked_share": 0.6711409395973155,
+        "escalated_share": 0.06711409395973154,
+        "skipped_confident": 47,
+        "skipped_short": 0,
+        "bad_total": 16,
+        "bad_caught": 6,
+        "bad_skipped": 2,
+        "bad_missed_by_checker": 8,
+        "good_escalated": 4,
+        "correct": 139,
+        "pct_of_always_high_cost": 35.545891339862344,
+        "x_always_medium_cost": 2.280549167493179
+      },
+      "oracle": {
+        "n": 149,
+        "quality": 1.0,
+        "quality_retained": 1.0275862068965518,
+        "cost_per_1k": 0.25508023489932885,
+        "cost_saved": 0.7130410851857201,
+        "latency_p50_ms": 471.6,
+        "latency_p95_ms": 3398.7599999999975,
+        "mix": {
+          "low": 0.4966442953020134,
+          "medium": 0.40939597315436244,
+          "high": 0.09395973154362416
+        },
+        "correct": 149,
+        "pct_of_always_high_cost": 28.695891481428,
+        "x_always_medium_cost": 1.8410676722869503,
+        "escalated_share": 0.09395973154362416
+      },
+      "beats_always_medium": [],
+      "selective_cheaper_than_predict_only": true
+    },
+    "10": {
+      "always_medium": {
+        "n": 149,
+        "quality": 0.8926174496644296,
+        "quality_retained": 0.9172413793103449,
+        "cost_per_1k": 0.1385501677852349,
+        "cost_saved": 0.9220672550135478,
+        "latency_p50_ms": 469.6,
+        "latency_p95_ms": 2314.019999999999,
+        "mix": {
+          "low": 0.0,
+          "medium": 1.0,
+          "high": 0.0
+        },
+        "correct": 133,
+        "pct_of_always_high_cost": 7.793274498645216,
+        "x_always_medium_cost": 1.0,
+        "escalated_share": 0.0
+      },
+      "always_high": {
+        "n": 149,
+        "quality": 0.9731543624161074,
+        "quality_retained": 1.0,
+        "cost_per_1k": 1.7778171140939598,
+        "cost_saved": 0.0,
+        "latency_p50_ms": 664.5,
+        "latency_p95_ms": 5739.619999999998,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.0,
+          "high": 1.0
+        },
+        "correct": 145,
+        "pct_of_always_high_cost": 100.00000000000001,
+        "x_always_medium_cost": 12.831576767555667,
+        "escalated_share": 1.0
+      },
+      "predict_only_balanced": {
+        "n": 149,
+        "quality": 0.9664429530201343,
+        "quality_retained": 0.993103448275862,
+        "cost_per_1k": 1.4124568791946308,
+        "cost_saved": 0.20551058486436602,
+        "latency_p50_ms": 515.7,
+        "latency_p95_ms": 5739.619999999998,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.44966442953020136,
+          "high": 0.5503355704697986
+        },
+        "tau": 0.86,
+        "correct": 144,
+        "pct_of_always_high_cost": 79.4489415135634,
+        "x_always_medium_cost": 10.19455192132329,
+        "escalated_share": 0.5503355704697986
+      },
+      "selective_checking": {
+        "n": 149,
+        "quality": 0.9328859060402684,
+        "quality_retained": 0.9586206896551723,
+        "cost_per_1k": 0.4253421140939598,
+        "cost_saved": 0.7607503546219773,
+        "check_cost_per_1k": 0.0680486577181208,
+        "checks_per_request": 0.6711409395973155,
+        "latency_p50_ms": 776.4,
+        "latency_p95_ms": 3757.4399999999987,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.9328859060402684,
+          "high": 0.06711409395973154
+        },
+        "escalation_rate": 0.06711409395973154,
+        "checked_share": 0.6711409395973155,
+        "escalated_share": 0.06711409395973154,
+        "skipped_confident": 47,
+        "skipped_short": 0,
+        "bad_total": 16,
+        "bad_caught": 6,
+        "bad_skipped": 2,
+        "bad_missed_by_checker": 8,
+        "good_escalated": 4,
+        "correct": 139,
+        "pct_of_always_high_cost": 23.924964537802282,
+        "x_always_medium_cost": 3.0699501912785694
+      },
+      "oracle": {
+        "n": 149,
+        "quality": 1.0,
+        "quality_retained": 1.0275862068965518,
+        "cost_per_1k": 0.4254913087248322,
+        "cost_saved": 0.760666434498985,
+        "latency_p50_ms": 471.6,
+        "latency_p95_ms": 3398.7599999999975,
+        "mix": {
+          "low": 0.4966442953020134,
+          "medium": 0.40939597315436244,
+          "high": 0.09395973154362416
+        },
+        "correct": 149,
+        "pct_of_always_high_cost": 23.9333565501015,
+        "x_always_medium_cost": 3.0710270187790867,
+        "escalated_share": 0.09395973154362416
+      },
+      "beats_always_medium": [],
+      "selective_cheaper_than_predict_only": true
+    },
+    "20": {
+      "always_medium": {
+        "n": 149,
+        "quality": 0.8926174496644296,
+        "quality_retained": 0.9172413793103449,
+        "cost_per_1k": 0.1385501677852349,
+        "cost_saved": 0.9610336275067739,
+        "latency_p50_ms": 469.6,
+        "latency_p95_ms": 2314.019999999999,
+        "mix": {
+          "low": 0.0,
+          "medium": 1.0,
+          "high": 0.0
+        },
+        "correct": 133,
+        "pct_of_always_high_cost": 3.896637249322608,
+        "x_always_medium_cost": 1.0,
+        "escalated_share": 0.0
+      },
+      "always_high": {
+        "n": 149,
+        "quality": 0.9731543624161074,
+        "quality_retained": 1.0,
+        "cost_per_1k": 3.5556342281879196,
+        "cost_saved": 0.0,
+        "latency_p50_ms": 664.5,
+        "latency_p95_ms": 5739.619999999998,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.0,
+          "high": 1.0
+        },
+        "correct": 145,
+        "pct_of_always_high_cost": 100.00000000000001,
+        "x_always_medium_cost": 25.663153535111334,
+        "escalated_share": 1.0
+      },
+      "predict_only_balanced": {
+        "n": 149,
+        "quality": 0.9664429530201343,
+        "quality_retained": 0.993103448275862,
+        "cost_per_1k": 2.788671644295302,
+        "cost_saved": 0.21570345391896217,
+        "latency_p50_ms": 515.7,
+        "latency_p95_ms": 5739.619999999998,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.44966442953020136,
+          "high": 0.5503355704697986
+        },
+        "tau": 0.86,
+        "correct": 144,
+        "pct_of_always_high_cost": 78.42965460810377,
+        "x_always_medium_cost": 20.127522679135193,
+        "escalated_share": 0.5503355704697986
+      },
+      "selective_checking": {
+        "n": 149,
+        "quality": 0.9328859060402684,
+        "quality_retained": 0.9586206896551723,
+        "cost_per_1k": 0.6440854026845638,
+        "cost_saved": 0.8188549886322776,
+        "check_cost_per_1k": 0.0680486577181208,
+        "checks_per_request": 0.6711409395973155,
+        "latency_p50_ms": 776.4,
+        "latency_p95_ms": 3757.4399999999987,
+        "mix": {
+          "low": 0.0,
+          "medium": 0.9328859060402684,
+          "high": 0.06711409395973154
+        },
+        "escalation_rate": 0.06711409395973154,
+        "checked_share": 0.6711409395973155,
+        "escalated_share": 0.06711409395973154,
+        "skipped_confident": 47,
+        "skipped_short": 0,
+        "bad_total": 16,
+        "bad_caught": 6,
+        "bad_skipped": 2,
+        "bad_missed_by_checker": 8,
+        "good_escalated": 4,
+        "correct": 139,
+        "pct_of_always_high_cost": 18.114501136772247,
+        "x_always_medium_cost": 4.64875223884935
+      },
+      "oracle": {
+        "n": 149,
+        "quality": 1.0,
+        "quality_retained": 1.0275862068965518,
+        "cost_per_1k": 0.7663134563758389,
+        "cost_saved": 0.7844791091556175,
+        "latency_p50_ms": 471.6,
+        "latency_p95_ms": 3398.7599999999975,
+        "mix": {
+          "low": 0.4966442953020134,
+          "medium": 0.40939597315436244,
+          "high": 0.09395973154362416
+        },
+        "correct": 149,
+        "pct_of_always_high_cost": 21.55208908443825,
+        "x_always_medium_cost": 5.530945711763359,
+        "escalated_share": 0.09395973154362416
+      },
+      "beats_always_medium": [],
+      "selective_cheaper_than_predict_only": true
+    }
+  },
+  "break_even": {
+    "ratio": 1.4718005140225527,
+    "note": "R where selective checking and predict-only (tau 0.86) cost the same (costs are linear in R); compare their correct counts separately"
+  },
+  "medium_mistakes": {
+    "medium_wrong": 16,
+    "format_caught": 2,
+    "skipped_confident": 2,
+    "checker_caught": 4,
+    "checker_missed": 8,
+    "checker_unknown": 0,
+    "fixed_by_high": 6,
+    "escalated_but_high_also_wrong": 0,
+    "right_answers_escalated": 4,
+    "right_answers_escalated_by_checker": 4,
+    "checked": 100,
+    "checker_false_alarms": 4
+  },
+  "validation_reference": {
+    "n": 117,
+    "selective_checking": {
+      "correct": 113,
+      "cost_saved": 0.27881276192131677,
+      "quality_retained": 1.0
+    },
+    "predict_only_balanced": {
+      "correct": 113,
+      "cost_saved": 0.28405213297006016,
+      "quality_retained": 1.0
+    },
+    "always_medium": {
+      "correct": 106
+    },
+    "always_high": {
+      "correct": 113
+    },
+    "break_even_at_113_correct": {
+      "ratio": 2.028264193252472,
+      "predict_only": {
+        "tau": 0.86
+      },
+      "selective": {
+        "skip_above": 0.9,
+        "min_answer_tokens": 0
+      }
+    }
+  },
+  "caveats": [
+    "The comparison rests on a small number of wrong medium answers (see medium_mistakes); one or two prompts more or less would move the break-even ratio.",
+    "This is the test set's second use. Phase 3 used it once, and its result was known when Phase 4 began, so it is no longer completely fresh, though nothing in Phase 4 was tuned on it.",
+    "Only price is varied across ratios; real providers also differ in quality gaps and answer lengths.",
+    "The checker stays at groq-small's price at every ratio."
+  ]
+}
