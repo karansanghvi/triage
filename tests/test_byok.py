@@ -242,3 +242,39 @@ def test_savings_baseline_is_the_strong_model_among_the_users_providers(headers,
     (row,) = deps.log.rows()
     assert row.strong_cost == pytest.approx(REGISTRY[strong].reported_cost(row.input_tokens, row.output_tokens))
     assert row.saved == pytest.approx(row.strong_cost - row.price_as_cost)
+
+
+# ---------- d: the shared circuit breaker ignores BYOK calls ----------
+
+AUTH_FAIL = FakeBehavior(fail_before="auth")
+
+
+def test_byok_auth_failure_doesnt_open_the_breaker_for_a_following_no_key_request():
+    http, deps = app({"groq-small": AUTH_FAIL})
+    for _ in range(5):                                   # well past failure_threshold (3)
+        chat(http, headers=GROQ_ONLY | {"X-Triage-Quality": "0.92"})
+    assert not deps.client.breaker.is_open("groq")
+    deps.fake_models.script.clear()                      # the server's own groq key works
+    r = chat(http, headers={"X-Triage-Quality": "0.92"})
+    assert r.status_code == 200 and r.headers["x-triage-model"] == "groq-small"
+    assert r.headers["x-triage-fallback"] == "none"
+
+
+def test_an_open_server_breaker_doesnt_block_a_byok_request():
+    http, deps = app({"groq-small": AUTH_FAIL})
+    for _ in range(3):
+        chat(http, headers={"X-Triage-Quality": "0.92"})            # the server's key fails: groq trips
+    assert deps.client.breaker.is_open("groq")
+    deps.fake_models.script.clear()
+    r = chat(http, headers=GROQ_ONLY | {"X-Triage-Quality": "0.92"})
+    assert r.status_code == 200 and r.headers["x-triage-model"] == "groq-small"
+
+
+def test_byok_success_doesnt_reset_the_servers_failure_count():
+    http, deps = app({"groq-small": AUTH_FAIL})
+    chat(http, headers={"X-Triage-Quality": "0.92"})
+    chat(http, headers={"X-Triage-Quality": "0.92"})
+    before = dict(deps.client.breaker._failures)
+    deps.fake_models.script.clear()
+    chat(http, headers=GROQ_ONLY | {"X-Triage-Quality": "0.92"})
+    assert dict(deps.client.breaker._failures) == before

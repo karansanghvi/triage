@@ -529,11 +529,15 @@ class ReliableClient:
     def _send_chain(self, chain: list, tier: str, messages: list, stream: bool, settings: dict,
                     keys=None) -> ReliableResult:
         attempts: list[Attempt] = []
+        # The circuit breaker is shared by every request and tracks Triage's own keys and providers. A BYOK call
+        # uses the user's key, so it neither reads it (a server-key outage doesn't block a user's working key) nor
+        # writes it (a user's bad key or rate limit doesn't block everyone else).
+        use_breaker = not is_byok(keys)
 
         for index, model in enumerate(chain):
             next_name = chain[index + 1].name if index + 1 < len(chain) else None
 
-            blocked_key = self._blocked_key(model)
+            blocked_key = self._blocked_key(model) if use_breaker else None
             if blocked_key:
                 left = self.breaker.seconds_left(blocked_key)
                 attempts.append(Attempt(
@@ -543,14 +547,14 @@ class ReliableClient:
                 self._record_fallback(tier, model.name, next_name, "circuit_open")
                 continue
 
-            result, error = self._try_model(model, messages, stream, settings, attempts, keys)
+            result, error = self._try_model(model, messages, stream, settings, attempts, keys, use_breaker)
             if result is not None:
                 return ReliableResult(result, model, tier, chain[0].name, attempts)
             self._record_fallback(tier, model.name, next_name, error.kind)
 
         raise AllModelsFailed(tier, attempts)
 
-    def _try_model(self, model, messages, stream, settings, attempts, keys=None):
+    def _try_model(self, model, messages, stream, settings, attempts, keys=None, use_breaker=True):
         """Try one model, retrying rate limits and server errors."""
         policy = self.routing.retry
         last_error = None
@@ -562,15 +566,15 @@ class ReliableClient:
                 last_error = error
                 attempts.append(Attempt(model.name, model.provider, "error", error.kind, str(error),
                                         getattr(error, "response", None)))
-                if error.kind in PROVIDER_BREAKER_KINDS:
+                if use_breaker and error.kind in PROVIDER_BREAKER_KINDS:
                     self.breaker.record_failure(model.provider)
-                elif error.kind in MODEL_BREAKER_KINDS:
+                elif use_breaker and error.kind in MODEL_BREAKER_KINDS:
                     self.breaker.record_failure(_model_key(model))
 
                 can_retry = (
                     error.retryable
                     and attempt_number < policy.max_attempts
-                    and self._blocked_key(model) is None
+                    and (not use_breaker or self._blocked_key(model) is None)
                 )
                 if not can_retry:
                     break
@@ -584,7 +588,7 @@ class ReliableClient:
                 continue
 
             # A cache hit says nothing about whether the provider is healthy right now
-            if not getattr(result, "cached", False):
+            if use_breaker and not getattr(result, "cached", False):
                 self.breaker.record_success(model.provider)
                 self.breaker.record_success(_model_key(model))
             attempts.append(Attempt(model.name, model.provider, "success"))
