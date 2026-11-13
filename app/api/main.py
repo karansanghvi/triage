@@ -39,7 +39,7 @@ from app.api import core
 from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_env
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
 from app.api.errors import APIError, bad_request, stream_error_event
-from app.api.headers import check_verify_model, parse_quality, parse_task, parse_verify
+from app.api.headers import check_verify_model, parse_quality, parse_task, parse_verify, resolve_keys
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
@@ -279,6 +279,10 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                                x_triage_verify: Optional[str] = Header(None)):
         deps = app.state.deps
         started = time.perf_counter()
+        # This request's provider keys (X-OpenAI-Key, ...). Passed down the call path only: never stored on deps,
+        # app state, the cache or a background task. Closures below use the plain `byok` flag, not `keys`.
+        keys = resolve_keys(request.headers)
+        byok = keys.mode == "byok"
         unknown = sorted(set(body.model_extra or {}) - ACCEPTED_FIELDS)
         if unknown:
             raise bad_request(f"Triage doesn't support these parameters yet: {', '.join(unknown)}", unknown[0],
@@ -330,7 +334,7 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         try:
             routed = await core.route_and_stream(messages, tau=tau if auto else None, task_type=task,
                                                  model=body.model, stream=body.stream, settings=settings,
-                                                 deps=request_deps, request_id=request_id)
+                                                 deps=request_deps, request_id=request_id, keys=keys)
         except core.UnknownModel as error:
             finish("error", 404, "model_not_found")
             raise APIError(404, str(error), param="model", code="model_not_found") from None

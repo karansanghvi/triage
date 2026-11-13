@@ -4,15 +4,23 @@ SECRET is a user key; it must reach only the provider it belongs to, and never a
 body, a background task or the shared circuit breaker.
 """
 import json
+import random
 
 import httpx
 import httpx2
 import pytest
+from fastapi.testclient import TestClient
 
+from app.api.auth import Auth
+from app.api.fake_models import FakeBehavior
+from app.api.main import create_app
 from app.providers import anthropic_provider, gemini_provider, openai_provider
 from app.providers.base import send_request
 from app.providers.common import ProviderError
+from app.providers.keys import KeyContext
 from app.registry import load_registry
+from app.reliability import BYOKKeyMissing, ReliableClient, load_routing
+from tests.api_helpers import API_KEY, ASK, FakePredictor, make_deps
 
 SECRET = "sk-test-SECRET123"
 REGISTRY = load_registry()
@@ -92,3 +100,55 @@ def test_ollama_ignores_a_key(monkeypatch):
     monkeypatch.setattr(ollama_provider, "send_openai_format", lambda *a, **kw: seen.update(kw) or "ok")
     ollama_provider.send(MESSAGES, "llama3.2:3b", api_key=SECRET, stream=False, max_tokens=1, timeout=1)
     assert seen["api_key"] == "ollama"
+
+
+# ---------- b: the KeyContext travels with the request ----------
+
+
+GROQ_ONLY = {"x-groq-key": SECRET}
+
+
+def app(script=None, predictor=None, **kw):
+    deps = make_deps(script, predictor=predictor or FakePredictor(0.4, 0.95), **kw)
+    return TestClient(create_app(deps=deps, auth=Auth([API_KEY]))), deps
+
+
+def chat(http, body=None, headers=None):
+    return http.post("/v1/chat/completions", json=body or {"model": "auto", "messages": ASK},
+                     headers={"Authorization": f"Bearer {API_KEY}"} | (headers or {}))
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_the_users_key_reaches_the_provider(stream):
+    http, deps = app()
+    r = chat(http, {"model": "auto", "messages": ASK, "stream": stream}, GROQ_ONLY)
+    assert r.status_code == 200
+    assert deps.fake_models.last_api_key == SECRET
+    assert all(c["byok_key"] for c in deps.fake_models.calls)
+
+
+def test_no_key_request_sends_no_api_key():
+    http, deps = app()
+    assert chat(http).status_code == 200
+    assert deps.fake_models.last_api_key is None and not any(c["byok_key"] for c in deps.fake_models.calls)
+
+
+def test_the_guard_refuses_a_byok_call_without_its_providers_key():
+    deps = make_deps()
+    with pytest.raises(BYOKKeyMissing):
+        deps.client._call(REGISTRY["claude-opus"], ASK, False, {}, KeyContext("byok", {"groq": SECRET}))
+
+
+def test_api_key_cant_be_passed_around_the_keys_context():
+    deps = make_deps()
+    with pytest.raises(ValueError, match="KeyContext"):
+        deps.client.send(ASK, "low", api_key=SECRET)
+    with pytest.raises(ValueError, match="not both"):
+        deps.client.send(ASK, "low", keys=KeyContext("byok", {"groq": SECRET}), providers={"groq"})
+
+
+def test_keys_are_not_stored_on_deps_or_the_app():
+    http, deps = app()
+    chat(http, headers=GROQ_ONLY)
+    for obj in (deps, deps.client, deps.config, http.app.state):
+        assert SECRET not in repr(vars(obj))

@@ -103,7 +103,8 @@ async def aiter_in_thread(iterable) -> AsyncIterator:
 
 
 async def route_and_stream(messages: list, *, tau: Optional[float], task_type: Optional[str], model: str = "auto",
-                           stream: bool = True, settings: GenerationSettings, deps, request_id: str) -> RoutedStream:
+                           stream: bool = True, settings: GenerationSettings, deps, request_id: str,
+                           keys=None) -> RoutedStream:
     """Decide the route for one chat request, start the chosen model, and return once its answer has begun.
 
     messages    OpenAI-style [{"role": ..., "content": ...}], already validated
@@ -114,6 +115,8 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
     settings    the caller's temperature / max_tokens (None = routing.yaml's); pass settings.as_kwargs() on
     deps        app/api/deps.RouterDeps: .predictor, .client (ReliableClient), .registry
     request_id  goes into the RouteDecision unchanged
+    keys        this request's KeyContext (app/providers/keys.py), or None. BYOK: only its providers, with its
+                keys. Passed straight to ReliableClient, never stored.
 
     model="auto":
       1. prediction = deps.predictor.predict_messages(messages, task_type)
@@ -158,7 +161,7 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
         # 3. Start that tier's model; the client falls back along the chain 
         # and only returns once the first piece of the answer exists 
         result = await anyio.to_thread.run_sync(
-            partial(deps.client.send, messages, tier, stream=stream, **kwargs))
+            partial(deps.client.send, messages, tier, stream=stream, keys=keys, **kwargs))
         
         used_tau = tau
         p_low, p_medium = prediction.p_low, prediction.p_medium
@@ -166,7 +169,7 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
     else:
         # Pass-through: exactly the model the caller named, no prediction, no fallback 
         result = await anyio.to_thread.run_sync(
-            partial(deps.client.send_model, messages, model, stream=stream, **kwargs))
+            partial(deps.client.send_model, messages, model, stream=stream, keys=keys, **kwargs))
         
         tier, reason = deps.registry[model].tier, f"requested model {model}"
         used_tau = p_low = p_medium = used_task = guessed = None
