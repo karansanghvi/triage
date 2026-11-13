@@ -2,7 +2,10 @@
 import openai
 from openai import OpenAI
 
-from app.providers.common import ProviderError, RawResult, Usage, kind_from_status, require_key
+from app.providers.common import Finish, ProviderError, RawResult, Usage, kind_from_status, require_key
+
+# Tests set this to an httpx.Client with a MockTransport to see the exact request; None = the SDK's own client
+HTTP_CLIENT = None
 
 
 def _convert_error(error: openai.APIError, provider: str) -> ProviderError:
@@ -35,26 +38,35 @@ def _reasoning_from(message) -> str | None:
     return reasoning or None
 
 
+def _generation_params(provider, temperature, max_tokens) -> dict:
+    """OpenAI itself: max_completion_tokens (max_tokens "is now deprecated in favor of max_completion_tokens, and is
+    not compatible with o-series models", per the openai SDK's API docs; it includes reasoning tokens). Groq, Ollama
+    and OpenRouter keep max_tokens, exactly as in Phase 2. temperature None (reasoning models) = not sent."""
+    params = {} if temperature is None else {"temperature": temperature}       # same key order as before
+    params["max_completion_tokens" if provider == "openai" else "max_tokens"] = max_tokens
+    return params
+
+
 def send_openai_format(
-    messages, model_id, *, provider, base_url, api_key, stream, temperature, max_tokens, timeout,
+    messages, model_id, *, provider, base_url, api_key, stream, max_tokens, timeout, temperature=None,
     reasoning_effort=None, response_format=None,
 ):
     # max_retries=0: the library retries on its own by default.
     # Triage's reliability layer decides when to retry instead.
-    client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=0)
+    client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=0, http_client=HTTP_CLIENT)
 
-    extra = {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
+    extra = _generation_params(provider, temperature, max_tokens)
+    if reasoning_effort is not None:
+        extra["reasoning_effort"] = reasoning_effort
     if response_format is not None:
         extra["response_format"] = response_format
     if stream:
-        return _stream(client, messages, model_id, provider, temperature, max_tokens, extra)
+        return _stream(client, messages, model_id, provider, extra)
 
     try:
         completion = client.chat.completions.create(
             model=model_id,
             messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
             **extra,
         )
     except openai.APIError as error:
@@ -69,23 +81,24 @@ def send_openai_format(
     )
 
 
-def _stream(client, messages, model_id, provider, temperature, max_tokens, extra=None):
-    """Yield text pieces as they arrive, then a final Usage."""
+def _stream(client, messages, model_id, provider, extra):
+    """Yield text pieces as they arrive, then a final Usage. OpenAI itself also yields a Finish (its reason), so
+    an empty answer cut off by the token limit can be told apart; other providers' streams are unchanged."""
     try:
         chunks = client.chat.completions.create(
             model=model_id,
             messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
             stream=True,
             stream_options={"include_usage": True},  # ask for token counts at the end
-            **(extra or {}),
+            **extra,
         )
         for chunk in chunks:
             if chunk.choices:
                 piece = chunk.choices[0].delta.content
                 if piece:
                     yield piece
+                if provider == "openai" and chunk.choices[0].finish_reason:
+                    yield Finish(chunk.choices[0].finish_reason)
             if chunk.usage:
                 yield _usage_from(chunk.usage)
     except openai.APIError as error:

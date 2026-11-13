@@ -38,6 +38,9 @@ def send(messages, model_id, *, stream, temperature, max_tokens, timeout):
         http_options=types.HttpOptions(timeout=int(timeout * 1000)), #milliseconds
     )
     system_text, turns = split_system(messages)
+    # Gemini 3.6+ ignores temperature ("deprecated and ignored"), and Google says future models will return HTTP
+    # 400 for it (aistudio.google.com/docs/whats-new-gemini-3.6, checked 2026-11-12). Still sent so requests stay as
+    # they are today; drop it (as base.send_request does for `reasoning` models) when a Gemini model starts rejecting it.
     config = types.GenerateContentConfig(
         temperature=temperature,
         max_output_tokens=max_tokens,

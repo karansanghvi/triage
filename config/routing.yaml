@@ -130,6 +130,34 @@ model_params:
     reasoning_effort: low
   groq-large:
     reasoning_effort: low
+  # BYOK reasoning models: the cheapest effort ("low", like gpt-oss in Phase 2). OpenAI sends reasoning_effort;
+  # Anthropic sends output_config.effort. Opus 5.5 and Sonnet 5.5 can't turn thinking off; Haiku 5.5 can at
+  # effort high or below, so it is disabled there.
+  openai-luna:
+    reasoning_effort: low
+  openai-terra:
+    reasoning_effort: low
+  openai-sol:
+    reasoning_effort: low
+  claude-haiku:
+    reasoning_effort: low
+    thinking: disabled
+  claude-sonnet:
+    reasoning_effort: low
+  claude-opus:
+    reasoning_effort: low
+
+# The smallest max_tokens a model gets when the CALLER doesn't set max_tokens (it raises only generation.max_tokens
+# above). Reasoning models count their thinking toward max_tokens, so 4000 can be used up before any answer is
+# written. 16,000 stays under the 21,333 at which the Anthropic SDK refuses non-streaming calls. A caller's own
+# max_tokens is always respected (BYOK callers pay for it); an empty answer cut off by the limit falls back.
+min_default_max_tokens:
+  openai-luna: 16000
+  openai-terra: 16000
+  openai-sol: 16000
+  claude-haiku: 16000
+  claude-sonnet: 16000
+  claude-opus: 16000
 
 # NOTE (Phase 4 Step 0): these tau values were chosen for classifier v1 and have NOT been re-tuned for
 # classifier_c_logreg_cv v2. They will be re-picked on the validation set in Step 3 (reports/PHASE_4.md).

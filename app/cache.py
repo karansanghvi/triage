@@ -13,6 +13,7 @@ from app.providers.base import (
     DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE, Response, send_request,
 )
 from app.registry import PROJECT_ROOT, ModelConfig
+from app.providers.common import TRUNCATED_FINISH_REASONS   # re-exported: eval/build_dataset imports it from here
 
 logger = logging.getLogger("triage.cache")
 
@@ -21,8 +22,7 @@ FAKE_CACHE_PATH = PROJECT_ROOT / "data" / "cache" / "fake_responses.sqlite3"   #
 DEFAULT_TTL_SECONDS = 24 * 60 * 60       # saved answers expire after 24 hours
 CACHE_VERSION = 1                        # bump this to throw away every old entry at once
 
-# Finish reasons meaning the answer was cut off by the token limit: never cache those
-TRUNCATED_FINISH_REASONS = {"length", "max_tokens"}
+# Answers cut off by the token limit (TRUNCATED_FINISH_REASONS) are never cached
 
 
 def is_cacheable(temperature: float, stream: bool) -> bool:
@@ -35,7 +35,8 @@ def is_cacheable(temperature: float, stream: bool) -> bool:
 
 
 def make_cache_key(messages: list, model: ModelConfig, temperature: float, max_tokens: int,
-                   reasoning_effort: Optional[str] = None, response_format: Optional[dict] = None) -> str:
+                   reasoning_effort: Optional[str] = None, response_format: Optional[dict] = None,
+                   thinking: Optional[str] = None) -> str:
     """A fingerprint of everything that affects the answer.
 
     sort_keys makes the same data always produce the same text,
@@ -54,6 +55,8 @@ def make_cache_key(messages: list, model: ModelConfig, temperature: float, max_t
         payload["reasoning_effort"] = reasoning_effort
     if response_format is not None:
         payload["response_format"] = response_format
+    if thinking is not None:
+        payload["thinking"] = thinking
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -169,7 +172,7 @@ class CachedSender:
             )
 
         key = make_cache_key(messages, model, temperature, max_tokens, settings.get("reasoning_effort"),
-                             settings.get("response_format"))
+                             settings.get("response_format"), settings.get("thinking"))
         started_at = time.perf_counter()
         saved = self.cache.get(key)
 

@@ -149,11 +149,33 @@ def _apply_costs(row: RequestRow, response, deps) -> None:
     row.saved = row.strong_cost - row.price_as_cost
 
 
+def _attempt_dict(a) -> dict:
+    out = {"model": a.model_name, "outcome": a.outcome, "error_kind": a.error_kind}
+    billed = getattr(a, "response", None)          # only a truncated attempt carries one
+    if billed is not None:
+        out.update(input_tokens=billed.input_tokens, output_tokens=billed.output_tokens, cost=billed.cost,
+                   price_as_cost=billed.reported_cost)
+    return out
+
+
 def _apply_decision(row: RequestRow, d: core.RouteDecision) -> None:
     row.tau, row.p_low, row.p_medium = d.tau, d.p_low, d.p_medium
     row.task_type, row.task_type_guessed = d.task_type, d.task_type_guessed
     row.tier, row.primary_model, row.served_model, row.fell_back = d.tier, d.primary_model, d.model, d.fell_back
-    row.attempts = [{"model": a.model_name, "outcome": a.outcome, "error_kind": a.error_kind} for a in d.attempts]
+    row.attempts = [_attempt_dict(a) for a in d.attempts]
+
+
+def _add_truncated_costs(row: RequestRow, attempts) -> None:
+    """An attempt that used every output token thinking and wrote no answer (then fell back) was still billed:
+    add its cost to the request's total. Its tokens are in row.attempts; input/output_tokens stay the served
+    answer's, and strong_cost stays the strong model at those tokens."""
+    billed = [a.response for a in attempts if getattr(a, "response", None) is not None]
+    if not billed:
+        return
+    row.cost = (row.cost or 0.0) + sum(r.cost for r in billed)
+    row.price_as_cost = (row.price_as_cost or 0.0) + sum(r.reported_cost for r in billed)
+    if row.strong_cost is not None:
+        row.saved = row.strong_cost - row.price_as_cost
 
 
 def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] = None, tier: Optional[str] = None,
@@ -316,6 +338,16 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             finish("error", 403, "model_not_allowed")
             raise APIError(403, str(error), "permission_error", param="model", code="model_not_allowed") from None
         except AllModelsFailed as error:
+            if any(getattr(a, "response", None) is not None for a in error.attempts):
+                row.attempts = [_attempt_dict(a) for a in error.attempts]
+                _add_truncated_costs(row, error.attempts)
+            last = error.attempts[-1] if error.attempts else None
+            if not auto and last is not None and last.error_kind == "truncated":     # a named model: no chain
+                finish("error", 400, "truncated")
+                used = last.response.output_tokens if last.response is not None else "all its"
+                raise APIError(400, f"`{body.model}` used {used} output tokens thinking and wrote no answer. "
+                               "Send a higher max_tokens: thinking counts toward it.", param="max_tokens",
+                               code="max_tokens_too_low") from None
             finish("error", 503, "all_models_failed")
             raise APIError(503, f"No model could answer: {error}", "server_error", code="all_models_failed") from None
         decision = routed.decision
@@ -350,6 +382,7 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                 reason = _verified_reason(decision, outcome)
             else:
                 _apply_costs(row, response, deps)
+            _add_truncated_costs(row, decision.attempts)
             finish()
             cache = "hit" if response.cached else ("miss" if is_cacheable(temperature, False) else "bypass")
             headers = _triage_headers(decision, cache, model=served_model, tier=served_tier, reason=reason,
@@ -386,6 +419,7 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                 return
             response = routed.response
             _apply_costs(row, response, deps)
+            _add_truncated_costs(row, decision.attempts)
             finish()
             yield _chunk(request_id, created, decision.model, {}, finish=(response and response.finish_reason) or "stop")
             if include_usage and response is not None:

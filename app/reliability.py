@@ -47,9 +47,13 @@ class BreakerSettings:
 # Generation settings that apply to every model, and request parameters that are set per MODEL
 # (never per call or per tier), so a fallback model never receives a parameter meant for another model.
 GENERATION_KEYS = {"temperature", "max_tokens"}
-MODEL_PARAM_KEYS = {"reasoning_effort"}
-# Providers whose adapter speaks OpenAI's format (the only ones that accept reasoning_effort)
+MODEL_PARAM_KEYS = {"reasoning_effort", "thinking"}
+# Providers whose adapter speaks OpenAI's format
 OPENAI_FORMAT_PROVIDERS = {"openai", "groq", "ollama", "openrouter"}
+# reasoning_effort: OpenAI-format providers, plus Anthropic (sent as output_config.effort)
+REASONING_EFFORT_PROVIDERS = OPENAI_FORMAT_PROVIDERS | {"anthropic"}
+# thinking (Anthropic only). "disabled" is a 400 at effort xhigh or max (and on Sonnet 5.5 / Opus 5.5 at any effort)
+THINKING_MODES = {"disabled", "adaptive"}
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,9 @@ class RoutingConfig:
     # Required in routing.yaml (loading fails without it). None = no filter, which only a RoutingConfig built
     # directly in code (tests) can have.
     server_providers: Optional[frozenset] = None
+    # model name -> the smallest max_tokens it gets when the CALLER didn't set max_tokens (raises only our
+    # generation default). For reasoning models, whose thinking counts toward max_tokens.
+    min_default_max_tokens: dict = field(default_factory=dict)
 
     def timeout_for(self, model_name: str) -> float:
         return self.model_timeouts.get(model_name, self.timeout_seconds)
@@ -171,7 +178,21 @@ def routing_from_dict(data: dict, registry: dict) -> RoutingConfig:
                          model_params=_load_model_params(data.get("model_params"), registry),
                          model_timeouts=_load_model_timeouts(data.get("model_timeouts"), registry),
                          first_token_timeout_seconds=first_token, model_first_token_timeouts=model_first_token,
-                         server_providers=server_providers)
+                         server_providers=server_providers,
+                         min_default_max_tokens=_load_min_default_max_tokens(data.get("min_default_max_tokens"),
+                                                                             registry))
+
+
+def _load_min_default_max_tokens(raw, registry: dict) -> dict:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError("routing.yaml: 'min_default_max_tokens' must be a mapping of model name -> tokens")
+    out = {}
+    for name, tokens in raw.items():
+        if name not in registry:
+            raise ValueError(f"routing.yaml: min_default_max_tokens lists unknown model '{name}'")
+        out[name] = _positive_number(tokens, f"min_default_max_tokens.{name}", whole=True)
+    return out
 
 
 def _load_server_providers(raw, chains: dict, registry: dict) -> frozenset:
@@ -259,8 +280,15 @@ def _load_model_params(raw, registry: dict) -> dict:
         unknown = set(params) - MODEL_PARAM_KEYS
         if unknown:
             raise ValueError(f"routing.yaml: unsupported model_params for '{name}': {', '.join(sorted(unknown))}")
-        if "reasoning_effort" in params and registry[name].provider not in OPENAI_FORMAT_PROVIDERS:
+        if "reasoning_effort" in params and registry[name].provider not in REASONING_EFFORT_PROVIDERS:
             raise ValueError(f"routing.yaml: '{name}' ({registry[name].provider}) does not accept reasoning_effort")
+        if "thinking" in params:
+            if registry[name].provider != "anthropic":
+                raise ValueError(f"routing.yaml: '{name}' ({registry[name].provider}) does not accept thinking")
+            if params["thinking"] not in THINKING_MODES:
+                raise ValueError(f"routing.yaml: '{name}' thinking must be one of {', '.join(sorted(THINKING_MODES))}")
+            if params["thinking"] == "disabled" and params.get("reasoning_effort") in ("xhigh", "max"):
+                raise ValueError(f"routing.yaml: '{name}': thinking disabled is a 400 at effort xhigh or max")
         out[name] = dict(params)
     return out
 
@@ -339,6 +367,7 @@ class Attempt:
     outcome: str                     # "success", "error", or "skipped"
     error_kind: Optional[str] = None
     message: Optional[str] = None
+    response: Optional[object] = None   # truncated attempts only: the billed Response (its cost counts too)
 
 
 @dataclass(frozen=True)
@@ -494,7 +523,8 @@ class ReliableClient:
                 result = self._call(model, messages, stream, settings)
             except ProviderError as error:
                 last_error = error
-                attempts.append(Attempt(model.name, model.provider, "error", error.kind, str(error)))
+                attempts.append(Attempt(model.name, model.provider, "error", error.kind, str(error),
+                                        getattr(error, "response", None)))
                 if error.kind in PROVIDER_BREAKER_KINDS:
                     self.breaker.record_failure(model.provider)
                 elif error.kind in MODEL_BREAKER_KINDS:
@@ -535,8 +565,12 @@ class ReliableClient:
     def _call(self, model, messages, stream, settings):
         # Every call gets the configured timeout (per model if set) and generation settings, unless the caller
         # set their own, plus the parameters configured for THIS model only (so a fallback never inherits them)
+        caller_set_max_tokens = "max_tokens" in settings
         settings = {"timeout": self.routing.timeout_for(model.name), **self.routing.generation, **settings,
                     **self.routing.model_params.get(model.name, {})}
+        floor = self.routing.min_default_max_tokens.get(model.name)
+        if floor and not caller_set_max_tokens:       # a caller's own max_tokens is always respected
+            settings["max_tokens"] = max(settings.get("max_tokens", 0), floor)
 
         if not stream:
             return self._send(messages, model, **settings)

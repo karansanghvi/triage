@@ -9,6 +9,17 @@ class Usage:
     input_tokens: int
     output_tokens: int              # includes reasoning tokens, since providers bill them as output
     reasoning_tokens: Optional[int] = None   # the reasoning share of output_tokens, if reported
+
+
+@dataclass(frozen=True)
+class Finish:
+    """Streams only: the provider's finish reason, yielded once near the end (adapters that report it)."""
+    reason: Optional[str]
+
+
+# Finish reasons meaning the answer was cut off by the token limit (lowercased; Gemini says "MAX_TOKENS")
+TRUNCATED_FINISH_REASONS = {"length", "max_tokens"}
+
     
 @dataclass(frozen=True)
 class RawResult:
@@ -29,6 +40,7 @@ class ProviderError(Exception):
       auth        401 / 403: the key is missing, wrong or not allowed (provider-wide)
       client      other 4xx, e.g. a bad request or model name
       config      a problem on our side, e.g. a missing API key
+      truncated   a reasoning model used every output token (thinking) and wrote no answer (base.TruncatedAnswer)
     """
     RETRYABLE_KINDS = {"rate_limit", "server"}
     def __init__(self, provider: str, kind: str, message: str, status_code: Optional[int] = None):

@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from app.providers.base import StreamingResponse, _build_response
+from app.providers.base import StreamingResponse, TruncatedAnswer, _build_response
 from app.providers.common import ProviderError, Usage
 
 
@@ -35,6 +35,7 @@ class FakeBehavior:
     check_fail: Optional[str] = None       # a ProviderError kind for AI-checker calls only
     judge_reply: Optional[str] = None      # the judge's raw reply (default: score 5)
     judge_fail: Optional[str] = None       # a ProviderError kind for judge calls only
+    truncated: bool = False                # answers: used every output token thinking, no text (TruncatedAnswer)
 
 
 DEFAULT_CHECK_REPLY = '{"good": true, "reason": "fake check: looks right"}'
@@ -57,13 +58,13 @@ class FakeModels:
         self._lock = threading.Lock()
 
     def __call__(self, messages, model_config, stream=False, temperature=0.0, max_tokens=4000, timeout=30.0,
-                 reasoning_effort=None, response_format=None):
+                 reasoning_effort=None, response_format=None, thinking=None):
         b = self.script.get(model_config.name, FakeBehavior())
         kind = self._kind(messages, response_format)
         with self._lock:
             self.calls.append({"model": model_config.name, "stream": stream, "temperature": temperature,
                                "max_tokens": max_tokens, "timeout": timeout, "reasoning_effort": reasoning_effort,
-                               "kind": kind})
+                               "thinking": thinking, "kind": kind})
         if kind != "answer":
             fail = b.check_fail if kind == "check" else b.judge_fail
             if fail:
@@ -72,6 +73,10 @@ class FakeModels:
             reply = reply if reply is not None else (DEFAULT_CHECK_REPLY if kind == "check" else DEFAULT_JUDGE_REPLY)
             usage = Usage(_tokens(" ".join(m["content"] for m in messages)), _tokens(reply))
             return _build_response(model_config, reply, usage, messages, 1.0, "stop")
+        if b.truncated:                    # billed for max_tokens of thinking, nothing written
+            billed = _build_response(model_config, "", Usage(_tokens(" ".join(m["content"] for m in messages)),
+                                                             max_tokens), messages, 1.0, "length")
+            raise TruncatedAnswer(billed, max_tokens)
         text = b.text if b.text is not None else fake_text(model_config.name)
         usage = Usage(_tokens(" ".join(m["content"] for m in messages)), _tokens(text))
         provider = model_config.provider

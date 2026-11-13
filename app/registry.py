@@ -33,6 +33,10 @@ class ModelConfig:
     avg_latency_ms: float = 0.0
     price_as: Optional[PriceAs] = None
     max_output_tokens: Optional[int] = None   # hard cap for this model, if it has a low limit
+    # A reasoning model that thinks before answering (openai-*, claude-*): it is sent no temperature, and an
+    # empty answer cut off by the token limit is an error (base.TruncatedAnswer) so the chain falls back.
+    # Groq's gpt-oss models also reason but are NOT marked: their requests stay exactly as in Phase 2.
+    reasoning: bool = False
 
     def actual_cost(self, input_tokens: int, output_tokens: int) -> float:
         """What this request really cost you."""
@@ -72,6 +76,14 @@ def _parse_price(value, field: str, where: str) -> float:
     if value < 0:
         raise ValueError(f"{where}: '{field}' can't be negative")
     return float(value)
+
+
+def _parse_optional_bool(value, field: str, where: str) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError(f"{where}: '{field}' must be true or false, got {value!r}")
+    return value
 
 
 def _parse_optional_whole_number(value, field: str, where: str) -> Optional[int]:
@@ -134,6 +146,7 @@ def _parse_model(entry, index: int) -> ModelConfig:
         max_output_tokens=_parse_optional_whole_number(
             entry.get("max_output_tokens"), "max_output_tokens", where
         ),
+        reasoning=_parse_optional_bool(entry.get("reasoning"), "reasoning", where),
     )
 
 

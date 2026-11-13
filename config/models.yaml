@@ -141,8 +141,7 @@ models:
   # Source: developers.openai.com/api/docs/pricing and /api/docs/models/<id>, checked 2026-11-12.
   # None of these three is promotional (the page's only promo notes name gpt-5.6-sol and gpt-6-astra-law).
   # All three are reasoning models, 1,050,000-token context, 128K max output.
-  # NOTE: the OpenAI adapter still sends temperature and max_tokens; fixing that for reasoning models is the
-  # next step, so these don't work yet even with a key.
+  # reasoning: true = no temperature is sent, and the adapter sends max_completion_tokens (OpenAI's own API).
   - name: openai-luna
     provider: openai
     model_id: gpt-6-luna
@@ -150,6 +149,7 @@ models:
     input_price: 0.10
     output_price: 0.50
     avg_latency_ms: 0
+    reasoning: true
 
   - name: openai-terra
     provider: openai
@@ -158,6 +158,7 @@ models:
     input_price: 1.00
     output_price: 5.00
     avg_latency_ms: 0
+    reasoning: true
 
   - name: openai-sol
     provider: openai
@@ -166,12 +167,13 @@ models:
     input_price: 2.00
     output_price: 10.00
     avg_latency_ms: 0
+    reasoning: true
 
   # ---------- BYOK only: Anthropic ----------
   # Same rules as the OpenAI models above. Source: platform.claude.com/docs/en/about-claude/pricing and
   # /about-claude/models/overview, checked 2026-11-12. The IDs are both alias and pinned snapshot.
   # 1M context, 128K max output. Adaptive thinking is on by default and counts toward max_tokens.
-  # NOTE: these reject `temperature` (400), which the Anthropic adapter still sends: fixed in the next step.
+  # reasoning: true = no temperature is sent (a 400 on API version 2026-10-21, which the adapter pins).
   - name: claude-haiku
     provider: anthropic
     model_id: claude-haiku-5-5
@@ -180,6 +182,7 @@ models:
     input_price: 0.10
     output_price: 0.50
     avg_latency_ms: 0
+    reasoning: true
 
   - name: claude-sonnet
     provider: anthropic
@@ -188,6 +191,7 @@ models:
     input_price: 2.00
     output_price: 10.00
     avg_latency_ms: 0
+    reasoning: true
 
   - name: claude-opus
     provider: anthropic
@@ -196,3 +200,4 @@ models:
     input_price: 4.00
     output_price: 20.00
     avg_latency_ms: 0
+    reasoning: true
