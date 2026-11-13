@@ -268,8 +268,11 @@ def test_floor_raises_only_our_default_and_effort_reaches_every_reasoning_model(
     deps.client.send(ASK, "high", providers={"openai"})
     calls = {c["model"]: c for c in deps.fake_models.calls}
     for name in ("claude-haiku", "claude-sonnet", "claude-opus", "openai-sol"):
-        assert calls[name]["max_tokens"] == 16000 and calls[name]["reasoning_effort"] == "low", name
+        assert calls[name]["max_tokens"] == 16000, name
+    for name in ("claude-sonnet", "claude-opus", "openai-sol"):
+        assert calls[name]["reasoning_effort"] == "low", name
     assert calls["claude-haiku"]["thinking"] == "disabled" and calls["claude-opus"]["thinking"] is None
+    assert calls["claude-haiku"]["reasoning_effort"] is None
 
 
 def test_a_callers_own_max_tokens_is_respected():
@@ -288,7 +291,7 @@ def test_server_models_keep_the_phase2_settings():
 
 def write_routing(tmp_path, model_params="", extra=""):
     path = tmp_path / "routing.yaml"
-    path.write_text("fallback_chains:\n  low: [groq-allam, claude-haiku]\n  medium: [groq-small]\n"
+    path.write_text("fallback_chains:\n  low: [groq-allam, claude-haiku]\n  medium: [groq-small, claude-sonnet]\n"
                     "  high: [groq-large]\nserver_providers: [groq]\n" + model_params + extra)
     return path
 
@@ -297,6 +300,8 @@ def write_routing(tmp_path, model_params="", extra=""):
     ("model_params:\n  groq-small: {thinking: disabled}\n", "does not accept thinking"),
     ("model_params:\n  claude-haiku: {thinking: off}\n", "thinking must be one of"),
     ("model_params:\n  claude-haiku: {thinking: disabled, reasoning_effort: xhigh}\n", "400 at effort xhigh"),
+    ("model_params:\n  claude-sonnet: {thinking: disabled}\n", "can't turn thinking off"),
+    ("model_params:\n  claude-opus: {thinking: disabled, reasoning_effort: low}\n", "can't turn thinking off"),
     ("min_default_max_tokens: {nope: 100}\n", "unknown model"),
     ("min_default_max_tokens: {claude-haiku: 0}\n", "above 0"),
 ])
@@ -310,9 +315,10 @@ def test_real_config_gives_all_six_reasoning_models_low_effort_and_the_floor():
     reasoning = {n for n, m in REGISTRY.items() if m.reasoning}
     assert reasoning == {"openai-luna", "openai-terra", "openai-sol", "claude-haiku", "claude-sonnet", "claude-opus"}
     for name in reasoning:
-        assert routing.model_params[name]["reasoning_effort"] == "low"
         assert routing.min_default_max_tokens[name] == 16000
-    assert routing.model_params["claude-haiku"]["thinking"] == "disabled"
+        if name != "claude-haiku":
+            assert routing.model_params[name]["reasoning_effort"] == "low"
+    assert routing.model_params["claude-haiku"] == {"thinking": "disabled"}     # no effort with thinking off
     assert not set(routing.min_default_max_tokens) - reasoning
 
 

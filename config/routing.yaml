@@ -131,8 +131,9 @@ model_params:
   groq-large:
     reasoning_effort: low
   # BYOK reasoning models: the cheapest effort ("low", like gpt-oss in Phase 2). OpenAI sends reasoning_effort;
-  # Anthropic sends output_config.effort. Opus 5.5 and Sonnet 5.5 can't turn thinking off; Haiku 5.5 can at
-  # effort high or below, so it is disabled there.
+  # Anthropic sends output_config.effort. Opus 5.5 and Sonnet 5.5 can't turn thinking off (startup rejects it).
+  # claude-haiku: thinking disabled and NO effort, since the docs say an effort that differs from the level in
+  # effect is a 400 while thinking is off (its default effort, medium, is within the "high or below" it needs).
   openai-luna:
     reasoning_effort: low
   openai-terra:
@@ -140,7 +141,6 @@ model_params:
   openai-sol:
     reasoning_effort: low
   claude-haiku:
-    reasoning_effort: low
     thinking: disabled
   claude-sonnet:
     reasoning_effort: low
