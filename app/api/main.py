@@ -388,7 +388,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         # Background labels: only for auto requests with verification off. The labeler decides (eligibility,
         # sampling, daily cap) after the response has been sent; it gets the text from memory only.
         def background(answer_text):
-            if not auto or verify != "off" or deps.labeler is None:
+            # Never for BYOK: background jobs run after the response and must never receive a user key
+            if byok or not auto or verify != "off" or deps.labeler is None:
                 return None
             return BackgroundTask(deps.labeler.run, deps, row, messages, answer_text)
 
@@ -404,7 +405,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             if verify == "sync":
                 outcome = await verify_sync(messages, Served(decision.tier, decision.model, response, text),
                                             snapshot.verification.sync, deps, settings,
-                                            probabilities={"low": decision.p_low, "medium": decision.p_medium})
+                                            probabilities={"low": decision.p_low, "medium": decision.p_medium},
+                                            keys=keys)
                 _apply_verification(row, response, outcome, deps, baseline_providers)
                 response, text = outcome.final.response, outcome.final.text
                 served_model, served_tier, check, escalated = (outcome.final.model, outcome.final.tier,
@@ -417,7 +419,9 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             cache = "hit" if response.cached else ("miss" if is_cacheable(temperature, False) else "bypass")
             headers = _triage_headers(decision, cache, model=served_model, tier=served_tier, reason=reason,
                                       verified=verify, escalated=escalated, check=check) | {
-                "X-Triage-Cost": _money(row.price_as_cost), "X-Triage-Saved": _money(row.saved)}
+                "X-Triage-Cost": _money(row.price_as_cost)}
+            if row.saved is not None:          # unknown when no baseline model is reachable: left out, not faked
+                headers["X-Triage-Saved"] = _money(row.saved)
             completion = {"id": request_id, "object": "chat.completion", "created": created, "model": served_model,
                           "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
                                        "finish_reason": response.finish_reason or "stop"}],

@@ -423,3 +423,93 @@ def test_byok_rows_are_mode_byok_never_training_eligible_and_store_no_vectors():
     assert (byok_row.mode, byok_row.training_eligible, byok_row.features, byok_row.embedding) == \
         ("byok", False, None, None)
     assert api_row.mode == "api" and api_row.training_eligible is True and api_row.embedding is not None
+
+
+# ---------- g: sync verification and background labels ----------
+
+BAD_CHECK = '{"good": false, "reason": "wrong"}'
+SYNC = {"X-Triage-Verify": "sync"}
+GOOD = "2 + 3 = 5.\nAnswer: 5"           # passes the free format check for ASK
+# p_medium 0.85: below skip_check_above (0.90), so medium's AI check isn't skipped as "confident"
+MEDIUM_UNSURE = FakePredictor(0.4, 0.85)
+
+
+def calls_of(deps, kind):
+    return [c for c in deps.fake_models.calls if c["kind"] == kind]
+
+
+def test_byok_without_the_checkers_key_skips_only_the_ai_check():
+    http, deps = app({"gemini-flash": FakeBehavior(text=GOOD)}, predictor=MEDIUM_UNSURE)
+    r = chat(http, headers={"x-gemini-key": SECRET, "X-Triage-Quality": "0.8"} | SYNC)
+    assert r.status_code == 200
+    assert (r.headers["x-triage-model"], r.headers["x-triage-check"]) == ("gemini-flash", "skipped_no_key")
+    assert r.headers["x-triage-verified"] == "sync" and calls_of(deps, "check") == []
+    assert providers_called(deps) == {"gemini"}
+    (row,) = deps.log.rows()
+    assert row.decided_by == "skipped_no_key" and row.escalated is False
+
+
+def test_byok_checker_uses_the_users_own_key_and_escalates_within_their_providers():
+    http, deps = app({"groq-small": FakeBehavior(text=GOOD, check_reply=BAD_CHECK)}, predictor=MEDIUM_UNSURE)
+    r = chat(http, headers=GROQ_ONLY | {"X-Triage-Quality": "0.8"} | SYNC)
+    assert (r.headers["x-triage-check"], r.headers["x-triage-escalated"]) == ("ai_checker", "true")
+    assert r.json()["model"] == "groq-large"
+    (check,) = calls_of(deps, "check")
+    assert check["byok_key"] and providers_called(deps) == {"groq"}
+
+
+def test_format_check_still_escalates_without_the_checkers_key():
+    http, deps = app({"openai-luna": FakeBehavior(text="five"), "openai-terra": FakeBehavior(text=GOOD)},
+                     predictor=FakePredictor(0.95, 0.85))
+    r = chat(http, headers={"x-openai-key": SECRET, "X-Triage-Quality": "0.1"} | SYNC)
+    assert r.headers["x-triage-escalated"] == "true" and r.json()["model"] == "openai-terra"
+    assert calls_of(deps, "check") == [] and providers_called(deps) == {"openai"}   # no groq key: no AI check
+
+
+def test_byok_escalation_with_no_higher_tier_serves_the_current_answer():
+    from tests.api_helpers import routing_raw
+    raw = routing_raw()
+    raw["fallback_chains"]["high"] = ["groq-large"]                 # no gemini model above medium
+    http, deps = app({"gemini-flash": FakeBehavior(text="five")}, raw=raw)
+    r = chat(http, headers={"x-gemini-key": SECRET, "X-Triage-Quality": "0.92"} | SYNC)
+    assert r.status_code == 200 and r.json()["model"] == "gemini-flash"
+    assert r.headers["x-triage-escalated"] == "false"
+    (row,) = deps.log.rows()
+    assert row.error_kind == "no_model_for_keys:high" and row.decided_by == "format"
+    assert row.saved is None and "x-triage-saved" not in r.headers      # no gemini model in high: no baseline
+
+
+def test_truncated_escalation_attempts_count_in_the_cost():
+    http, deps = app({"openai-luna": FakeBehavior(text="five"), "openai-terra": FakeBehavior(truncated=True),
+                      "claude-sonnet": FakeBehavior(text=GOOD)}, predictor=FakePredictor(0.95, 0.95))
+    r = chat(http, headers={"x-openai-key": SECRET, "x-anthropic-key": "sk-ant-test-OTHER456",
+                            "X-Triage-Quality": "0.1"} | SYNC)
+    assert r.status_code == 200 and r.json()["model"] == "claude-sonnet"
+    (row,) = deps.log.rows()
+    assert [c["model"] for c in calls_of(deps, "answer")] == ["openai-luna", "openai-terra", "claude-sonnet"]
+    prompt_tokens = max(1, len(ASK[0]["content"]) // 4)
+    terra = REGISTRY["openai-terra"].actual_cost(prompt_tokens, 16000)          # billed, though it wrote nothing
+    luna = REGISTRY["openai-luna"].actual_cost(prompt_tokens, max(1, len("five") // 4))
+    sonnet = REGISTRY["claude-sonnet"].actual_cost(row.input_tokens, row.output_tokens)
+    assert row.escalation_extra_cost == pytest.approx(sonnet + terra)
+    assert row.cost == pytest.approx(luna + terra + sonnet)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_byok_requests_schedule_no_background_labels(stream):
+    http, deps = app(sample_rate=1.0)
+    chat(http, {"model": "auto", "messages": ASK, "stream": stream}, GROQ_ONLY | {"X-Triage-Quality": "0.1"})
+    assert deps.log.labels() == []
+    assert [c["kind"] for c in deps.fake_models.calls] == ["answer"]       # no strong answer, no judge call
+    chat(http, {"model": "auto", "messages": ASK, "stream": stream}, {"X-Triage-Quality": "0.1"})
+    assert len(deps.log.labels()) == 1                                     # the same request without keys is labeled
+
+
+def test_background_eligibility_rejects_byok_rows():
+    from app.api.background import eligible
+    from app.api.request_log import RequestRow
+    row = RequestRow(request_id="r", timestamp="t", key_id="k", requested_model="auto", stream=False, tier="low",
+                     fell_back=False, cache_hit=False, mode="byok")
+    assert eligible(row) is False
+    row.mode = "api"
+    assert eligible(row) is True

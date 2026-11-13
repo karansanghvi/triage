@@ -32,7 +32,7 @@ import anyio
 import yaml
 
 from app.providers.common import ProviderError
-from app.reliability import AllModelsFailed
+from app.reliability import AllModelsFailed, is_byok
 from app.verifier.ai_checker import TRUNCATED_FINISH_REASONS, check_answer_ai
 from app.verifier.checker import check_answer
 
@@ -189,15 +189,17 @@ class ClientCheckSend:
     retries, breaker, cache and routing.yaml timeout. Failing models become a ProviderError, which
     check_answer_ai turns into an error result. Also adds up what was actually paid."""
 
-    def __init__(self, client):
+    def __init__(self, client, keys=None):
         self.client = client
+        self.keys = keys                  # the request's KeyContext (BYOK: the user's key), used within the request
         self.cost = 0.0
 
     def __call__(self, messages, model_name, settings):
         response_format = {"type": settings.response_format} if settings.response_format else None
         try:
             result = self.client.send_model(messages, model_name, stream=False, temperature=settings.temperature,
-                                            max_tokens=settings.max_tokens, response_format=response_format)
+                                            max_tokens=settings.max_tokens, response_format=response_format,
+                                            keys=self.keys)
         except AllModelsFailed as error:
             last = next((a for a in reversed(error.attempts) if a.error_kind), None)
             provider = self.client.registry[model_name].provider
@@ -247,6 +249,23 @@ def visible_tokens(response) -> Optional[int]:
     return max(0, int(out) - int(getattr(response, "reasoning_tokens", None) or 0))
 
 
+def _billed_truncations(attempts) -> tuple:
+    """(price_as, actual) cost of attempts that used every output token and wrote nothing (then fell back)."""
+    billed = [a.response for a in attempts if getattr(a, "response", None) is not None]
+    return sum(r.reported_cost for r in billed), sum(r.cost for r in billed)
+
+
+def escalation_tier(target: str, deps, keys) -> Optional[str]:
+    """The tier an escalation to `target` uses: `target`, or for BYOK the nearest tier at or above it with a model
+    on the user's providers (escalation only goes up). None = no such tier."""
+    if not is_byok(keys):
+        return target
+    for tier in TIERS[TIERS.index(target):]:
+        if deps.client.routing.chain_for(tier, deps.registry, keys.providers):
+            return tier
+    return None
+
+
 def check_skip(tier_policy: TierPolicy, p_pass: Optional[float], response) -> Optional[str]:
     """"skipped_confident", "skipped_short" or None (run the AI check). Same rule as the Step 3 simulation."""
     above = tier_policy.skip_check_above
@@ -259,9 +278,13 @@ def check_skip(tier_policy: TierPolicy, p_pass: Optional[float], response) -> Op
 
 
 async def verify_sync(messages: list, first: Served, policy: SyncPolicy, deps, settings,
-                      probabilities: Optional[dict] = None) -> SyncOutcome:
+                      probabilities: Optional[dict] = None, keys=None) -> SyncOutcome:
     """Check `first` (the routed answer) by its tier's policy; escalate while a check says bad.
-    probabilities {tier: the classifier's pass probability}, for skip_check_above."""
+    probabilities {tier: the classifier's pass probability}, for skip_check_above.
+    keys: the request's KeyContext. BYOK: the AI checker and escalations use only the user's providers and keys;
+    if the checker's provider has no key, the AI check is skipped ("skipped_no_key"; the free format check and
+    escalation still run), and an escalation goes to the nearest higher tier the keys can reach."""
+    checker_provider = deps.registry[deps.checker_settings.model_name].provider if deps.checker_settings else None
     probabilities = probabilities or {}
     out = SyncOutcome(final=first)
     current = first
@@ -274,11 +297,13 @@ async def verify_sync(messages: list, first: Served, policy: SyncPolicy, deps, s
                 out.decided_by, out.checker_verdict, bad = "format", "good" if ok else "bad", not ok
             else:
                 skipped = check_skip(tier_policy, probabilities.get(current.tier), current.response)
+                if skipped is None and is_byok(keys) and not keys.has(checker_provider):
+                    skipped = "skipped_no_key"    # BYOK without a key for the checker's provider
                 if skipped:                       # accept without the paid check
                     out.decided_by, out.checker_verdict = skipped, None
                     out.steps.append((current.tier, check, skipped))
                     continue
-                send = ClientCheckSend(deps.client)
+                send = ClientCheckSend(deps.client, keys)
                 started = time.perf_counter()
                 result = await anyio.to_thread.run_sync(partial(
                     check_answer_ai, messages, current.text, model=deps.checker_settings.model_name,
@@ -297,18 +322,25 @@ async def verify_sync(messages: list, first: Served, policy: SyncPolicy, deps, s
                 break
         if not bad or tier_policy.escalate_to is None:
             break
-        target = tier_policy.escalate_to
+        target = escalation_tier(tier_policy.escalate_to, deps, keys)
+        if target is None:                # BYOK: no higher tier has a model for the user's keys
+            out.escalation_error = f"no_model_for_keys:{tier_policy.escalate_to}"
+            break
         started = time.perf_counter()
         try:
             result = await anyio.to_thread.run_sync(partial(deps.client.send, messages, target, stream=False,
-                                                            **settings.as_kwargs()))
-        except AllModelsFailed:
+                                                            keys=keys, **settings.as_kwargs()))
+        except AllModelsFailed as error:
             out.escalation_latency_ms += (time.perf_counter() - started) * 1000
             out.escalation_error = f"all_models_failed:{target}"
+            reported, actual = _billed_truncations(error.attempts)
+            out.escalation_cost += reported
+            out.escalation_actual_cost += actual
             break
         out.escalation_latency_ms += (time.perf_counter() - started) * 1000
-        out.escalation_cost += result.response.reported_cost
-        out.escalation_actual_cost += result.response.cost
+        reported, actual = _billed_truncations(result.attempts)       # truncated tries before the answer
+        out.escalation_cost += result.response.reported_cost + reported
+        out.escalation_actual_cost += result.response.cost + actual
         out.escalated, out.escalated_to = True, target
         out.escalated_from = out.escalated_from or first.tier
         current = Served(target, result.model.name, result.response, result.response.text)
