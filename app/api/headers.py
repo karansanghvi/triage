@@ -59,9 +59,10 @@ def check_verify_model(mode: str, model: str) -> None:
 def resolve_keys(headers: Mapping[str, str]) -> KeyContext:
     """Build this request's KeyContext from its headers.
     
-    Any key sent -> "byok" with only those providers. 
-    No keys sent -> "demo" with no keys (server keys are added in Step 2)
-    Makes no network calls and never checks whether a key is valid 
+    Any key sent -> "byok" with only those providers.
+    No keys sent -> "demo" with no keys: the request uses the server's own keys, read from the environment by the
+    adapters, and only the providers in routing.yaml's server_providers. Server keys never go into a KeyContext.
+    Makes no network calls and never checks whether a key is valid.
     """
     keys: dict[str, str] = {}
     for header, provider in KEY_HEADERS.items():

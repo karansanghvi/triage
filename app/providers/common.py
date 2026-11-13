@@ -49,6 +49,12 @@ class ProviderError(Exception):
         self.kind = kind
         self.status_code = status_code
     
+    def redact(self, secrets=()) -> "ProviderError":
+        """Remove keys from this error's message, in place (keeps its type, kind and status), and return it."""
+        from app.providers.keys import redact
+        self.args = tuple(redact(a, secrets) if isinstance(a, str) else a for a in self.args)
+        return self
+
     @property
     def retryable(self) -> bool:
         """Only rate limits and server errors are worth retrying"""

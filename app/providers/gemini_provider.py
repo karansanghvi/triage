@@ -61,7 +61,7 @@ def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_ke
     try:
         response = client.models.generate_content(model=model, contents=contents, config=config)
     except (errors.APIError, httpx.HTTPError) as error:
-        raise _convert_error(error) from error 
+        raise _convert_error(error) from None 
     
     finish_reason = None 
     if response.candidates and response.candidates[0].finish_reason:
@@ -86,6 +86,6 @@ def _stream(client, model, contents, config):
             if chunk.usage_metadata:
                 usage = _usage_from(chunk.usage_metadata) # the last chunk has the totals 
     except (errors.APIError, httpx.HTTPError) as error:
-        raise _convert_error(error) from error
+        raise _convert_error(error) from None
     if usage:
         yield usage

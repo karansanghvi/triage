@@ -11,6 +11,7 @@ import yaml
 
 from app.providers.base import send_request
 from app.providers.common import ProviderError
+from app.providers.keys import redact
 from app.registry import PROJECT_ROOT, VALID_PROVIDERS, VALID_TIERS, ModelConfig, load_registry
 
 logger = logging.getLogger("triage.reliability")
@@ -563,8 +564,9 @@ class ReliableClient:
             try:
                 result = self._call(model, messages, stream, settings, keys)
             except ProviderError as error:
+                error.redact(keys.secrets if is_byok(keys) else ())     # the error may quote the key
                 last_error = error
-                attempts.append(Attempt(model.name, model.provider, "error", error.kind, str(error),
+                attempts.append(Attempt(model.name, model.provider, "error", error.kind, redact(str(error)),
                                         getattr(error, "response", None)))
                 if use_breaker and error.kind in PROVIDER_BREAKER_KINDS:
                     self.breaker.record_failure(model.provider)

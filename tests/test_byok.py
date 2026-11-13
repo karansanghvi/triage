@@ -4,23 +4,27 @@ SECRET is a user key; it must reach only the provider it belongs to, and never a
 body, a background task or the shared circuit breaker.
 """
 import json
+import logging
 import random
 
 import httpx
 import httpx2
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.auth import Auth
 from app.api.fake_models import FakeBehavior
 from app.api.main import create_app
+from app.api.request_log import SQLiteRequestLog
 from app.cache import CachedSender, ResponseCache, key_fingerprint, make_cache_key
 from app.providers import anthropic_provider, gemini_provider, openai_provider
 from app.providers.base import send_request
 from app.providers.common import ProviderError
-from app.providers.keys import KeyContext
+from app.providers.keys import REDACTED, KeyContext, redact
 from app.registry import load_registry
-from app.reliability import BYOKKeyMissing, ReliableClient, load_routing
+from app.router.predictor import Prediction
+from app.reliability import AllModelsFailed, BYOKKeyMissing, ReliableClient, load_routing
 from tests.api_helpers import API_KEY, ASK, FakePredictor, make_deps
 
 SECRET = "sk-test-SECRET123"
@@ -326,3 +330,96 @@ def test_byok_without_a_hash_secret_skips_the_cache(tmp_path):
     sender = CachedSender(ResponseCache(tmp_path / "c.sqlite3"), send_fn=lambda *a, **kw: calls.append(kw) or None)
     sender(ASK, REGISTRY["groq-small"], temperature=0, max_tokens=10, api_key=SECRET)
     assert sender.cache.count() == 0 and sender.hits == sender.misses == 0 and calls[0]["api_key"] == SECRET
+
+
+# ---------- f: redaction, request mode ----------
+
+
+
+ECHO_401 = FakeBehavior(fail_before="auth", echo_key=True)
+
+
+@pytest.fixture
+def captured_logs(caplog):
+    """Everything logged: the root (caplog) plus the stderr JSON request log, which doesn't propagate."""
+    caplog.set_level(logging.DEBUG)
+    lines = []
+    handler = logging.Handler()
+    handler.emit = lambda record: lines.append(handler.format(record))
+    requests_logger = logging.getLogger("triage.requests")
+    requests_logger.addHandler(handler)
+    yield lambda: caplog.text + "\n".join(lines)
+    requests_logger.removeHandler(handler)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_key_echoed_by_a_provider_401_appears_nowhere(tmp_path, captured_logs, stream):
+    db = tmp_path / "requests.sqlite3"
+    http, deps = app({"groq-small": ECHO_401, "groq-allam": ECHO_401, "groq-large": ECHO_401},
+                     log=SQLiteRequestLog(db), cache=ResponseCache(tmp_path / "cache.sqlite3"))
+    bodies = []
+    for quality in ("0.1", "0.92", "0.99"):
+        r = chat(http, {"model": "auto", "messages": ASK, "stream": stream}, GROQ_ONLY | {"X-Triage-Quality": quality})
+        bodies.append(r.text + str(r.headers))
+    r = chat(http, {"model": "groq-small", "messages": ASK, "stream": stream}, GROQ_ONLY)
+    bodies.append(r.text + str(r.headers))
+    assert all(SECRET not in b for b in bodies)
+    assert SECRET not in captured_logs()
+    deps.log.close()
+    for f in tmp_path.iterdir():                                   # the SQLite log (and WAL), the cache
+        assert SECRET.encode() not in f.read_bytes(), f.name
+    assert all(row.mode == "byok" for row in SQLiteRequestLog(db).rows())
+
+
+def test_attempt_messages_are_redacted():
+    deps = make_deps({"groq-small": ECHO_401})
+    with pytest.raises(AllModelsFailed) as error:
+        deps.client.send(ASK, "medium", keys=KeyContext("byok", {"groq": SECRET}))
+    (attempt,) = error.value.attempts
+    assert attempt.error_kind == "auth" and REDACTED in attempt.message and SECRET not in attempt.message
+    assert SECRET not in str(error.value)
+
+
+def test_send_request_redacts_a_key_echoed_by_the_real_sdk(server_keys, monkeypatch):
+    class Echo401(Wire):
+        def __call__(self, request):
+            self.requests.append(request)
+            body = {"error": {"message": f"Incorrect API key provided: {SECRET}.", "type": "invalid_request_error",
+                              "code": "invalid_api_key"}}
+            return httpx.Response(401, content=json.dumps(body), headers={"content-type": "application/json"})
+
+    wire = Echo401({})
+    monkeypatch.setattr(openai_provider, "HTTP_CLIENT", wire.client())
+    for stream in (False, True):
+        with pytest.raises(ProviderError) as error:
+            result = send_request(MESSAGES, REGISTRY["openai-luna"], stream=stream, max_tokens=10, api_key=SECRET)
+            list(result)
+        assert error.value.kind == "auth" and SECRET not in str(error.value) and error.value.__cause__ is None
+
+
+@pytest.mark.parametrize("text", ["sk-ant-api03-abcdefghij", "sk-proj-abcdefghijkl", "gsk_abcdefghijkl",
+                                  "AIzaSyA1234567890abcdefghij"])
+def test_redact_removes_common_key_patterns(text):
+    assert redact(f"key {text} was rejected") == f"key {REDACTED} was rejected"
+
+
+def test_redact_removes_exact_values_and_keeps_ordinary_text():
+    assert redact("my-odd-key-value failed", ("my-odd-key-value",)) == f"{REDACTED} failed"
+    assert redact("sk-learn and gsk_ are fine") == "sk-learn and gsk_ are fine"
+    assert redact(None) is None
+
+
+def test_byok_rows_are_mode_byok_never_training_eligible_and_store_no_vectors():
+    class VectorPredictor(FakePredictor):
+        def predict_messages(self, messages, task_type=None):
+            p = super().predict_messages(messages, task_type)
+            return Prediction(p.p_low, p.p_medium, p.raw_p_medium, p.task_type, p.task_type_guessed,
+                              features=np.zeros(14), embedding=np.zeros(384, dtype="float32"))
+
+    http, deps = app(predictor=VectorPredictor(0.95, 0.95))
+    chat(http, headers=GROQ_ONLY)
+    chat(http)
+    byok_row, api_row = deps.log.rows()
+    assert (byok_row.mode, byok_row.training_eligible, byok_row.features, byok_row.embedding) == \
+        ("byok", False, None, None)
+    assert api_row.mode == "api" and api_row.training_eligible is True and api_row.embedding is not None

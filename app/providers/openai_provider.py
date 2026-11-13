@@ -70,7 +70,7 @@ def send_openai_format(
             **extra,
         )
     except openai.APIError as error:
-        raise _convert_error(error, provider) from error
+        raise _convert_error(error, provider) from None
 
     choice = completion.choices[0]
     return RawResult(
@@ -102,7 +102,7 @@ def _stream(client, messages, model_id, provider, extra):
             if chunk.usage:
                 yield _usage_from(chunk.usage)
     except openai.APIError as error:
-        raise _convert_error(error, provider) from error
+        raise _convert_error(error, provider) from None
 
 
 def send(messages, model_id, *, api_key=None, **settings):

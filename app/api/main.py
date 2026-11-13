@@ -86,8 +86,8 @@ class _RecordingPredictor:
 
 
 def _apply_inputs(row: RequestRow, prediction) -> None:
-    """Step 8 storage: only for model="auto" requests that answered."""
-    if prediction is None or row.requested_model != "auto" or row.status != "ok":
+    """Step 8 storage: only for model="auto" requests that answered, and never for BYOK requests."""
+    if prediction is None or row.requested_model != "auto" or row.status != "ok" or row.mode == "byok":
         return
     from app.router.embeddings import MODEL_NAME
     from app.router.features import FEATURE_VERSION
@@ -330,7 +330,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                          config_version=snapshot.version, temperature=temperature, max_tokens=max_tokens,
                          settings_match_training=(temperature == training.get("temperature")
                                                   and max_tokens == training.get("max_tokens")) if auto else None,
-                         prompt_hmac=prompt_hmac(messages, deps.hash_secret), verified=verify, mode="api")
+                         prompt_hmac=prompt_hmac(messages, deps.hash_secret), verified=verify,
+                         mode="byok" if byok else "api")
 
         logged = []
         recorder = _RecordingPredictor(deps.predictor)

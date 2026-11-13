@@ -153,6 +153,14 @@ class StreamingResponse:
             raise TruncatedAnswer(self.response, self._max_tokens)
 
 
+def _redacting(events, secrets):
+    """A stream's events, with the key removed from any ProviderError it raises."""
+    try:
+        yield from events
+    except ProviderError as error:
+        raise error.redact(secrets) from None
+
+
 def _validate_messages(messages) -> None:
     if not isinstance(messages, list) or not messages:
         raise ValueError("messages must be a non-empty list")
@@ -232,12 +240,16 @@ def send_request(
             raise ProviderError(model_config.provider, "config", "response_format is only supported on OpenAI-format providers")
         settings["response_format"] = response_format
 
+    secrets = (api_key,) if api_key else ()
     if stream:
-        events = adapter(messages, model_config.model_id, **settings)
+        events = _redacting(adapter(messages, model_config.model_id, **settings), secrets)
         return StreamingResponse(events, model_config, messages, max_tokens)
 
     started_at = time.perf_counter()
-    raw = adapter(messages, model_config.model_id, **settings)
+    try:
+        raw = adapter(messages, model_config.model_id, **settings)
+    except ProviderError as error:                 # a provider may echo the key in its error text
+        raise error.redact(secrets) from None
     latency_ms = (time.perf_counter() - started_at) * 1000
     response = _build_response(
         model_config, raw.text, raw.usage, messages, latency_ms, raw.finish_reason, reasoning=raw.reasoning,
