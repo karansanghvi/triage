@@ -248,6 +248,30 @@ def _not_allowed_message(error: ModelNotAllowed) -> str:
 NO_USABLE_MODEL_MESSAGE = ("None of the provider keys sent can reach a model. Send a key in one of: "
                            + ", ".join(PROVIDER_KEY_HEADERS.values()) + ".")
 
+PROVIDER_NAMES = {"openai": "OpenAI", "anthropic": "Anthropic", "groq": "Groq", "gemini": "Gemini"}
+
+
+def rejected_key_providers(attempts) -> list:
+    """BYOK: the providers that rejected the user's key, if EVERY failed attempt was an auth error (401/403);
+    otherwise [] (mixed failures keep the usual 503). In the order they were tried."""
+    failed = [a for a in attempts if a.outcome == "error"]
+    if not failed or any(a.error_kind != "auth" for a in failed):
+        return []
+    return list(dict.fromkeys(a.provider for a in failed))
+
+
+def _join(items: list) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def invalid_key_message(providers: list) -> str:
+    """Names the provider(s) and header(s), never a key or a tier."""
+    names = _join([PROVIDER_NAMES.get(p, p) for p in providers])
+    headers = _join([PROVIDER_KEY_HEADERS.get(p, p) for p in providers])
+    plural = len(providers) > 1
+    return (f"{names} rejected the API key{'s' if plural else ''} you sent in {headers}. "
+            f"Check the key{'s' if plural else ''} and try again.")
+
 
 def _error_response(error: APIError, headers: Optional[dict] = None) -> JSONResponse:
     return JSONResponse(error.body(), status_code=error.status, headers=headers)
@@ -378,6 +402,10 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                 raise APIError(400, f"`{body.model}` used {used} output tokens thinking and wrote no answer. "
                                "Send a higher max_tokens: thinking counts toward it.", param="max_tokens",
                                code="max_tokens_too_low") from None
+            rejected = rejected_key_providers(error.attempts) if byok else []
+            if rejected:                                    # the user's own key(s) were refused: say so, as a 401
+                finish("error", 401, "invalid_provider_key")
+                raise APIError(401, invalid_key_message(rejected), code="invalid_provider_key") from None
             finish("error", 503, "all_models_failed")
             raise APIError(503, f"No model could answer: {error}", "server_error", code="all_models_failed") from None
         decision = routed.decision

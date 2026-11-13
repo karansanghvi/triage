@@ -513,3 +513,50 @@ def test_background_eligibility_rejects_byok_rows():
     assert eligible(row) is False
     row.mode = "api"
     assert eligible(row) is True
+
+
+# ---------- a provider rejecting the user's key is a clear 401 ----------
+
+REJECT = FakeBehavior(fail_before="auth", echo_key=True)
+SLOW = FakeBehavior(fail_before="timeout")
+ANTHROPIC_ONLY = {"x-anthropic-key": SECRET}
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_named_model_with_a_rejected_key_is_a_401_naming_provider_and_header(stream):
+    http, deps = app({"claude-haiku": REJECT})
+    r = chat(http, {"model": "claude-haiku", "messages": ASK, "stream": stream}, ANTHROPIC_ONLY)
+    assert r.status_code == 401
+    err = r.json()["error"]
+    assert (err["type"], err["code"]) == ("invalid_request_error", "invalid_provider_key")
+    assert err["message"] == ("Anthropic rejected the API key you sent in X-Anthropic-Key. "
+                              "Check the key and try again.")
+    assert "tier" not in r.text and SECRET not in r.text
+    (row,) = deps.log.rows()
+    assert (row.status, row.http_status, row.error_kind) == ("error", 401, "invalid_provider_key")
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_auto_with_every_key_rejected_is_a_401_naming_each_provider(stream):
+    http, _ = app({"openai-sol": REJECT, "claude-opus": REJECT})
+    r = chat(http, {"model": "auto", "messages": ASK, "stream": stream},
+             {"x-openai-key": SECRET, "x-anthropic-key": "sk-ant-test-OTHER456", "X-Triage-Quality": "0.99"})
+    assert r.status_code == 401 and r.json()["error"]["code"] == "invalid_provider_key"
+    assert r.json()["error"]["message"] == ("OpenAI and Anthropic rejected the API keys you sent in X-OpenAI-Key "
+                                            "and X-Anthropic-Key. Check the keys and try again.")
+    assert SECRET not in r.text and "sk-ant-test-OTHER456" not in r.text
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_mixed_failures_keep_the_503(stream):
+    http, _ = app({"openai-sol": REJECT, "claude-opus": SLOW})
+    r = chat(http, {"model": "auto", "messages": ASK, "stream": stream},
+             {"x-openai-key": SECRET, "x-anthropic-key": "sk-ant-test-OTHER456", "X-Triage-Quality": "0.99"})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "all_models_failed"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_no_key_auth_failure_keeps_the_503(stream):
+    http, _ = app({"groq-small": FakeBehavior(fail_before="auth")})
+    r = chat(http, {"model": "groq-small", "messages": ASK, "stream": stream})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "all_models_failed"
