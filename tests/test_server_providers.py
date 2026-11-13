@@ -12,6 +12,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.api.auth import Auth
+from app.api.config_state import ActiveConfig
 from app.api.core import GenerationSettings, route_and_stream
 from app.api.fake_models import FakeBehavior, fake_text
 from app.api.main import create_app
@@ -185,8 +186,19 @@ def test_bad_server_providers_are_rejected(tmp_path, extra, message):
         load_routing(REGISTRY, write(tmp_path, extra))
 
 
-def test_server_providers_left_out_means_no_filter(tmp_path):
-    assert load_routing(REGISTRY, write(tmp_path, "")).server_providers is None
+def test_server_providers_left_out_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match="'server_providers' is missing.*refuses to start"):
+        load_routing(REGISTRY, write(tmp_path, ""))
+
+
+def test_startup_config_without_server_providers_refuses_to_load(tmp_path, registry):
+    """The path the app takes at startup (build_deps -> ActiveConfig.from_file)."""
+    raw = yaml.safe_load(DEFAULT_ROUTING_PATH.read_text(encoding="utf-8"))
+    del raw["server_providers"]
+    path = tmp_path / "routing.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="'server_providers' is missing"):
+        ActiveConfig.from_file(registry, path)
 
 
 def test_live_config_update_keeps_the_filter():
@@ -230,6 +242,17 @@ def test_api_pass_through_to_a_byok_model_without_a_key_is_403_and_logged():
     assert deps.fake_models.calls == []
     (row,) = deps.log.rows()
     assert (row.status, row.http_status, row.error_kind) == ("error", 403, "model_not_allowed")
+
+
+def test_api_models_says_which_models_require_a_key():
+    deps = make_deps()
+    http = TestClient(create_app(deps=deps, auth=Auth([API_KEY])))
+    data = {m["id"]: m for m in http.get("/v1/models", headers={"Authorization": f"Bearer {API_KEY}"}).json()["data"]}
+    needs_key = {name for name, m in data.items() if name != "auto" and m["triage"]["requires_key"]}
+    assert needs_key == {n for n, m in deps.registry.items() if m.provider in BYOK_PROVIDERS}
+    assert data["groq-small"]["triage"]["requires_key"] is False
+    assert data["claude-opus"]["triage"]["requires_key"] is True
+    assert "requires_key" not in data["auto"]["triage"]
 
 
 def test_api_auto_without_keys_answers_from_a_server_model():

@@ -68,7 +68,8 @@ class RoutingConfig:
     model_first_token_timeouts: dict = field(default_factory=dict)
     # Providers a request may use when it brings no keys of its own (routing.yaml `server_providers`).
     # Models on any other provider are left out of every chain for such requests, as if they weren't listed.
-    # None = no filter (only for RoutingConfigs built directly in tests; routing.yaml always sets it).
+    # Required in routing.yaml (loading fails without it). None = no filter, which only a RoutingConfig built
+    # directly in code (tests) can have.
     server_providers: Optional[frozenset] = None
 
     def timeout_for(self, model_name: str) -> float:
@@ -173,10 +174,13 @@ def routing_from_dict(data: dict, registry: dict) -> RoutingConfig:
                          server_providers=server_providers)
 
 
-def _load_server_providers(raw, chains: dict, registry: dict) -> Optional[frozenset]:
-    """routing.yaml `server_providers`: left out = no filter. Every tier must keep at least one model."""
+def _load_server_providers(raw, chains: dict, registry: dict) -> frozenset:
+    """routing.yaml `server_providers` (required). Every tier must keep at least one model."""
     if raw is None:
-        return None
+        raise ValueError("routing.yaml: 'server_providers' is missing. List the providers that requests without "
+                         "their own keys may use, e.g. server_providers: [groq, gemini, ollama]. Without it, those "
+                         "requests could be sent to any provider in the chains (including BYOK-only ones like "
+                         "openai and anthropic), so Triage refuses to start.")
     if not isinstance(raw, list) or not raw or not all(isinstance(p, str) for p in raw):
         raise ValueError("routing.yaml: 'server_providers' must be a non-empty list of provider names")
     unknown = set(raw) - VALID_PROVIDERS

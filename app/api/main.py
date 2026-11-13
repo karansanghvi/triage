@@ -405,6 +405,7 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
     @app.get("/v1/models")
     async def list_models(who: Caller = Depends(caller)):
         deps = app.state.deps
+        server_providers = deps.config.snapshot().routing.server_providers
         data = [{"id": "auto", "object": "model", "created": 0, "owned_by": "triage",
                  "triage": {"description": "Triage picks the cheapest model likely to pass (classifier "
                             f"{deps.classifier or 'configured in routing.yaml'})"}}]
@@ -414,7 +415,10 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                          "triage": {"tier": m.tier, "provider_model": m.model_id,
                                     "price_per_1m_input_usd": price.input_price if price else m.input_price,
                                     "price_per_1m_output_usd": price.output_price if price else m.output_price,
-                                    "price_label": price.label if price else "actual price"}})
+                                    "price_label": price.label if price else "actual price",
+                                    # true: only usable with your own key for this provider (BYOK)
+                                    "requires_key": server_providers is not None
+                                                    and m.provider not in server_providers}})
         return {"object": "list", "data": data}
 
     @app.get("/v1/stats")

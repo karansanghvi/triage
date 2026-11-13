@@ -145,7 +145,8 @@ def test_caller_timeout_still_wins():
 ])
 def test_bad_model_timeouts_are_rejected(tmp_path, extra, message):
     path = tmp_path / "routing.yaml"
-    path.write_text("fallback_chains:\n  low: [groq-allam]\n  medium: [groq-allam]\n  high: [ollama-llama]\n" + extra)
+    path.write_text("fallback_chains:\n  low: [groq-allam]\n  medium: [groq-allam]\n  high: [ollama-llama]\n"
+                    "server_providers: [groq, ollama]\n" + extra)
     with pytest.raises(ValueError, match=message):
         load_routing(REGISTRY, path)
 

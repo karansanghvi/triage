@@ -112,7 +112,8 @@ def test_reasoning_effort_per_call_is_refused():
 
 def write(tmp_path, extra: str):
     path = tmp_path / "routing.yaml"
-    path.write_text("fallback_chains:\n  low: [groq-small]\n  medium: [groq-small]\n  high: [gemini-flash]\n" + extra)
+    path.write_text("fallback_chains:\n  low: [groq-small]\n  medium: [groq-small]\n  high: [gemini-flash]\n"
+                    "server_providers: [groq, gemini]\n" + extra)
     return path
 
 
