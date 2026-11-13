@@ -5,9 +5,10 @@ from typing import Optional
 
 class APIError(Exception):
     def __init__(self, status: int, message: str, type_: str = "invalid_request_error",
-                 param: Optional[str] = None, code: Optional[str] = None):
+                 param: Optional[str] = None, code: Optional[str] = None, headers: Optional[dict] = None):
         super().__init__(message)
         self.status, self.message, self.type, self.param, self.code = status, message, type_, param, code
+        self.headers = headers or {}
 
     def body(self) -> dict:
         return {"error": {"message": self.message, "type": self.type, "param": self.param, "code": self.code}}

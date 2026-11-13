@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 
 from app.api import core
-from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_env
+from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_env, public_from_env
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
 from app.api.errors import APIError, bad_request, stream_error_event
 from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_quality, parse_task, parse_verify,
@@ -87,8 +87,8 @@ class _RecordingPredictor:
 
 
 def _apply_inputs(row: RequestRow, prediction) -> None:
-    """Step 8 storage: only for model="auto" requests that answered, and never for BYOK requests."""
-    if prediction is None or row.requested_model != "auto" or row.status != "ok" or row.mode == "byok":
+    """Step 8 storage: only for model="auto" requests that answered, and only "api" requests (never BYOK or demo)."""
+    if prediction is None or row.requested_model != "auto" or row.status != "ok" or row.mode in ("byok", "demo"):
         return
     from app.router.embeddings import MODEL_NAME
     from app.router.features import FEATURE_VERSION
@@ -282,19 +282,34 @@ def invalid_key_message(providers: list) -> str:
 
 
 def _error_response(error: APIError, headers: Optional[dict] = None) -> JSONResponse:
-    return JSONResponse(error.body(), status_code=error.status, headers=headers)
+    return JSONResponse(error.body(), status_code=error.status, headers={**error.headers, **(headers or {})})
+
+
+def request_mode(who: Optional[Caller], keys) -> str:
+    """api: a valid Triage key and no provider keys. byok: provider keys (with or without a Triage key).
+    demo: neither (only reachable when public access is on)."""
+    if keys.mode == "byok":
+        return "byok"
+    return "api" if who is not None else "demo"
+
+
+# key_id in the request log for requests without a Triage key (no visitor identity goes into the log)
+PUBLIC_KEY_IDS = {"demo": "demo", "byok": "public"}
 
 
 # ---------- the app ----------
 
-def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
+def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = None) -> FastAPI:
     """deps / auth given: use them (tests). Otherwise load both at startup from config and the environment,
-    refusing to start if there are no keys or the predictor fails its safety checks."""
+    refusing to start if there are no keys or the predictor fails its safety checks.
+    public: accept chat requests without a Triage key (demo / BYOK); None = TRIAGE_PUBLIC (default off)."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if app.state.auth is None:
             app.state.auth = Auth(keys_from_env(API_KEYS_ENV), keys_from_env(ADMIN_KEYS_ENV))
+        if app.state.public:
+            logger.warning("public access is ON (TRIAGE_PUBLIC): chat requests without a Triage key are accepted")
         if app.state.deps is None:
             from app.api.deps import load_deps
             app.state.deps = load_deps()          # predictor + embedding model, once
@@ -303,10 +318,12 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
     _ensure_json_handler()
     app = FastAPI(title="Triage", version="0.5", lifespan=lifespan)
     app.state.deps, app.state.auth = deps, auth
+    app.state.public = public_from_env() if public is None else public
 
     @app.exception_handler(APIError)
     async def api_error(request: Request, error: APIError):
-        return _error_response(error)
+        # headers this request already decided on (e.g. X-Triage-Mode), so errors carry them too
+        return _error_response(error, getattr(request.state, "triage_headers", None))
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError):
@@ -322,10 +339,17 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
     def admin(authorization: Optional[str] = Header(None)) -> Caller:
         return app.state.auth.check(authorization, admin=True)
 
+    def chat_caller(authorization: Optional[str] = Header(None)) -> Optional[Caller]:
+        """Public access on: no Authorization header = no caller (demo or BYOK); a header that is sent must be
+        valid. Off: exactly `caller`."""
+        if not app.state.public:
+            return app.state.auth.check(authorization)
+        return app.state.auth.optional(authorization)
+
     # ----- chat -----
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(body: ChatRequest, request: Request, who: Caller = Depends(caller),
+    async def chat_completions(body: ChatRequest, request: Request, who: Optional[Caller] = Depends(chat_caller),
                                x_triage_quality: Optional[str] = Header(None),
                                x_triage_task: Optional[str] = Header(None),
                                x_triage_verify: Optional[str] = Header(None)):
@@ -335,6 +359,9 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         # app state, the cache or a background task. Closures below use the plain `byok` flag, not `keys`.
         keys = resolve_keys(request.headers)
         byok = keys.mode == "byok"
+        mode = request_mode(who, keys)
+        key_id = who.key_id if who is not None else PUBLIC_KEY_IDS[mode]
+        request.state.triage_headers = {"X-Triage-Mode": mode}
         baseline_providers = keys.providers if byok else None     # provider names only, for the savings baseline
         unknown = sorted(set(body.model_extra or {}) - ACCEPTED_FIELDS)
         if unknown:
@@ -356,14 +383,14 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         max_tokens = settings.max_tokens or snapshot.routing.generation.get("max_tokens", DEFAULT_MAX_TOKENS)
         training = snapshot.routing.generation
         request_id = f"chatcmpl-triage-{uuid.uuid4().hex}"
-        row = RequestRow(request_id=request_id, timestamp=_now(), key_id=who.key_id, requested_model=body.model,
+        row = RequestRow(request_id=request_id, timestamp=_now(), key_id=key_id, requested_model=body.model,
                          stream=body.stream, quality=x_triage_quality, tau=tau if auto else None,
                          task_type=task, classifier=deps.classifier if auto else None,
                          config_version=snapshot.version, temperature=temperature, max_tokens=max_tokens,
                          settings_match_training=(temperature == training.get("temperature")
                                                   and max_tokens == training.get("max_tokens")) if auto else None,
                          prompt_hmac=prompt_hmac(messages, deps.hash_secret), verified=verify,
-                         mode="byok" if byok else "api")
+                         mode=mode)
         if not auto and body.model in deps.registry:       # a named model is its own primary, even if it fails
             row.primary_model, row.tier = body.model, deps.registry[body.model].tier
 
@@ -429,8 +456,9 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         # Background labels: only for auto requests with verification off. The labeler decides (eligibility,
         # sampling, daily cap) after the response has been sent; it gets the text from memory only.
         def background(answer_text):
-            # Never for BYOK: background jobs run after the response and must never receive a user key
-            if byok or not auto or verify != "off" or deps.labeler is None:
+            # Only for "api" requests: BYOK (a user key must never reach a background job) and demo (strangers'
+            # prompts, and labels would spend the free quota) get none
+            if mode != "api" or not auto or verify != "off" or deps.labeler is None:
                 return None
             return BackgroundTask(deps.labeler.run, deps, row, messages, answer_text)
 
@@ -467,7 +495,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                           "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
                                        "finish_reason": response.finish_reason or "stop"}],
                           "usage": _usage(response)}
-            return JSONResponse(completion, headers=headers, background=background(text))
+            return JSONResponse(completion, headers=headers | request.state.triage_headers,
+                                background=background(text))
 
         include_usage = bool(body.stream_options and body.stream_options.include_usage)
         streamed = []                                         # the answer, in memory only, for a background label
@@ -506,7 +535,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                 await deps.labeler.run(deps, row, messages, "".join(streamed) if row.status == "ok" else None)
 
         return StreamingResponse(events(), media_type="text/event-stream",
-                                 headers=_triage_headers(decision, "bypass") | {"Cache-Control": "no-cache"},
+                                 headers=_triage_headers(decision, "bypass") | {"Cache-Control": "no-cache"}
+                                 | request.state.triage_headers,
                                  background=BackgroundTask(stream_background))
 
     # ----- models, stats, requests -----
