@@ -39,7 +39,8 @@ from app.api import core
 from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_env
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
 from app.api.errors import APIError, bad_request, stream_error_event
-from app.api.headers import check_verify_model, parse_quality, parse_task, parse_verify, resolve_keys
+from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_quality, parse_task, parse_verify,
+                             resolve_keys)
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
@@ -137,14 +138,20 @@ def _header_safe(text: str) -> str:
     return text.encode("latin-1", "replace").decode("latin-1")
 
 
-def _apply_costs(row: RequestRow, response, deps) -> None:
+def _apply_costs(row: RequestRow, response, deps, providers=None) -> None:
+    """providers: a BYOK request's own; the savings baseline is then the strong model among them
+    (deps.strong_model(providers)). None = the server's baseline, as before."""
     if response is None:
         return
-    strong = deps.registry[deps.strong_model()]
     row.cache_hit = bool(response.cached)
     row.input_tokens, row.output_tokens = response.input_tokens, response.output_tokens
     row.reasoning_tokens, row.tokens_estimated = response.reasoning_tokens, response.tokens_estimated
     row.cost, row.price_as_cost = response.cost, response.reported_cost
+    try:
+        strong = deps.registry[deps.strong_model(providers)]
+    except LookupError:                # no high-tier model on these providers: savings unknown, not faked
+        row.strong_cost = row.saved = None
+        return
     row.strong_cost = strong.reported_cost(response.input_tokens, response.output_tokens)
     row.saved = row.strong_cost - row.price_as_cost
 
@@ -188,13 +195,13 @@ def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] =
             "X-Triage-Escalated": "true" if escalated else "false", "X-Triage-Check": check}
 
 
-def _apply_verification(row: RequestRow, first, outcome, deps) -> None:
+def _apply_verification(row: RequestRow, first, outcome, deps, providers=None) -> None:
     """Costs and log fields after sync verification: the served answer's tokens, every call's cost."""
     final = outcome.final.response
-    _apply_costs(row, final, deps)                     # tokens, cache and strong_cost from the served answer
+    _apply_costs(row, final, deps, providers)          # tokens, cache and strong_cost from the served answer
     row.price_as_cost = first.reported_cost + outcome.check_cost + outcome.escalation_cost
     row.cost = first.cost + outcome.check_actual_cost + outcome.escalation_actual_cost
-    row.saved = row.strong_cost - row.price_as_cost
+    row.saved = None if row.strong_cost is None else row.strong_cost - row.price_as_cost
     row.escalated, row.decided_by = outcome.escalated, outcome.decided_by
     row.checker_verdict, row.checker_version = outcome.checker_verdict, outcome.checker_version
     row.escalated_from, row.escalated_to = outcome.escalated_from, outcome.escalated_to
@@ -227,6 +234,19 @@ def _chunk(request_id: str, created: int, model: str, delta: dict, finish=None, 
     if usage is not None:
         body["usage"] = usage
     return f"data: {json.dumps(body, ensure_ascii=False)}\n\n"
+
+
+def _not_allowed_message(error: ModelNotAllowed) -> str:
+    header = PROVIDER_KEY_HEADERS.get(error.provider)
+    if header is None:                 # e.g. the local Ollama with a BYOK request: only the user's providers
+        return (f"The model `{error.model_name}` runs on {error.provider}, which a request with your own keys "
+                "doesn't use. Pick a model on a provider you sent a key for, or use \"auto\".")
+    return (f"The model `{error.model_name}` runs on {error.provider} and needs your own {error.provider} key: "
+            f"send it in the {header} header.")
+
+
+NO_USABLE_MODEL_MESSAGE = ("None of the provider keys sent can reach a model. Send a key in one of: "
+                           + ", ".join(PROVIDER_KEY_HEADERS.values()) + ".")
 
 
 def _error_response(error: APIError, headers: Optional[dict] = None) -> JSONResponse:
@@ -283,6 +303,7 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         # app state, the cache or a background task. Closures below use the plain `byok` flag, not `keys`.
         keys = resolve_keys(request.headers)
         byok = keys.mode == "byok"
+        baseline_providers = keys.providers if byok else None     # provider names only, for the savings baseline
         unknown = sorted(set(body.model_extra or {}) - ACCEPTED_FIELDS)
         if unknown:
             raise bad_request(f"Triage doesn't support these parameters yet: {', '.join(unknown)}", unknown[0],
@@ -340,7 +361,11 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             raise APIError(404, str(error), param="model", code="model_not_found") from None
         except ModelNotAllowed as error:                   # e.g. a claude-* model, and this request has no key
             finish("error", 403, "model_not_allowed")
-            raise APIError(403, str(error), "permission_error", param="model", code="model_not_allowed") from None
+            raise APIError(403, _not_allowed_message(error), "permission_error", param="model",
+                           code="model_not_allowed") from None
+        except core.NoUsableModel:
+            finish("error", 400, "no_usable_model")
+            raise APIError(400, NO_USABLE_MODEL_MESSAGE, code="no_usable_model") from None
         except AllModelsFailed as error:
             if any(getattr(a, "response", None) is not None for a in error.attempts):
                 row.attempts = [_attempt_dict(a) for a in error.attempts]
@@ -379,13 +404,13 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                 outcome = await verify_sync(messages, Served(decision.tier, decision.model, response, text),
                                             snapshot.verification.sync, deps, settings,
                                             probabilities={"low": decision.p_low, "medium": decision.p_medium})
-                _apply_verification(row, response, outcome, deps)
+                _apply_verification(row, response, outcome, deps, baseline_providers)
                 response, text = outcome.final.response, outcome.final.text
                 served_model, served_tier, check, escalated = (outcome.final.model, outcome.final.tier,
                                                                outcome.decided_by, outcome.escalated)
                 reason = _verified_reason(decision, outcome)
             else:
-                _apply_costs(row, response, deps)
+                _apply_costs(row, response, deps, baseline_providers)
             _add_truncated_costs(row, decision.attempts)
             finish()
             cache = "hit" if response.cached else ("miss" if is_cacheable(temperature, False) else "bypass")
@@ -422,7 +447,7 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                                          "Triage can't switch models once text has been sent.")
                 return
             response = routed.response
-            _apply_costs(row, response, deps)
+            _apply_costs(row, response, deps, baseline_providers)
             _add_truncated_costs(row, decision.attempts)
             finish()
             yield _chunk(request_id, created, decision.model, {}, finish=(response and response.finish_reason) or "stop")

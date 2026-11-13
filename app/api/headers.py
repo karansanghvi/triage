@@ -16,6 +16,10 @@ KEY_HEADERS = {
     "x-groq-key": "groq",
     "x-gemini-key": "gemini",
 }
+# Provider -> the header as shown in error messages (the same headers as KEY_HEADERS, which matches any case)
+PROVIDER_KEY_HEADERS = {"openai": "X-OpenAI-Key", "anthropic": "X-Anthropic-Key", "groq": "X-Groq-Key",
+                        "gemini": "X-Gemini-Key"}
+assert {h.lower(): p for p, h in PROVIDER_KEY_HEADERS.items()} == KEY_HEADERS
 
 
 def parse_quality(value: Optional[str], settings: QualitySettings) -> float:

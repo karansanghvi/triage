@@ -14,6 +14,9 @@ from app.router.quality import route
 import anyio
 
 from app.providers.base import Response
+from app.reliability import is_byok
+
+TIERS = ("low", "medium", "high")      # cheapest first
 
 
 class UnknownModel(LookupError):
@@ -22,6 +25,21 @@ class UnknownModel(LookupError):
     def __init__(self, name: str):
         super().__init__(f"The model `{name}` does not exist. Use \"auto\" or a name from GET /v1/models.")
         self.name = name
+
+
+class NoUsableModel(LookupError):
+    """A BYOK request whose keys reach no model in any tier."""
+
+
+def usable_tier(tier: str, routing, registry: dict, providers) -> Optional[str]:
+    """The tier to use when `tier` has no model on `providers` (a BYOK request's own): `tier` itself if it has
+    one, else the next higher tiers in order, then the lower ones from the nearest down. None if no tier has one.
+    Uses the same chain filter as ReliableClient (RoutingConfig.chain_for)."""
+    i = TIERS.index(tier)
+    for candidate in (tier, *TIERS[i + 1:], *reversed(TIERS[:i])):
+        if routing.chain_for(candidate, registry, providers):
+            return candidate
+    return None
 
 
 @dataclass(frozen=True)
@@ -157,6 +175,13 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
         # 2. Pick the cheapest tier the quality dial (tau) trusts 
         routing = route(prediction.p_low, prediction.p_medium, tau)
         tier, reason = routing.tier, routing.reason
+        if is_byok(keys):              # only the user's providers: the tier may have no model for them
+            used = usable_tier(tier, deps.client.routing, deps.registry, keys.providers)
+            if used is None:
+                raise NoUsableModel(tier)
+            if used != tier:
+                reason = f"{reason}; no model for your keys in {tier}: used {used}"
+                tier = used
         
         # 3. Start that tier's model; the client falls back along the chain 
         # and only returns once the first piece of the answer exists 

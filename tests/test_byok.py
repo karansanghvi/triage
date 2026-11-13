@@ -152,3 +152,93 @@ def test_keys_are_not_stored_on_deps_or_the_app():
     chat(http, headers=GROQ_ONLY)
     for obj in (deps, deps.client, deps.config, http.app.state):
         assert SECRET not in repr(vars(obj))
+
+
+# ---------- c: BYOK routing, tier fallback, errors, baseline ----------
+
+DOWN = FakeBehavior(fail_before="server")
+QUALITY = {"low": "0.1", "medium": "0.92", "high": "0.99"}        # FakePredictor(0.4, 0.95) -> these tiers
+
+
+def providers_called(deps):
+    return {REGISTRY[c["model"]].provider for c in deps.fake_models.calls}
+
+
+@pytest.mark.parametrize("tier", ["low", "medium", "high"])
+def test_groq_only_byok_routes_only_to_groq_models(tier):
+    http, deps = app()
+    r = chat(http, headers=GROQ_ONLY | {"X-Triage-Quality": QUALITY[tier]})
+    assert r.status_code == 200 and r.headers["x-triage-tier"] == tier
+    assert providers_called(deps) == {"groq"}
+
+
+def test_groq_only_byok_never_falls_back_to_the_local_ollama():
+    http, deps = app({"groq-allam": DOWN})
+    r = chat(http, headers=GROQ_ONLY | {"X-Triage-Quality": "0.1"})
+    assert r.status_code == 503 and providers_called(deps) == {"groq"}
+
+
+def test_gemini_only_byok_on_a_low_request_escalates_to_a_tier_with_a_gemini_model():
+    http, deps = app()
+    r = chat(http, headers={"x-gemini-key": SECRET, "X-Triage-Quality": "0.1"})
+    assert r.status_code == 200
+    assert (r.headers["x-triage-tier"], r.headers["x-triage-model"]) == ("medium", "gemini-flash")
+    assert "no model for your keys in low: used medium" in r.headers["x-triage-reason"]
+    (row,) = deps.log.rows()
+    assert (row.tier, row.served_model, row.primary_model, row.fell_back) == ("medium", "gemini-flash",
+                                                                               "gemini-flash", False)
+
+
+def test_tier_fallback_goes_up_first_then_down():
+    from app.api.core import usable_tier
+    routing = load_routing(REGISTRY)
+    assert usable_tier("low", routing, REGISTRY, {"gemini"}) == "medium"
+    assert usable_tier("high", routing, REGISTRY, {"groq"}) == "high"
+    assert usable_tier("low", routing, REGISTRY, {"openrouter"}) is None
+
+
+def test_byok_with_no_reachable_model_is_a_400_naming_the_key_headers():
+    from tests.api_helpers import routing_raw
+    raw = routing_raw()
+    raw["fallback_chains"] = {t: [c[0]] for t, c in raw["fallback_chains"].items()}   # groq models only
+    http, deps = app(raw=raw)
+    r = chat(http, headers={"x-gemini-key": SECRET})
+    assert r.status_code == 400
+    err = r.json()["error"]
+    assert err["code"] == "no_usable_model"
+    assert all(h in err["message"] for h in ("X-OpenAI-Key", "X-Anthropic-Key", "X-Groq-Key", "X-Gemini-Key"))
+    assert SECRET not in r.text and deps.fake_models.calls == []
+
+
+@pytest.mark.parametrize("headers", [{}, GROQ_ONLY])
+def test_named_model_without_its_key_is_403_naming_the_header(headers):
+    http, deps = app()
+    r = chat(http, {"model": "claude-opus", "messages": ASK}, headers)
+    assert r.status_code == 403
+    err = r.json()["error"]
+    assert err["code"] == "model_not_allowed" and "X-Anthropic-Key" in err["message"]
+    assert deps.fake_models.calls == []
+
+
+def test_named_model_with_its_key_is_served():
+    http, deps = app()
+    r = chat(http, {"model": "claude-opus", "messages": ASK}, {"x-anthropic-key": SECRET})
+    assert r.status_code == 200 and r.json()["model"] == "claude-opus"
+
+
+def test_byok_named_local_model_is_403():
+    http, _ = app()
+    r = chat(http, {"model": "ollama-llama", "messages": ASK}, GROQ_ONLY)
+    assert r.status_code == 403 and "doesn't use" in r.json()["error"]["message"]
+
+
+@pytest.mark.parametrize("headers, strong", [({"x-anthropic-key": SECRET}, "claude-opus"),
+                                             ({"x-gemini-key": SECRET}, "gemini-flash"),
+                                             (GROQ_ONLY, "groq-large"),
+                                             ({}, "groq-large")])
+def test_savings_baseline_is_the_strong_model_among_the_users_providers(headers, strong):
+    http, deps = app()
+    assert chat(http, headers=headers).status_code == 200
+    (row,) = deps.log.rows()
+    assert row.strong_cost == pytest.approx(REGISTRY[strong].reported_cost(row.input_tokens, row.output_tokens))
+    assert row.saved == pytest.approx(row.strong_cost - row.price_as_cost)
