@@ -60,7 +60,7 @@ def resolve_keys(headers: Mapping[str, str]) -> KeyContext:
     """Build this request's KeyContext from its headers.
     
     Any key sent -> "byok" with only those providers.
-    No keys sent -> "demo" with no keys: the request uses the server's own keys, read from the environment by the
+    No keys sent -> "server" with no keys: the request uses the server's own keys, read from the environment by the
     adapters, and only the providers in routing.yaml's server_providers. Server keys never go into a KeyContext.
     Makes no network calls and never checks whether a key is valid.
     """
@@ -69,4 +69,4 @@ def resolve_keys(headers: Mapping[str, str]) -> KeyContext:
         value = (headers.get(header) or "").strip()
         if value:
             keys[provider] = value
-    return KeyContext("byok", keys) if keys else KeyContext("demo")
+    return KeyContext("byok", keys) if keys else KeyContext("server")

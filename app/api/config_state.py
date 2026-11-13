@@ -10,6 +10,7 @@ import copy
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -47,8 +48,13 @@ class ActiveConfig:
                                         routing_from_dict(raw, registry), verification_from_dict(raw))
 
     @classmethod
-    def from_file(cls, registry: dict, path: Path = DEFAULT_ROUTING_PATH) -> "ActiveConfig":
-        return cls(yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}, registry)
+    def from_file(cls, registry: dict, path: Path = DEFAULT_ROUTING_PATH,
+                  server_providers: Optional[list] = None) -> "ActiveConfig":
+        """server_providers: replaces routing.yaml's (TRIAGE_SERVER_PROVIDERS, e.g. a host without Ollama)."""
+        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        if server_providers is not None:
+            raw["server_providers"] = list(server_providers)
+        return cls(raw, registry)
 
     def snapshot(self) -> ConfigSnapshot:
         return self._snapshot

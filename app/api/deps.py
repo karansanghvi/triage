@@ -15,6 +15,7 @@ from app.verifier.ai_checker import CheckerSettings, load_checker_settings
 from app.verifier.judge import JudgeSettings, load_judge_settings
 
 FAKE_MODELS_ENV, CACHE_ENV, CACHE_PATH_ENV = "TRIAGE_FAKE_MODELS", "TRIAGE_CACHE", "TRIAGE_CACHE_PATH"
+SERVER_PROVIDERS_ENV = "TRIAGE_SERVER_PROVIDERS"     # e.g. "groq,gemini" on a host that can't run Ollama
 
 
 @dataclass
@@ -99,6 +100,24 @@ def cache_path(fake: bool):
     return path
 
 
+def server_providers_from_env() -> Optional[list]:
+    """TRIAGE_SERVER_PROVIDERS as a list (it replaces routing.yaml's server_providers), or None when unset."""
+    raw = os.environ.get(SERVER_PROVIDERS_ENV, "")
+    names = [p.strip() for p in raw.split(",") if p.strip()]
+    return names or None
+
+
+def load_config(registry: dict) -> ActiveConfig:
+    """routing.yaml, with TRIAGE_SERVER_PROVIDERS applied. Refuses to start on a bad override."""
+    override = server_providers_from_env()
+    try:
+        return ActiveConfig.from_file(registry, server_providers=override)
+    except ValueError as error:
+        if override is None:
+            raise
+        raise RuntimeError(f"refusing to start: {SERVER_PROVIDERS_ENV}={','.join(override)}: {error}") from None
+
+
 def load_deps() -> RouterDeps:
     """Production (or TRIAGE_FAKE_MODELS=1) dependencies from config files and the environment."""
     fake = os.environ.get(FAKE_MODELS_ENV) == "1"
@@ -111,6 +130,8 @@ def load_deps() -> RouterDeps:
     hash_secret = hash_secret_from_env(required=isinstance(log, SQLiteRequestLog))   # before loading anything slow
     path = cache_path(fake)
     cache = ResponseCache(path) if path else None
+    registry = load_registry()
+    config = load_config(registry)                    # before the slow predictor, so a bad override fails fast
     predictor, classifier = load_predictor_checked()
-    return build_deps(predictor, send_fn, cache=cache, classifier=classifier, log=log,
-                      fake_models=send_fn if fake else None, hash_secret=hash_secret)
+    return build_deps(predictor, send_fn, registry=registry, config=config, cache=cache, classifier=classifier,
+                      log=log, fake_models=send_fn if fake else None, hash_secret=hash_secret)
