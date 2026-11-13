@@ -32,8 +32,13 @@ class RouterDeps:
     judge_settings: Optional[JudgeSettings] = None       # config/judge.yaml (background labels)
     labeler: Optional[object] = None                     # background.BackgroundLabeler
 
-    def strong_model(self) -> str:
-        return self.config.snapshot().routing.chains["high"][0]
+    def strong_model(self, providers=None) -> str:
+        """The savings baseline: the first model of the high chain after filtering by provider.
+        providers=None means routing's server_providers (requests without keys: groq-large)."""
+        chain = self.config.snapshot().routing.chain_for("high", self.registry, providers)
+        if not chain:
+            raise LookupError("no model in the high tier is on an allowed provider")
+        return chain[0]
 
     def update_config(self, patch: dict):
         snapshot = self.config.update(patch)          # raises ConfigUpdateError and changes nothing if invalid
@@ -48,12 +53,13 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
                judge_settings: Optional[JudgeSettings] = None) -> RouterDeps:
     registry = registry or load_registry()
     config = config or ActiveConfig.from_file(registry)
-    cached = CachedSender(cache, send_fn=send_fn) if cache is not None else None
-    kwargs = {"sleep": sleep} if sleep is not None else {}
-    client = ReliableClient(registry, config.snapshot().routing, send_fn=cached or send_fn, **kwargs)
     log = log or InMemoryRequestLog()
     if hash_secret is None:
         hash_secret = hash_secret_from_env(required=isinstance(log, SQLiteRequestLog))
+    # hash_secret also fingerprints BYOK keys in cache keys (never the key itself)
+    cached = CachedSender(cache, send_fn=send_fn, hash_secret=hash_secret) if cache is not None else None
+    kwargs = {"sleep": sleep} if sleep is not None else {}
+    client = ReliableClient(registry, config.snapshot().routing, send_fn=cached or send_fn, **kwargs)
     from app.api.background import BackgroundLabeler
     from app.api.verification import check_background_budget
     judge_settings = judge_settings or load_judge_settings()

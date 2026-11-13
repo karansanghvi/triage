@@ -39,14 +39,16 @@ from app.api import core
 from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_env
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
 from app.api.errors import APIError, bad_request, stream_error_event
-from app.api.headers import check_verify_model, parse_quality, parse_task, parse_verify
+from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_quality, parse_task, parse_verify,
+                             resolve_keys)
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
 from app.providers.base import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
 from app.providers.common import ProviderError
-from app.reliability import AllModelsFailed
+from app.providers.keys import redact
+from app.reliability import AllModelsFailed, ModelNotAllowed
 
 logger = logging.getLogger("triage.api")
 # One JSON line per request (Step 10): ids, routing, status, latency and cost only. Never keys or text.
@@ -85,8 +87,8 @@ class _RecordingPredictor:
 
 
 def _apply_inputs(row: RequestRow, prediction) -> None:
-    """Step 8 storage: only for model="auto" requests that answered."""
-    if prediction is None or row.requested_model != "auto" or row.status != "ok":
+    """Step 8 storage: only for model="auto" requests that answered, and never for BYOK requests."""
+    if prediction is None or row.requested_model != "auto" or row.status != "ok" or row.mode == "byok":
         return
     from app.router.embeddings import MODEL_NAME
     from app.router.features import FEATURE_VERSION
@@ -137,23 +139,58 @@ def _header_safe(text: str) -> str:
     return text.encode("latin-1", "replace").decode("latin-1")
 
 
-def _apply_costs(row: RequestRow, response, deps) -> None:
+def _apply_costs(row: RequestRow, response, deps, providers=None) -> None:
+    """providers: a BYOK request's own; the savings baseline is then the strong model among them
+    (deps.strong_model(providers)). None = the server's baseline, as before."""
     if response is None:
         return
-    strong = deps.registry[deps.strong_model()]
     row.cache_hit = bool(response.cached)
     row.input_tokens, row.output_tokens = response.input_tokens, response.output_tokens
     row.reasoning_tokens, row.tokens_estimated = response.reasoning_tokens, response.tokens_estimated
     row.cost, row.price_as_cost = response.cost, response.reported_cost
+    try:
+        strong = deps.registry[deps.strong_model(providers)]
+    except LookupError:                # no high-tier model on these providers: savings unknown, not faked
+        row.strong_cost = row.saved = None
+        return
     row.strong_cost = strong.reported_cost(response.input_tokens, response.output_tokens)
     row.saved = row.strong_cost - row.price_as_cost
+
+
+MAX_ATTEMPT_MESSAGE_CHARS = 300
+
+
+def _attempt_dict(a) -> dict:
+    """One attempt for the request log. A failed or skipped attempt keeps its message, redacted again here (the
+    reliability layer already removed the request's keys) and shortened."""
+    out = {"model": a.model_name, "outcome": a.outcome, "error_kind": a.error_kind}
+    if a.message:
+        out["message"] = redact(a.message)[:MAX_ATTEMPT_MESSAGE_CHARS]
+    billed = getattr(a, "response", None)          # only a truncated attempt carries one
+    if billed is not None:
+        out.update(input_tokens=billed.input_tokens, output_tokens=billed.output_tokens, cost=billed.cost,
+                   price_as_cost=billed.reported_cost)
+    return out
 
 
 def _apply_decision(row: RequestRow, d: core.RouteDecision) -> None:
     row.tau, row.p_low, row.p_medium = d.tau, d.p_low, d.p_medium
     row.task_type, row.task_type_guessed = d.task_type, d.task_type_guessed
     row.tier, row.primary_model, row.served_model, row.fell_back = d.tier, d.primary_model, d.model, d.fell_back
-    row.attempts = [{"model": a.model_name, "outcome": a.outcome, "error_kind": a.error_kind} for a in d.attempts]
+    row.attempts = [_attempt_dict(a) for a in d.attempts]
+
+
+def _add_truncated_costs(row: RequestRow, attempts) -> None:
+    """An attempt that used every output token thinking and wrote no answer (then fell back) was still billed:
+    add its cost to the request's total. Its tokens are in row.attempts; input/output_tokens stay the served
+    answer's, and strong_cost stays the strong model at those tokens."""
+    billed = [a.response for a in attempts if getattr(a, "response", None) is not None]
+    if not billed:
+        return
+    row.cost = (row.cost or 0.0) + sum(r.cost for r in billed)
+    row.price_as_cost = (row.price_as_cost or 0.0) + sum(r.reported_cost for r in billed)
+    if row.strong_cost is not None:
+        row.saved = row.strong_cost - row.price_as_cost
 
 
 def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] = None, tier: Optional[str] = None,
@@ -166,13 +203,13 @@ def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] =
             "X-Triage-Escalated": "true" if escalated else "false", "X-Triage-Check": check}
 
 
-def _apply_verification(row: RequestRow, first, outcome, deps) -> None:
+def _apply_verification(row: RequestRow, first, outcome, deps, providers=None) -> None:
     """Costs and log fields after sync verification: the served answer's tokens, every call's cost."""
     final = outcome.final.response
-    _apply_costs(row, final, deps)                     # tokens, cache and strong_cost from the served answer
+    _apply_costs(row, final, deps, providers)          # tokens, cache and strong_cost from the served answer
     row.price_as_cost = first.reported_cost + outcome.check_cost + outcome.escalation_cost
     row.cost = first.cost + outcome.check_actual_cost + outcome.escalation_actual_cost
-    row.saved = row.strong_cost - row.price_as_cost
+    row.saved = None if row.strong_cost is None else row.strong_cost - row.price_as_cost
     row.escalated, row.decided_by = outcome.escalated, outcome.decided_by
     row.checker_verdict, row.checker_version = outcome.checker_verdict, outcome.checker_version
     row.escalated_from, row.escalated_to = outcome.escalated_from, outcome.escalated_to
@@ -205,6 +242,43 @@ def _chunk(request_id: str, created: int, model: str, delta: dict, finish=None, 
     if usage is not None:
         body["usage"] = usage
     return f"data: {json.dumps(body, ensure_ascii=False)}\n\n"
+
+
+def _not_allowed_message(error: ModelNotAllowed) -> str:
+    header = PROVIDER_KEY_HEADERS.get(error.provider)
+    if header is None:                 # e.g. the local Ollama with a BYOK request: only the user's providers
+        return (f"The model `{error.model_name}` runs on {error.provider}, which a request with your own keys "
+                "doesn't use. Pick a model on a provider you sent a key for, or use \"auto\".")
+    return (f"The model `{error.model_name}` runs on {error.provider} and needs your own {error.provider} key: "
+            f"send it in the {header} header.")
+
+
+NO_USABLE_MODEL_MESSAGE = ("None of the provider keys sent can reach a model. Send a key in one of: "
+                           + ", ".join(PROVIDER_KEY_HEADERS.values()) + ".")
+
+PROVIDER_NAMES = {"openai": "OpenAI", "anthropic": "Anthropic", "groq": "Groq", "gemini": "Gemini"}
+
+
+def rejected_key_providers(attempts) -> list:
+    """BYOK: the providers that rejected the user's key, if EVERY failed attempt was an auth error (401/403);
+    otherwise [] (mixed failures keep the usual 503). In the order they were tried."""
+    failed = [a for a in attempts if a.outcome == "error"]
+    if not failed or any(a.error_kind != "auth" for a in failed):
+        return []
+    return list(dict.fromkeys(a.provider for a in failed))
+
+
+def _join(items: list) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def invalid_key_message(providers: list) -> str:
+    """Names the provider(s) and header(s), never a key or a tier."""
+    names = _join([PROVIDER_NAMES.get(p, p) for p in providers])
+    headers = _join([PROVIDER_KEY_HEADERS.get(p, p) for p in providers])
+    plural = len(providers) > 1
+    return (f"{names} rejected the API key{'s' if plural else ''} you sent in {headers}. "
+            f"Check the key{'s' if plural else ''} and try again.")
 
 
 def _error_response(error: APIError, headers: Optional[dict] = None) -> JSONResponse:
@@ -257,6 +331,11 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                                x_triage_verify: Optional[str] = Header(None)):
         deps = app.state.deps
         started = time.perf_counter()
+        # This request's provider keys (X-OpenAI-Key, ...). Passed down the call path only: never stored on deps,
+        # app state, the cache or a background task. Closures below use the plain `byok` flag, not `keys`.
+        keys = resolve_keys(request.headers)
+        byok = keys.mode == "byok"
+        baseline_providers = keys.providers if byok else None     # provider names only, for the savings baseline
         unknown = sorted(set(body.model_extra or {}) - ACCEPTED_FIELDS)
         if unknown:
             raise bad_request(f"Triage doesn't support these parameters yet: {', '.join(unknown)}", unknown[0],
@@ -283,7 +362,10 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                          config_version=snapshot.version, temperature=temperature, max_tokens=max_tokens,
                          settings_match_training=(temperature == training.get("temperature")
                                                   and max_tokens == training.get("max_tokens")) if auto else None,
-                         prompt_hmac=prompt_hmac(messages, deps.hash_secret), verified=verify, mode="api")
+                         prompt_hmac=prompt_hmac(messages, deps.hash_secret), verified=verify,
+                         mode="byok" if byok else "api")
+        if not auto and body.model in deps.registry:       # a named model is its own primary, even if it fails
+            row.primary_model, row.tier = body.model, deps.registry[body.model].tier
 
         logged = []
         recorder = _RecordingPredictor(deps.predictor)
@@ -308,11 +390,35 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         try:
             routed = await core.route_and_stream(messages, tau=tau if auto else None, task_type=task,
                                                  model=body.model, stream=body.stream, settings=settings,
-                                                 deps=request_deps, request_id=request_id)
+                                                 deps=request_deps, request_id=request_id, keys=keys)
         except core.UnknownModel as error:
             finish("error", 404, "model_not_found")
             raise APIError(404, str(error), param="model", code="model_not_found") from None
+        except ModelNotAllowed as error:                   # e.g. a claude-* model, and this request has no key
+            finish("error", 403, "model_not_allowed")
+            raise APIError(403, _not_allowed_message(error), "permission_error", param="model",
+                           code="model_not_allowed") from None
+        except core.NoUsableModel:
+            finish("error", 400, "no_usable_model")
+            raise APIError(400, NO_USABLE_MODEL_MESSAGE, code="no_usable_model") from None
         except AllModelsFailed as error:
+            # Every attempt is logged (model, outcome, error_kind, redacted message), even though none answered
+            row.attempts = [_attempt_dict(a) for a in error.attempts]
+            _add_truncated_costs(row, error.attempts)
+            if auto:
+                row.tier = error.tier
+                row.primary_model = error.attempts[0].model_name if error.attempts else None
+            last = error.attempts[-1] if error.attempts else None
+            if not auto and last is not None and last.error_kind == "truncated":     # a named model: no chain
+                finish("error", 400, "truncated")
+                used = last.response.output_tokens if last.response is not None else "all its"
+                raise APIError(400, f"`{body.model}` used {used} output tokens thinking and wrote no answer. "
+                               "Send a higher max_tokens: thinking counts toward it.", param="max_tokens",
+                               code="max_tokens_too_low") from None
+            rejected = rejected_key_providers(error.attempts) if byok else []
+            if rejected:                                    # the user's own key(s) were refused: say so, as a 401
+                finish("error", 401, "invalid_provider_key")
+                raise APIError(401, invalid_key_message(rejected), code="invalid_provider_key") from None
             finish("error", 503, "all_models_failed")
             raise APIError(503, f"No model could answer: {error}", "server_error", code="all_models_failed") from None
         decision = routed.decision
@@ -323,7 +429,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         # Background labels: only for auto requests with verification off. The labeler decides (eligibility,
         # sampling, daily cap) after the response has been sent; it gets the text from memory only.
         def background(answer_text):
-            if not auto or verify != "off" or deps.labeler is None:
+            # Never for BYOK: background jobs run after the response and must never receive a user key
+            if byok or not auto or verify != "off" or deps.labeler is None:
                 return None
             return BackgroundTask(deps.labeler.run, deps, row, messages, answer_text)
 
@@ -339,19 +446,23 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             if verify == "sync":
                 outcome = await verify_sync(messages, Served(decision.tier, decision.model, response, text),
                                             snapshot.verification.sync, deps, settings,
-                                            probabilities={"low": decision.p_low, "medium": decision.p_medium})
-                _apply_verification(row, response, outcome, deps)
+                                            probabilities={"low": decision.p_low, "medium": decision.p_medium},
+                                            keys=keys)
+                _apply_verification(row, response, outcome, deps, baseline_providers)
                 response, text = outcome.final.response, outcome.final.text
                 served_model, served_tier, check, escalated = (outcome.final.model, outcome.final.tier,
                                                                outcome.decided_by, outcome.escalated)
                 reason = _verified_reason(decision, outcome)
             else:
-                _apply_costs(row, response, deps)
+                _apply_costs(row, response, deps, baseline_providers)
+            _add_truncated_costs(row, decision.attempts)
             finish()
             cache = "hit" if response.cached else ("miss" if is_cacheable(temperature, False) else "bypass")
             headers = _triage_headers(decision, cache, model=served_model, tier=served_tier, reason=reason,
                                       verified=verify, escalated=escalated, check=check) | {
-                "X-Triage-Cost": _money(row.price_as_cost), "X-Triage-Saved": _money(row.saved)}
+                "X-Triage-Cost": _money(row.price_as_cost)}
+            if row.saved is not None:          # unknown when no baseline model is reachable: left out, not faked
+                headers["X-Triage-Saved"] = _money(row.saved)
             completion = {"id": request_id, "object": "chat.completion", "created": created, "model": served_model,
                           "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
                                        "finish_reason": response.finish_reason or "stop"}],
@@ -382,7 +493,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                                          "Triage can't switch models once text has been sent.")
                 return
             response = routed.response
-            _apply_costs(row, response, deps)
+            _apply_costs(row, response, deps, baseline_providers)
+            _add_truncated_costs(row, decision.attempts)
             finish()
             yield _chunk(request_id, created, decision.model, {}, finish=(response and response.finish_reason) or "stop")
             if include_usage and response is not None:
@@ -402,6 +514,7 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
     @app.get("/v1/models")
     async def list_models(who: Caller = Depends(caller)):
         deps = app.state.deps
+        server_providers = deps.config.snapshot().routing.server_providers
         data = [{"id": "auto", "object": "model", "created": 0, "owned_by": "triage",
                  "triage": {"description": "Triage picks the cheapest model likely to pass (classifier "
                             f"{deps.classifier or 'configured in routing.yaml'})"}}]
@@ -411,7 +524,10 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                          "triage": {"tier": m.tier, "provider_model": m.model_id,
                                     "price_per_1m_input_usd": price.input_price if price else m.input_price,
                                     "price_per_1m_output_usd": price.output_price if price else m.output_price,
-                                    "price_label": price.label if price else "actual price"}})
+                                    "price_label": price.label if price else "actual price",
+                                    # true: only usable with your own key for this provider (BYOK)
+                                    "requires_key": server_providers is not None
+                                                    and m.provider not in server_providers}})
         return {"object": "list", "data": data}
 
     @app.get("/v1/stats")

@@ -49,11 +49,12 @@ def test_each_tier_calls_its_phase2_model_first(configs):
         assert routing.chains[tier][0] == collection.tiers[tier]
 
 
-def test_no_fallback_model_has_reasoning_effort_unless_openai_format(configs):
+def test_no_fallback_model_has_reasoning_effort_unless_its_provider_accepts_it(configs):
+    """OpenAI-format providers, plus Anthropic (Phase 5: sent as output_config.effort)."""
     registry, routing, _ = configs
     for name, params in routing.model_params.items():
         if "reasoning_effort" in params:
-            assert registry[name].provider in {"openai", "groq", "ollama", "openrouter"}
+            assert registry[name].provider in {"openai", "groq", "ollama", "openrouter", "anthropic"}
 
 
 # ---------- ReliableClient applies params per MODEL ----------
@@ -112,7 +113,8 @@ def test_reasoning_effort_per_call_is_refused():
 
 def write(tmp_path, extra: str):
     path = tmp_path / "routing.yaml"
-    path.write_text("fallback_chains:\n  low: [groq-small]\n  medium: [groq-small]\n  high: [gemini-flash]\n" + extra)
+    path.write_text("fallback_chains:\n  low: [groq-small]\n  medium: [groq-small]\n  high: [gemini-flash]\n"
+                    "server_providers: [groq, gemini]\n" + extra)
     return path
 
 

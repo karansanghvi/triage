@@ -199,7 +199,7 @@ def test_stream_falls_back_if_it_fails_before_the_first_piece():
 
 def test_routing_rejects_unknown_model(tmp_path):
     path = tmp_path / "routing.yaml"
-    path.write_text("fallback_chains:\n  low: [nope]\n  medium: [a1]\n  high: [b1]\n")
+    path.write_text("fallback_chains:\n  low: [nope]\n  medium: [a1]\n  high: [b1]\nserver_providers: [groq]\n")
     with pytest.raises(ValueError, match="unknown model 'nope'"):
         load_routing(REGISTRY, path)
 

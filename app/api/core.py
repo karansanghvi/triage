@@ -14,6 +14,9 @@ from app.router.quality import route
 import anyio
 
 from app.providers.base import Response
+from app.reliability import is_byok
+
+TIERS = ("low", "medium", "high")      # cheapest first
 
 
 class UnknownModel(LookupError):
@@ -22,6 +25,21 @@ class UnknownModel(LookupError):
     def __init__(self, name: str):
         super().__init__(f"The model `{name}` does not exist. Use \"auto\" or a name from GET /v1/models.")
         self.name = name
+
+
+class NoUsableModel(LookupError):
+    """A BYOK request whose keys reach no model in any tier."""
+
+
+def usable_tier(tier: str, routing, registry: dict, providers) -> Optional[str]:
+    """The tier to use when `tier` has no model on `providers` (a BYOK request's own): `tier` itself if it has
+    one, else the next higher tiers in order, then the lower ones from the nearest down. None if no tier has one.
+    Uses the same chain filter as ReliableClient (RoutingConfig.chain_for)."""
+    i = TIERS.index(tier)
+    for candidate in (tier, *TIERS[i + 1:], *reversed(TIERS[:i])):
+        if routing.chain_for(candidate, registry, providers):
+            return candidate
+    return None
 
 
 @dataclass(frozen=True)
@@ -103,7 +121,8 @@ async def aiter_in_thread(iterable) -> AsyncIterator:
 
 
 async def route_and_stream(messages: list, *, tau: Optional[float], task_type: Optional[str], model: str = "auto",
-                           stream: bool = True, settings: GenerationSettings, deps, request_id: str) -> RoutedStream:
+                           stream: bool = True, settings: GenerationSettings, deps, request_id: str,
+                           keys=None) -> RoutedStream:
     """Decide the route for one chat request, start the chosen model, and return once its answer has begun.
 
     messages    OpenAI-style [{"role": ..., "content": ...}], already validated
@@ -114,6 +133,8 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
     settings    the caller's temperature / max_tokens (None = routing.yaml's); pass settings.as_kwargs() on
     deps        app/api/deps.RouterDeps: .predictor, .client (ReliableClient), .registry
     request_id  goes into the RouteDecision unchanged
+    keys        this request's KeyContext (app/providers/keys.py), or None. BYOK: only its providers, with its
+                keys. Passed straight to ReliableClient, never stored.
 
     model="auto":
       1. prediction = deps.predictor.predict_messages(messages, task_type)
@@ -154,11 +175,18 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
         # 2. Pick the cheapest tier the quality dial (tau) trusts 
         routing = route(prediction.p_low, prediction.p_medium, tau)
         tier, reason = routing.tier, routing.reason
+        if is_byok(keys):              # only the user's providers: the tier may have no model for them
+            used = usable_tier(tier, deps.client.routing, deps.registry, keys.providers)
+            if used is None:
+                raise NoUsableModel(tier)
+            if used != tier:
+                reason = f"{reason}; no model for your keys in {tier}: used {used}"
+                tier = used
         
         # 3. Start that tier's model; the client falls back along the chain 
         # and only returns once the first piece of the answer exists 
         result = await anyio.to_thread.run_sync(
-            partial(deps.client.send, messages, tier, stream=stream, **kwargs))
+            partial(deps.client.send, messages, tier, stream=stream, keys=keys, **kwargs))
         
         used_tau = tau
         p_low, p_medium = prediction.p_low, prediction.p_medium
@@ -166,7 +194,7 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
     else:
         # Pass-through: exactly the model the caller named, no prediction, no fallback 
         result = await anyio.to_thread.run_sync(
-            partial(deps.client.send_model, messages, model, stream=stream, **kwargs))
+            partial(deps.client.send_model, messages, model, stream=stream, keys=keys, **kwargs))
         
         tier, reason = deps.registry[model].tier, f"requested model {model}"
         used_tau = p_low = p_medium = used_task = guessed = None

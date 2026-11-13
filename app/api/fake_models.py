@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from app.providers.base import StreamingResponse, _build_response
+from app.providers.base import StreamingResponse, TruncatedAnswer, _build_response
 from app.providers.common import ProviderError, Usage
 
 
@@ -35,6 +35,8 @@ class FakeBehavior:
     check_fail: Optional[str] = None       # a ProviderError kind for AI-checker calls only
     judge_reply: Optional[str] = None      # the judge's raw reply (default: score 5)
     judge_fail: Optional[str] = None       # a ProviderError kind for judge calls only
+    truncated: bool = False                # answers: used every output token thinking, no text (TruncatedAnswer)
+    echo_key: bool = False                 # with fail_before: the error message quotes the api_key it was sent
 
 
 DEFAULT_CHECK_REPLY = '{"good": true, "reason": "fake check: looks right"}'
@@ -53,17 +55,19 @@ class FakeModels:
     def __init__(self, script: Optional[dict] = None, sleep=time.sleep):
         self.script = dict(script or {})
         self.calls = []                    # one dict per call, for tests
+        self.last_api_key = None
         self._sleep = sleep
         self._lock = threading.Lock()
 
     def __call__(self, messages, model_config, stream=False, temperature=0.0, max_tokens=4000, timeout=30.0,
-                 reasoning_effort=None, response_format=None):
+                 reasoning_effort=None, response_format=None, thinking=None, api_key=None):
         b = self.script.get(model_config.name, FakeBehavior())
         kind = self._kind(messages, response_format)
         with self._lock:
             self.calls.append({"model": model_config.name, "stream": stream, "temperature": temperature,
                                "max_tokens": max_tokens, "timeout": timeout, "reasoning_effort": reasoning_effort,
-                               "kind": kind})
+                               "thinking": thinking, "byok_key": api_key is not None, "kind": kind})
+            self.last_api_key = api_key        # tests only: which key reached the "provider" (never logged)
         if kind != "answer":
             fail = b.check_fail if kind == "check" else b.judge_fail
             if fail:
@@ -72,6 +76,10 @@ class FakeModels:
             reply = reply if reply is not None else (DEFAULT_CHECK_REPLY if kind == "check" else DEFAULT_JUDGE_REPLY)
             usage = Usage(_tokens(" ".join(m["content"] for m in messages)), _tokens(reply))
             return _build_response(model_config, reply, usage, messages, 1.0, "stop")
+        if b.truncated:                    # billed for max_tokens of thinking, nothing written
+            billed = _build_response(model_config, "", Usage(_tokens(" ".join(m["content"] for m in messages)),
+                                                             max_tokens), messages, 1.0, "length")
+            raise TruncatedAnswer(billed, max_tokens)
         text = b.text if b.text is not None else fake_text(model_config.name)
         usage = Usage(_tokens(" ".join(m["content"] for m in messages)), _tokens(text))
         provider = model_config.provider
@@ -80,14 +88,14 @@ class FakeModels:
                 raise ProviderError(provider, "timeout", "request timed out (fake)")
             self._sleep(b.first_token_delay)
             if b.fail_before:
-                raise ProviderError(provider, b.fail_before, "scripted failure (fake)")
+                raise ProviderError(provider, b.fail_before, self._failure_text(b, api_key))
             return _build_response(model_config, text, usage, messages, b.first_token_delay * 1000, "stop")
         pieces = [w + " " for w in text.split(" ")[:-1]] + [text.split(" ")[-1]]
 
         def events():
             self._sleep(b.first_token_delay)
             if b.fail_before:
-                raise ProviderError(provider, b.fail_before, "scripted failure before the first token (fake)")
+                raise ProviderError(provider, b.fail_before, self._failure_text(b, api_key, "before the first token"))
             for i, piece in enumerate(pieces):
                 if b.fail_after is not None and i == b.fail_after:
                     raise ProviderError(provider, b.fail_kind, "scripted failure mid-stream (fake)")
@@ -97,6 +105,13 @@ class FakeModels:
             yield usage
 
         return StreamingResponse(events(), model_config, messages)
+
+    @staticmethod
+    def _failure_text(b, api_key, when="") -> str:
+        """echo_key: like a real provider's 401 that quotes the key it was sent (redaction must remove it)."""
+        if b.echo_key and api_key:
+            return f"Incorrect API key provided: {api_key}. You can find your API key in your account settings."
+        return " ".join(["scripted failure", when, "(fake)"]) if when else "scripted failure (fake)"
 
     @staticmethod
     def _kind(messages, response_format) -> str:

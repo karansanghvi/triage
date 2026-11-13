@@ -57,7 +57,9 @@ def seconds(ms):
 # Which percentile each model's timeout follows. groq-large deliberately uses p99 (see routing.yaml).
 PERCENTILE = {"groq-large": "p99_ms", "ollama-llama": "p95_ms"}
 # Models allowed a timeout without report data, each documented in routing.yaml.
-NO_DATA_EXCEPTIONS = {"gemini-flash"}
+# BYOK models (Phase 5): 60 s guesses with no data at all. Revisit with live data.
+BYOK_NO_DATA = {"openai-luna", "openai-terra", "openai-sol", "claude-haiku", "claude-sonnet", "claude-opus"}
+NO_DATA_EXCEPTIONS = {"gemini-flash"} | BYOK_NO_DATA
 
 
 def report_by_model():
@@ -88,6 +90,11 @@ def test_groq_large_uses_p99_and_no_phase2_call_exceeds_it(routing):
 def test_ollama_and_gemini_timeouts(routing):
     assert routing.timeout_for("ollama-llama") == 32 > routing.timeout_seconds
     assert routing.timeout_for("gemini-flash") == 30
+
+
+def test_byok_models_get_60s_until_there_is_live_data(routing):
+    for name in BYOK_NO_DATA:
+        assert routing.timeout_for(name) == 60 and routing.first_token_timeout_for(name) == 60, name
 
 
 def test_default_timeout_covers_every_phase2_cheap_and_medium_call(routing):
@@ -138,7 +145,8 @@ def test_caller_timeout_still_wins():
 ])
 def test_bad_model_timeouts_are_rejected(tmp_path, extra, message):
     path = tmp_path / "routing.yaml"
-    path.write_text("fallback_chains:\n  low: [groq-allam]\n  medium: [groq-allam]\n  high: [ollama-llama]\n" + extra)
+    path.write_text("fallback_chains:\n  low: [groq-allam]\n  medium: [groq-allam]\n  high: [ollama-llama]\n"
+                    "server_providers: [groq, ollama]\n" + extra)
     with pytest.raises(ValueError, match=message):
         load_routing(REGISTRY, path)
 

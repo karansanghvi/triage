@@ -9,6 +9,17 @@ class Usage:
     input_tokens: int
     output_tokens: int              # includes reasoning tokens, since providers bill them as output
     reasoning_tokens: Optional[int] = None   # the reasoning share of output_tokens, if reported
+
+
+@dataclass(frozen=True)
+class Finish:
+    """Streams only: the provider's finish reason, yielded once near the end (adapters that report it)."""
+    reason: Optional[str]
+
+
+# Finish reasons meaning the answer was cut off by the token limit (lowercased; Gemini says "MAX_TOKENS")
+TRUNCATED_FINISH_REASONS = {"length", "max_tokens"}
+
     
 @dataclass(frozen=True)
 class RawResult:
@@ -29,6 +40,7 @@ class ProviderError(Exception):
       auth        401 / 403: the key is missing, wrong or not allowed (provider-wide)
       client      other 4xx, e.g. a bad request or model name
       config      a problem on our side, e.g. a missing API key
+      truncated   a reasoning model used every output token (thinking) and wrote no answer (base.TruncatedAnswer)
     """
     RETRYABLE_KINDS = {"rate_limit", "server"}
     def __init__(self, provider: str, kind: str, message: str, status_code: Optional[int] = None):
@@ -37,10 +49,44 @@ class ProviderError(Exception):
         self.kind = kind
         self.status_code = status_code
     
+    def redact(self, secrets=()) -> "ProviderError":
+        """Remove keys from this error's message, in place (keeps its type, kind and status), and return it."""
+        from app.providers.keys import redact
+        self.args = tuple(redact(a, secrets) if isinstance(a, str) else a for a in self.args)
+        return self
+
     @property
     def retryable(self) -> bool:
         """Only rate limits and server errors are worth retrying"""
         return self.kind in self.RETRYABLE_KINDS
+
+# The .env variable holding each provider's server-side key (None: needs no key, e.g. local Ollama)
+PROVIDER_KEY_ENV = {
+    "groq": "GROQ_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "ollama": None,
+}
+
+
+def missing_key_env(provider: str) -> Optional[str]:
+    """The env variable name if this provider needs a key and none is set, else None (scripts use this to
+    report a model as "skipped: no key" instead of a failure)."""
+    env_name = PROVIDER_KEY_ENV.get(provider)
+    return env_name if env_name and not os.getenv(env_name) else None
+
+
+def server_or_given_key(api_key: Optional[str], env_name: str, provider: str) -> str:
+    """The caller's own key when one is given (BYOK: never replaced by the env key, even if empty), else the
+    server's key from the environment."""
+    if api_key is not None:
+        if not api_key:
+            raise ProviderError(provider, "config", "an empty API key was given")
+        return api_key
+    return require_key(env_name, provider)
+
 
 def require_key(env_name: str, provider: str)-> str:
     """Read an API key from the environment, or fall with a clear error"""

@@ -1,6 +1,7 @@
 """Exact-match response cache: repeated temperature=0 requests cost nothing."""
 import dataclasses
 import hashlib
+import hmac
 import json
 import logging
 import sqlite3
@@ -13,6 +14,7 @@ from app.providers.base import (
     DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE, Response, send_request,
 )
 from app.registry import PROJECT_ROOT, ModelConfig
+from app.providers.common import TRUNCATED_FINISH_REASONS   # re-exported: eval/build_dataset imports it from here
 
 logger = logging.getLogger("triage.cache")
 
@@ -21,8 +23,7 @@ FAKE_CACHE_PATH = PROJECT_ROOT / "data" / "cache" / "fake_responses.sqlite3"   #
 DEFAULT_TTL_SECONDS = 24 * 60 * 60       # saved answers expire after 24 hours
 CACHE_VERSION = 1                        # bump this to throw away every old entry at once
 
-# Finish reasons meaning the answer was cut off by the token limit: never cache those
-TRUNCATED_FINISH_REASONS = {"length", "max_tokens"}
+# Answers cut off by the token limit (TRUNCATED_FINISH_REASONS) are never cached
 
 
 def is_cacheable(temperature: float, stream: bool) -> bool:
@@ -35,7 +36,8 @@ def is_cacheable(temperature: float, stream: bool) -> bool:
 
 
 def make_cache_key(messages: list, model: ModelConfig, temperature: float, max_tokens: int,
-                   reasoning_effort: Optional[str] = None, response_format: Optional[dict] = None) -> str:
+                   reasoning_effort: Optional[str] = None, response_format: Optional[dict] = None,
+                   thinking: Optional[str] = None, key_fingerprint: Optional[str] = None) -> str:
     """A fingerprint of everything that affects the answer.
 
     sort_keys makes the same data always produce the same text,
@@ -54,6 +56,10 @@ def make_cache_key(messages: list, model: ModelConfig, temperature: float, max_t
         payload["reasoning_effort"] = reasoning_effort
     if response_format is not None:
         payload["response_format"] = response_format
+    if thinking is not None:
+        payload["thinking"] = thinking
+    if key_fingerprint is not None:    # BYOK: answers are kept per user key (key_fingerprint), never shared
+        payload["key"] = key_fingerprint
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -140,15 +146,27 @@ class ResponseCache:
         self._conn.close()
 
 
+FINGERPRINT_HEX_CHARS = 16
+
+
+def key_fingerprint(api_key: str, secret: bytes) -> str:
+    """HMAC-SHA256 of a provider key with TRIAGE_HASH_SECRET, truncated: tells keys apart in the cache without
+    storing or exposing the key (without the secret, a guessed key can't be checked against it)."""
+    return hmac.new(secret, api_key.encode("utf-8"), hashlib.sha256).hexdigest()[:FINGERPRINT_HEX_CHARS]
+
+
 class CachedSender:
     """Wraps send_request: same inputs and outputs, but checks the cache first.
 
     Plug it into the reliability layer with ReliableClient(send_fn=CachedSender(cache)).
+    A call with api_key (BYOK) is cached under that key's fingerprint, so two users never share an answer; with
+    no hash_secret to fingerprint it, such a call skips the cache. The key itself never enters the cache.
     """
 
-    def __init__(self, cache: ResponseCache, send_fn=send_request):
+    def __init__(self, cache: ResponseCache, send_fn=send_request, hash_secret: Optional[bytes] = None):
         self.cache = cache
         self._send = send_fn
+        self._hash_secret = hash_secret
         self.hits = 0
         self.misses = 0
         self.saved_cost = 0.0     # total reported cost the cache avoided
@@ -162,14 +180,16 @@ class CachedSender:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         **settings,
     ):
-        if not is_cacheable(temperature, stream):
+        api_key = settings.get("api_key")
+        if not is_cacheable(temperature, stream) or (api_key is not None and not self._hash_secret):
             return self._send(
                 messages, model, stream=stream, temperature=temperature,
                 max_tokens=max_tokens, **settings,
             )
 
         key = make_cache_key(messages, model, temperature, max_tokens, settings.get("reasoning_effort"),
-                             settings.get("response_format"))
+                             settings.get("response_format"), settings.get("thinking"),
+                             key_fingerprint(api_key, self._hash_secret) if api_key is not None else None)
         started_at = time.perf_counter()
         saved = self.cache.get(key)
 

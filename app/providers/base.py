@@ -9,7 +9,7 @@ from app.providers import (
     anthropic_provider, gemini_provider, groq_provider,
     ollama_provider, openai_provider, openrouter_provider,
 )
-from app.providers.common import ProviderError, Usage
+from app.providers.common import TRUNCATED_FINISH_REASONS, Finish, ProviderError, Usage
 from app.registry import ModelConfig
 
 load_dotenv()
@@ -21,6 +21,10 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 
 # Providers whose adapter speaks OpenAI's format (and so accepts reasoning_effort)
 OPENAI_FORMAT_PROVIDERS = {"openai", "groq", "ollama", "openrouter"}
+# Providers that accept reasoning_effort: the OpenAI-format ones, plus Anthropic (sent as output_config.effort)
+REASONING_EFFORT_PROVIDERS = OPENAI_FORMAT_PROVIDERS | {"anthropic"}
+# Anthropic only: thinking modes we may send (claude-haiku: "disabled")
+THINKING_MODES = {"disabled", "adaptive"}
 
 # Which adapter handles which provider
 ADAPTERS = {
@@ -52,6 +56,26 @@ class Response:
     cache_saved_cost: float = 0.0    # on a cache hit, the reported cost we didn't pay
     reasoning: Optional[str] = None          # reasoning returned separately from text, if any
     reasoning_tokens: Optional[int] = None   # reasoning share of output_tokens, if reported
+
+
+class TruncatedAnswer(ProviderError):
+    """A reasoning model spent every output token (thinking counts toward max_tokens) and wrote no answer.
+
+    Not retried and not counted by the circuit breaker: the chain falls back to the next model. .response is
+    the full Response (its tokens were billed), so the API can add its cost to the request's total."""
+
+    def __init__(self, response: "Response", max_tokens: int):
+        super().__init__(response.provider, "truncated",
+                         f"{response.model_name} used its {max_tokens} output tokens without writing an answer "
+                         f"(finish_reason {response.finish_reason!r})")
+        self.response = response
+        self.max_tokens = max_tokens
+
+
+def _is_truncated_empty(model_config, response: "Response") -> bool:
+    """Only for models marked reasoning: an empty answer cut off by the token limit."""
+    return (model_config.reasoning and not response.text.strip()
+            and (response.finish_reason or "").lower() in TRUNCATED_FINISH_REASONS)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -90,10 +114,11 @@ class StreamingResponse:
     After the loop finishes, .response holds the full Response.
     """
 
-    def __init__(self, events, model_config: ModelConfig, messages: list[dict]):
+    def __init__(self, events, model_config: ModelConfig, messages: list[dict], max_tokens: Optional[int] = None):
         self._events = events
         self._model_config = model_config
         self._messages = messages
+        self._max_tokens = max_tokens
         self._started = False
         self.response: Optional[Response] = None
 
@@ -103,11 +128,14 @@ class StreamingResponse:
         self._started = True
 
         started_at = time.perf_counter()  # the request really starts here
-        pieces, usage, first_piece_at = [], None, None
+        pieces, usage, first_piece_at, finish_reason = [], None, None, None
 
         for event in self._events:
             if isinstance(event, Usage):
                 usage = event
+                continue
+            if isinstance(event, Finish):
+                finish_reason = event.reason
                 continue
             if first_piece_at is None:
                 first_piece_at = time.perf_counter()
@@ -118,8 +146,19 @@ class StreamingResponse:
         ttft_ms = None if first_piece_at is None else (first_piece_at - started_at) * 1000
         self.response = _build_response(
             self._model_config, "".join(pieces), usage, self._messages,
-            (finished_at - started_at) * 1000, ttft_ms=ttft_ms,
+            (finished_at - started_at) * 1000, finish_reason=finish_reason, ttft_ms=ttft_ms,
         )
+        # No piece was yielded, so this is raised from the reliability layer's first-token wait: it can fall back
+        if _is_truncated_empty(self._model_config, self.response):
+            raise TruncatedAnswer(self.response, self._max_tokens)
+
+
+def _redacting(events, secrets):
+    """A stream's events, with the key removed from any ProviderError it raises."""
+    try:
+        yield from events
+    except ProviderError as error:
+        raise error.redact(secrets) from None
 
 
 def _validate_messages(messages) -> None:
@@ -148,6 +187,8 @@ def send_request(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     reasoning_effort: Optional[str] = None,
     response_format: Optional[dict] = None,
+    thinking: Optional[str] = None,
+    api_key: Optional[str] = None,
 ):
     """Send messages to any model.
 
@@ -155,7 +196,13 @@ def send_request(
     stream=True returns a StreamingResponse to loop over.
     reasoning_effort ("low", "medium", "high") is passed to reasoning models on OpenAI-format
     providers such as Groq's gpt-oss; leave it None for every other model.
+    reasoning_effort is also accepted for Anthropic (sent as output_config.effort).
     response_format (e.g. {"type": "json_object"}) asks OpenAI-format providers for JSON-only output.
+    thinking ("disabled" or "adaptive") is Anthropic only.
+    api_key: a caller's own provider key (BYOK). None = the adapter reads the server's key from the environment,
+    as eval/ and scripts/ rely on. The reliability layer always passes it for BYOK requests (never env).
+    Ollama ignores it.
+    Models marked `reasoning` get no temperature, and an empty answer cut off by max_tokens raises TruncatedAnswer.
     Raises ProviderError when the provider fails.
     """
     _validate_messages(messages)
@@ -170,26 +217,43 @@ def send_request(
 
     settings = {
         "stream": stream,
-        "temperature": temperature,
+        # Reasoning models get no temperature (None = not sent). Anthropic: sending it is a 400 on API version
+        # 2026-10-21 (and the SDK no longer accepts it). OpenAI: not documented either way for gpt-6.x, and
+        # leaving it out is always valid.
+        "temperature": None if model_config.reasoning else temperature,
         "max_tokens": max_tokens,
         "timeout": timeout,
     }
     if reasoning_effort is not None:
-        if model_config.provider not in OPENAI_FORMAT_PROVIDERS:
-            raise ProviderError(model_config.provider, "config", "reasoning_effort is only supported on OpenAI-format providers")
+        if model_config.provider not in REASONING_EFFORT_PROVIDERS:
+            raise ProviderError(model_config.provider, "config", "reasoning_effort is only supported on OpenAI-format providers and Anthropic")
         settings["reasoning_effort"] = reasoning_effort
+    if thinking is not None:
+        if model_config.provider != "anthropic" or thinking not in THINKING_MODES:
+            raise ProviderError(model_config.provider, "config", f"thinking={thinking!r} is only supported on Anthropic "
+                                f"({', '.join(sorted(THINKING_MODES))})")
+        settings["thinking"] = thinking
+    if api_key is not None:
+        settings["api_key"] = api_key
     if response_format is not None:
         if model_config.provider not in OPENAI_FORMAT_PROVIDERS:
             raise ProviderError(model_config.provider, "config", "response_format is only supported on OpenAI-format providers")
         settings["response_format"] = response_format
 
+    secrets = (api_key,) if api_key else ()
     if stream:
-        events = adapter(messages, model_config.model_id, **settings)
-        return StreamingResponse(events, model_config, messages)
+        events = _redacting(adapter(messages, model_config.model_id, **settings), secrets)
+        return StreamingResponse(events, model_config, messages, max_tokens)
 
     started_at = time.perf_counter()
-    raw = adapter(messages, model_config.model_id, **settings)
+    try:
+        raw = adapter(messages, model_config.model_id, **settings)
+    except ProviderError as error:                 # a provider may echo the key in its error text
+        raise error.redact(secrets) from None
     latency_ms = (time.perf_counter() - started_at) * 1000
-    return _build_response(
+    response = _build_response(
         model_config, raw.text, raw.usage, messages, latency_ms, raw.finish_reason, reasoning=raw.reasoning,
     )
+    if _is_truncated_empty(model_config, response):
+        raise TruncatedAnswer(response, max_tokens)
+    return response

@@ -8,7 +8,7 @@ import time
 import urllib.request
 
 from app.providers.base import send_request
-from app.providers.common import ProviderError
+from app.providers.common import ProviderError, missing_key_env
 from app.registry import load_registry
 from app.reliability import AllModelsFailed, create_client
 
@@ -21,6 +21,7 @@ OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1").removesuf
 QUESTION = [{"role": "user", "content": "Reply with just the word: ready"}]
 
 results = []  # (check name, passed)
+skipped = []  # (check name, why): not run, so neither passed nor failed
 
 
 def record(name, passed, detail=""):
@@ -58,6 +59,11 @@ def show_path(result):
 def check_every_model(registry):
     print("=== 1. Every model answers through send_request() ===\n")
     for model in registry.values():
+        missing = missing_key_env(model.provider)
+        if missing:
+            skipped.append((f"{model.name} answers", f"no key: {missing} is not set"))
+            print(f"  SKIPPED: {model.name} answers (skipped: no key, {missing} is not set)")
+            continue
         try:
             response = send_request(QUESTION, model)
         except ProviderError as error:
@@ -146,6 +152,8 @@ def print_summary():
     print(f"\n=== Phase 1 summary: {passed} of {len(results)} checks passed ===\n")
     for name, ok in results:
         print(f"  {'✅' if ok else '❌'} {name}")
+    for name, why in skipped:
+        print(f"  ⏭️  {name} (skipped: {why})")
     if passed == len(results):
         print("\n  Phase 1 is done: one function calls any model, and a provider")
         print("  outage falls back to another provider automatically.")

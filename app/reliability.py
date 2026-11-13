@@ -11,7 +11,8 @@ import yaml
 
 from app.providers.base import send_request
 from app.providers.common import ProviderError
-from app.registry import PROJECT_ROOT, VALID_TIERS, ModelConfig, load_registry
+from app.providers.keys import redact
+from app.registry import PROJECT_ROOT, VALID_PROVIDERS, VALID_TIERS, ModelConfig, load_registry
 
 logger = logging.getLogger("triage.reliability")
 
@@ -47,9 +48,14 @@ class BreakerSettings:
 # Generation settings that apply to every model, and request parameters that are set per MODEL
 # (never per call or per tier), so a fallback model never receives a parameter meant for another model.
 GENERATION_KEYS = {"temperature", "max_tokens"}
-MODEL_PARAM_KEYS = {"reasoning_effort"}
-# Providers whose adapter speaks OpenAI's format (the only ones that accept reasoning_effort)
+MODEL_PARAM_KEYS = {"reasoning_effort", "thinking"}
+# Providers whose adapter speaks OpenAI's format
 OPENAI_FORMAT_PROVIDERS = {"openai", "groq", "ollama", "openrouter"}
+# reasoning_effort: OpenAI-format providers, plus Anthropic (sent as output_config.effort)
+REASONING_EFFORT_PROVIDERS = OPENAI_FORMAT_PROVIDERS | {"anthropic"}
+# thinking (Anthropic only). "disabled" is a 400 at effort xhigh or max, and on these models at any effort
+THINKING_MODES = {"disabled", "adaptive"}
+THINKING_ALWAYS_ON_MODEL_IDS = {"claude-sonnet-5-5", "claude-opus-5-5"}
 
 
 @dataclass(frozen=True)
@@ -66,12 +72,64 @@ class RoutingConfig:
     # total-time limit on a stream: a long answer that is arriving steadily is not cut off.
     first_token_timeout_seconds: Optional[float] = None
     model_first_token_timeouts: dict = field(default_factory=dict)
+    # Providers a request may use when it brings no keys of its own (routing.yaml `server_providers`).
+    # Models on any other provider are left out of every chain for such requests, as if they weren't listed.
+    # Required in routing.yaml (loading fails without it). None = no filter, which only a RoutingConfig built
+    # directly in code (tests) can have.
+    server_providers: Optional[frozenset] = None
+    # model name -> the smallest max_tokens it gets when the CALLER didn't set max_tokens (raises only our
+    # generation default). For reasoning models, whose thinking counts toward max_tokens.
+    min_default_max_tokens: dict = field(default_factory=dict)
 
     def timeout_for(self, model_name: str) -> float:
         return self.model_timeouts.get(model_name, self.timeout_seconds)
 
     def first_token_timeout_for(self, model_name: str) -> Optional[float]:
         return self.model_first_token_timeouts.get(model_name, self.first_token_timeout_seconds)
+
+    def allowed_providers(self, providers=None) -> Optional[frozenset]:
+        """The providers one request may use: `providers` if given (a BYOK request's own), else server_providers."""
+        return self.server_providers if providers is None else frozenset(providers)
+
+    def chain_for(self, tier: str, registry: dict, providers=None) -> list:
+        """The tier's chain (model names, in order) with every model on a provider this request may not use
+        removed. Its first entry is the request's primary model; for the high tier, its strong baseline."""
+        return filter_chain(self.chains[tier], registry, self.allowed_providers(providers))
+
+
+def filter_chain(names, registry: dict, providers: Optional[frozenset]) -> list:
+    """`names` in order, keeping only models whose provider is in `providers` (None = keep all)."""
+    if providers is None:
+        return list(names)
+    return [name for name in names if registry[name].provider in providers]
+
+
+def is_byok(keys) -> bool:
+    """keys: this request's app.providers.keys.KeyContext, or None. Only "byok" carries user keys."""
+    return keys is not None and keys.mode == "byok"
+
+
+def _request_providers(keys, providers):
+    """A BYOK request may use only the providers it sent keys for (through the same chain filter)."""
+    if not is_byok(keys):
+        return providers
+    if providers is not None:
+        raise ValueError("pass keys= or providers=, not both: a BYOK request's providers are its keys")
+    return keys.providers
+
+
+class BYOKKeyMissing(RuntimeError):
+    """A BYOK call reached a model whose provider has no key in this request. The chain filter makes this
+    impossible, so it means a bug: never fall back to the server's env key."""
+
+
+class ModelNotAllowed(LookupError):
+    """A pass-through request named a model on a provider it may not use (e.g. anthropic with no key)."""
+
+    def __init__(self, model_name: str, provider: str):
+        super().__init__(f"The model `{model_name}` runs on {provider}, which this request can't use: "
+                         f"it needs your own {provider} API key.")
+        self.model_name, self.provider = model_name, provider
 
 
 def _positive_number(value, field: str, *, whole: bool = False):
@@ -133,13 +191,51 @@ def routing_from_dict(data: dict, registry: dict) -> RoutingConfig:
         cooldown_seconds=float(_positive_number(raw_breaker.get("cooldown_seconds", 60), "circuit_breaker.cooldown_seconds")),
     )
 
+    server_providers = _load_server_providers(data.get("server_providers"), chains, registry)
     timeout = float(_positive_number(data.get("timeout_seconds", 30), "timeout_seconds"))
     first_token, model_first_token = _load_streaming(data.get("streaming"), registry)
     return RoutingConfig(chains=chains, retry=retry, breaker=breaker, timeout_seconds=timeout,
                          generation=_load_generation(data.get("generation")),
                          model_params=_load_model_params(data.get("model_params"), registry),
                          model_timeouts=_load_model_timeouts(data.get("model_timeouts"), registry),
-                         first_token_timeout_seconds=first_token, model_first_token_timeouts=model_first_token)
+                         first_token_timeout_seconds=first_token, model_first_token_timeouts=model_first_token,
+                         server_providers=server_providers,
+                         min_default_max_tokens=_load_min_default_max_tokens(data.get("min_default_max_tokens"),
+                                                                             registry))
+
+
+def _load_min_default_max_tokens(raw, registry: dict) -> dict:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError("routing.yaml: 'min_default_max_tokens' must be a mapping of model name -> tokens")
+    out = {}
+    for name, tokens in raw.items():
+        if name not in registry:
+            raise ValueError(f"routing.yaml: min_default_max_tokens lists unknown model '{name}'")
+        out[name] = _positive_number(tokens, f"min_default_max_tokens.{name}", whole=True)
+    return out
+
+
+def _load_server_providers(raw, chains: dict, registry: dict) -> frozenset:
+    """routing.yaml `server_providers` (required). Every tier must keep at least one model."""
+    if raw is None:
+        raise ValueError("routing.yaml: 'server_providers' is missing. List the providers that requests without "
+                         "their own keys may use, e.g. server_providers: [groq, gemini, ollama]. Without it, those "
+                         "requests could be sent to any provider in the chains (including BYOK-only ones like "
+                         "openai and anthropic), so Triage refuses to start.")
+    if not isinstance(raw, list) or not raw or not all(isinstance(p, str) for p in raw):
+        raise ValueError("routing.yaml: 'server_providers' must be a non-empty list of provider names")
+    unknown = set(raw) - VALID_PROVIDERS
+    if unknown:
+        raise ValueError(f"routing.yaml: server_providers lists unknown provider(s): {', '.join(sorted(unknown))}")
+    if len(set(raw)) != len(raw):
+        raise ValueError("routing.yaml: server_providers lists the same provider twice")
+    providers = frozenset(raw)
+    for tier, names in chains.items():
+        if not filter_chain(names, registry, providers):
+            raise ValueError(f"routing.yaml: tier '{tier}' has no model on a server provider "
+                             f"({', '.join(sorted(providers))}), so requests without keys could never answer")
+    return providers
 
 
 def _load_streaming(raw, registry: dict) -> tuple:
@@ -205,10 +301,26 @@ def _load_model_params(raw, registry: dict) -> dict:
         unknown = set(params) - MODEL_PARAM_KEYS
         if unknown:
             raise ValueError(f"routing.yaml: unsupported model_params for '{name}': {', '.join(sorted(unknown))}")
-        if "reasoning_effort" in params and registry[name].provider not in OPENAI_FORMAT_PROVIDERS:
+        if "reasoning_effort" in params and registry[name].provider not in REASONING_EFFORT_PROVIDERS:
             raise ValueError(f"routing.yaml: '{name}' ({registry[name].provider}) does not accept reasoning_effort")
+        if "thinking" in params:
+            if registry[name].provider != "anthropic":
+                raise ValueError(f"routing.yaml: '{name}' ({registry[name].provider}) does not accept thinking")
+            if params["thinking"] not in THINKING_MODES:
+                raise ValueError(f"routing.yaml: '{name}' thinking must be one of {', '.join(sorted(THINKING_MODES))}")
+            if params["thinking"] == "disabled" and registry[name].model_id in THINKING_ALWAYS_ON_MODEL_IDS:
+                raise ValueError(f"routing.yaml: '{name}' ({registry[name].model_id}) can't turn thinking off: "
+                                 "Anthropic returns a 400 for thinking disabled on it at any effort. Remove "
+                                 "`thinking: disabled` (use reasoning_effort to limit thinking instead).")
+            if params["thinking"] == "disabled" and params.get("reasoning_effort") in ("xhigh", "max"):
+                raise ValueError(f"routing.yaml: '{name}': thinking disabled is a 400 at effort xhigh or max")
         out[name] = dict(params)
     return out
+
+
+def _refuse_api_key(settings: dict) -> None:
+    if "api_key" in settings:
+        raise ValueError("api_key can't be passed to send(): pass the request's KeyContext as keys=")
 
 
 # ---------- Backoff with jitter ----------
@@ -285,6 +397,7 @@ class Attempt:
     outcome: str                     # "success", "error", or "skipped"
     error_kind: Optional[str] = None
     message: Optional[str] = None
+    response: Optional[object] = None   # truncated attempts only: the billed Response (its cost counts too)
 
 
 @dataclass(frozen=True)
@@ -370,11 +483,18 @@ class ReliableClient:
         self._sleep = sleep
         self._rng = rng or random.Random()
 
-    def send(self, messages: list, tier: str, stream: bool = False, **settings) -> ReliableResult:
+    def send(self, messages: list, tier: str, stream: bool = False, *, providers=None, keys=None,
+             **settings) -> ReliableResult:
         """Try each model in the tier's chain until one answers.
 
-        Raises AllModelsFailed if none of them do.
+        keys: this request's KeyContext. BYOK: only its providers are used, each call gets that provider's key
+        from it (never the env key). None or no keys: the server's providers and env keys, as before.
+        providers: the providers this request may use; None = routing's server_providers (tests, internal).
+        Models on other providers are dropped before anything is tried: no attempt, no fallback event.
+        Raises AllModelsFailed if none of them answer.
         """
+        providers = _request_providers(keys, providers)
+        _refuse_api_key(settings)
         if tier not in self.routing.chains:
             raise ValueError(f"unknown tier '{tier}'. Use one of: low, medium, high")
         per_model = MODEL_PARAM_KEYS & set(settings)
@@ -383,28 +503,42 @@ class ReliableClient:
             raise ValueError(f"{', '.join(sorted(per_model))} is set per model: put it under model_params "
                              "in the routing config, not in send()")
 
-        chain = [self.registry[name] for name in self.routing.chains[tier]]
-        return self._send_chain(chain, tier, messages, stream, settings)
+        chain = [self.registry[name] for name in self.routing.chain_for(tier, self.registry, providers)]
+        if not chain:
+            raise AllModelsFailed(tier, [])      # this request's providers have no model in the tier
+        return self._send_chain(chain, tier, messages, stream, settings, keys)
 
-    def send_model(self, messages: list, model_name: str, stream: bool = False, **settings) -> ReliableResult:
+    def send_model(self, messages: list, model_name: str, stream: bool = False, *, providers=None, keys=None,
+                   **settings) -> ReliableResult:
         """Send to ONE named model (a pass-through request): its timeout, retries and circuit breaker apply,
-        but there is no fallback to another model. Raises AllModelsFailed if it fails."""
+        but there is no fallback to another model. Raises AllModelsFailed if it fails, and ModelNotAllowed
+        (before calling anything) if its provider isn't one this request may use (see send)."""
+        providers = _request_providers(keys, providers)
+        _refuse_api_key(settings)
         if model_name not in self.registry:
             raise ValueError(f"unknown model '{model_name}'")
+        allowed = self.routing.allowed_providers(providers)
+        if allowed is not None and self.registry[model_name].provider not in allowed:
+            raise ModelNotAllowed(model_name, self.registry[model_name].provider)
         per_model = MODEL_PARAM_KEYS & set(settings)
         if per_model:
             raise ValueError(f"{', '.join(sorted(per_model))} is set per model: put it under model_params "
                              "in the routing config, not in send_model()")
         model = self.registry[model_name]
-        return self._send_chain([model], model.tier, messages, stream, settings)
+        return self._send_chain([model], model.tier, messages, stream, settings, keys)
 
-    def _send_chain(self, chain: list, tier: str, messages: list, stream: bool, settings: dict) -> ReliableResult:
+    def _send_chain(self, chain: list, tier: str, messages: list, stream: bool, settings: dict,
+                    keys=None) -> ReliableResult:
         attempts: list[Attempt] = []
+        # The circuit breaker is shared by every request and tracks Triage's own keys and providers. A BYOK call
+        # uses the user's key, so it neither reads it (a server-key outage doesn't block a user's working key) nor
+        # writes it (a user's bad key or rate limit doesn't block everyone else).
+        use_breaker = not is_byok(keys)
 
         for index, model in enumerate(chain):
             next_name = chain[index + 1].name if index + 1 < len(chain) else None
 
-            blocked_key = self._blocked_key(model)
+            blocked_key = self._blocked_key(model) if use_breaker else None
             if blocked_key:
                 left = self.breaker.seconds_left(blocked_key)
                 attempts.append(Attempt(
@@ -414,33 +548,35 @@ class ReliableClient:
                 self._record_fallback(tier, model.name, next_name, "circuit_open")
                 continue
 
-            result, error = self._try_model(model, messages, stream, settings, attempts)
+            result, error = self._try_model(model, messages, stream, settings, attempts, keys, use_breaker)
             if result is not None:
                 return ReliableResult(result, model, tier, chain[0].name, attempts)
             self._record_fallback(tier, model.name, next_name, error.kind)
 
         raise AllModelsFailed(tier, attempts)
 
-    def _try_model(self, model, messages, stream, settings, attempts):
+    def _try_model(self, model, messages, stream, settings, attempts, keys=None, use_breaker=True):
         """Try one model, retrying rate limits and server errors."""
         policy = self.routing.retry
         last_error = None
 
         for attempt_number in range(1, policy.max_attempts + 1):
             try:
-                result = self._call(model, messages, stream, settings)
+                result = self._call(model, messages, stream, settings, keys)
             except ProviderError as error:
+                error.redact(keys.secrets if is_byok(keys) else ())     # the error may quote the key
                 last_error = error
-                attempts.append(Attempt(model.name, model.provider, "error", error.kind, str(error)))
-                if error.kind in PROVIDER_BREAKER_KINDS:
+                attempts.append(Attempt(model.name, model.provider, "error", error.kind, redact(str(error)),
+                                        getattr(error, "response", None)))
+                if use_breaker and error.kind in PROVIDER_BREAKER_KINDS:
                     self.breaker.record_failure(model.provider)
-                elif error.kind in MODEL_BREAKER_KINDS:
+                elif use_breaker and error.kind in MODEL_BREAKER_KINDS:
                     self.breaker.record_failure(_model_key(model))
 
                 can_retry = (
                     error.retryable
                     and attempt_number < policy.max_attempts
-                    and self._blocked_key(model) is None
+                    and (not use_breaker or self._blocked_key(model) is None)
                 )
                 if not can_retry:
                     break
@@ -454,7 +590,7 @@ class ReliableClient:
                 continue
 
             # A cache hit says nothing about whether the provider is healthy right now
-            if not getattr(result, "cached", False):
+            if use_breaker and not getattr(result, "cached", False):
                 self.breaker.record_success(model.provider)
                 self.breaker.record_success(_model_key(model))
             attempts.append(Attempt(model.name, model.provider, "success"))
@@ -469,11 +605,20 @@ class ReliableClient:
                 return key
         return None
 
-    def _call(self, model, messages, stream, settings):
+    def _call(self, model, messages, stream, settings, keys=None):
         # Every call gets the configured timeout (per model if set) and generation settings, unless the caller
         # set their own, plus the parameters configured for THIS model only (so a fallback never inherits them)
+        caller_set_max_tokens = "max_tokens" in settings
         settings = {"timeout": self.routing.timeout_for(model.name), **self.routing.generation, **settings,
                     **self.routing.model_params.get(model.name, {})}
+        floor = self.routing.min_default_max_tokens.get(model.name)
+        if floor and not caller_set_max_tokens:       # a caller's own max_tokens is always respected
+            settings["max_tokens"] = max(settings.get("max_tokens", 0), floor)
+        if is_byok(keys):                             # the guard: a BYOK call always carries its own key
+            key = keys.key_for(model.provider)
+            if key is None:
+                raise BYOKKeyMissing(f"BYOK call to {model.name} ({model.provider}) without a key for it")
+            settings["api_key"] = key
 
         if not stream:
             return self._send(messages, model, **settings)

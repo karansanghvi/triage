@@ -4,10 +4,12 @@ from google import genai
 from google.genai import errors, types 
 
 from app.providers.common import (
-    ProviderError, RawResult, Usage, kind_from_status, require_key, split_system,
+    ProviderError, RawResult, Usage, kind_from_status, server_or_given_key, split_system,
 )
 
 PROVIDER = "gemini"
+# Tests set this to an httpx client with a MockTransport to see the exact request; None = the SDK's own client
+HTTP_CLIENT = None
 ROLE_MAP = {"user": "user", "assistant": "model"} # Gemini calls the AI role "model"
 
 def _convert_error(error) -> ProviderError:
@@ -32,12 +34,19 @@ def _to_contents(turns):
         for m in turns
     ]
     
-def send(messages, model_id, *, stream, temperature, max_tokens, timeout):
+def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_key=None):
+    """api_key: the caller's own key (BYOK); None = GEMINI_API_KEY from the environment."""
+    http_options = {"timeout": int(timeout * 1000)}   # milliseconds
+    if HTTP_CLIENT is not None:
+        http_options["httpx_client"] = HTTP_CLIENT
     client = genai.Client(
-        api_key=require_key("GEMINI_API_KEY", PROVIDER),
-        http_options=types.HttpOptions(timeout=int(timeout * 1000)), #milliseconds
+        api_key=server_or_given_key(api_key, "GEMINI_API_KEY", PROVIDER),
+        http_options=types.HttpOptions(**http_options),
     )
     system_text, turns = split_system(messages)
+    # Gemini 3.6+ ignores temperature ("deprecated and ignored"), and Google says future models will return HTTP
+    # 400 for it (aistudio.google.com/docs/whats-new-gemini-3.6, checked 2026-11-12). Still sent so requests stay as
+    # they are today; drop it (as base.send_request does for `reasoning` models) when a Gemini model starts rejecting it.
     config = types.GenerateContentConfig(
         temperature=temperature,
         max_output_tokens=max_tokens,
@@ -52,7 +61,7 @@ def send(messages, model_id, *, stream, temperature, max_tokens, timeout):
     try:
         response = client.models.generate_content(model=model, contents=contents, config=config)
     except (errors.APIError, httpx.HTTPError) as error:
-        raise _convert_error(error) from error 
+        raise _convert_error(error) from None 
     
     finish_reason = None 
     if response.candidates and response.candidates[0].finish_reason:
@@ -77,6 +86,6 @@ def _stream(client, model, contents, config):
             if chunk.usage_metadata:
                 usage = _usage_from(chunk.usage_metadata) # the last chunk has the totals 
     except (errors.APIError, httpx.HTTPError) as error:
-        raise _convert_error(error) from error
+        raise _convert_error(error) from None
     if usage:
         yield usage
