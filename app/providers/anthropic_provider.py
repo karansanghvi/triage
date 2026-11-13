@@ -8,7 +8,7 @@ Docs: platform.claude.com/docs/en/build-with-claude/thinking and /effort, /api/v
 import anthropic
 
 from app.providers.common import (
-    Finish, ProviderError, RawResult, Usage, kind_from_status, require_key, split_system,
+    Finish, ProviderError, RawResult, Usage, kind_from_status, server_or_given_key, split_system,
 )
 
 PROVIDER = "anthropic"
@@ -46,9 +46,10 @@ def _request(messages, model_id, max_tokens, reasoning_effort, thinking) -> dict
 
 
 def send(messages, model_id, *, stream, max_tokens, timeout, temperature=None, reasoning_effort=None,
-         thinking=None):
-    """temperature is accepted for a uniform adapter signature and never sent (see the module docstring)."""
-    api_key = require_key("ANTHROPIC_API_KEY", PROVIDER)
+         thinking=None, api_key=None):
+    """temperature is accepted for a uniform adapter signature and never sent (see the module docstring).
+    api_key: the caller's own key (BYOK); None = ANTHROPIC_API_KEY from the environment."""
+    api_key = server_or_given_key(api_key, "ANTHROPIC_API_KEY", PROVIDER)
     try:                                   # building the client can fail too (e.g. a bad http_client)
         client = anthropic.Anthropic(
             api_key=api_key,

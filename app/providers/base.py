@@ -180,6 +180,7 @@ def send_request(
     reasoning_effort: Optional[str] = None,
     response_format: Optional[dict] = None,
     thinking: Optional[str] = None,
+    api_key: Optional[str] = None,
 ):
     """Send messages to any model.
 
@@ -190,6 +191,9 @@ def send_request(
     reasoning_effort is also accepted for Anthropic (sent as output_config.effort).
     response_format (e.g. {"type": "json_object"}) asks OpenAI-format providers for JSON-only output.
     thinking ("disabled" or "adaptive") is Anthropic only.
+    api_key: a caller's own provider key (BYOK). None = the adapter reads the server's key from the environment,
+    as eval/ and scripts/ rely on. The reliability layer always passes it for BYOK requests (never env).
+    Ollama ignores it.
     Models marked `reasoning` get no temperature, and an empty answer cut off by max_tokens raises TruncatedAnswer.
     Raises ProviderError when the provider fails.
     """
@@ -221,6 +225,8 @@ def send_request(
             raise ProviderError(model_config.provider, "config", f"thinking={thinking!r} is only supported on Anthropic "
                                 f"({', '.join(sorted(THINKING_MODES))})")
         settings["thinking"] = thinking
+    if api_key is not None:
+        settings["api_key"] = api_key
     if response_format is not None:
         if model_config.provider not in OPENAI_FORMAT_PROVIDERS:
             raise ProviderError(model_config.provider, "config", "response_format is only supported on OpenAI-format providers")

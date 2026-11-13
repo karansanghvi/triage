@@ -4,10 +4,12 @@ from google import genai
 from google.genai import errors, types 
 
 from app.providers.common import (
-    ProviderError, RawResult, Usage, kind_from_status, require_key, split_system,
+    ProviderError, RawResult, Usage, kind_from_status, server_or_given_key, split_system,
 )
 
 PROVIDER = "gemini"
+# Tests set this to an httpx client with a MockTransport to see the exact request; None = the SDK's own client
+HTTP_CLIENT = None
 ROLE_MAP = {"user": "user", "assistant": "model"} # Gemini calls the AI role "model"
 
 def _convert_error(error) -> ProviderError:
@@ -32,10 +34,14 @@ def _to_contents(turns):
         for m in turns
     ]
     
-def send(messages, model_id, *, stream, temperature, max_tokens, timeout):
+def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_key=None):
+    """api_key: the caller's own key (BYOK); None = GEMINI_API_KEY from the environment."""
+    http_options = {"timeout": int(timeout * 1000)}   # milliseconds
+    if HTTP_CLIENT is not None:
+        http_options["httpx_client"] = HTTP_CLIENT
     client = genai.Client(
-        api_key=require_key("GEMINI_API_KEY", PROVIDER),
-        http_options=types.HttpOptions(timeout=int(timeout * 1000)), #milliseconds
+        api_key=server_or_given_key(api_key, "GEMINI_API_KEY", PROVIDER),
+        http_options=types.HttpOptions(**http_options),
     )
     system_text, turns = split_system(messages)
     # Gemini 3.6+ ignores temperature ("deprecated and ignored"), and Google says future models will return HTTP

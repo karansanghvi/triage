@@ -72,6 +72,16 @@ def missing_key_env(provider: str) -> Optional[str]:
     return env_name if env_name and not os.getenv(env_name) else None
 
 
+def server_or_given_key(api_key: Optional[str], env_name: str, provider: str) -> str:
+    """The caller's own key when one is given (BYOK: never replaced by the env key, even if empty), else the
+    server's key from the environment."""
+    if api_key is not None:
+        if not api_key:
+            raise ProviderError(provider, "config", "an empty API key was given")
+        return api_key
+    return require_key(env_name, provider)
+
+
 def require_key(env_name: str, provider: str)-> str:
     """Read an API key from the environment, or fall with a clear error"""
     key = os.getenv(env_name)

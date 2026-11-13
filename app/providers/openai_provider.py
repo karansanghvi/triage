@@ -2,7 +2,7 @@
 import openai
 from openai import OpenAI
 
-from app.providers.common import Finish, ProviderError, RawResult, Usage, kind_from_status, require_key
+from app.providers.common import Finish, ProviderError, RawResult, Usage, kind_from_status, server_or_given_key
 
 # Tests set this to an httpx.Client with a MockTransport to see the exact request; None = the SDK's own client
 HTTP_CLIENT = None
@@ -105,13 +105,13 @@ def _stream(client, messages, model_id, provider, extra):
         raise _convert_error(error, provider) from error
 
 
-def send(messages, model_id, **settings):
-    """Real OpenAI (only used for the optional final benchmark)."""
+def send(messages, model_id, *, api_key=None, **settings):
+    """Real OpenAI. api_key: the caller's own key (BYOK); None = OPENAI_API_KEY from the environment."""
     return send_openai_format(
         messages,
         model_id,
         provider="openai",
         base_url=None,  # None means OpenAI's own servers
-        api_key=require_key("OPENAI_API_KEY", "openai"),
+        api_key=server_or_given_key(api_key, "OPENAI_API_KEY", "openai"),
         **settings,
     )
