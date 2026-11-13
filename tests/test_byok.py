@@ -560,3 +560,48 @@ def test_no_key_auth_failure_keeps_the_503(stream):
     http, _ = app({"groq-small": FakeBehavior(fail_before="auth")})
     r = chat(http, {"model": "groq-small", "messages": ASK, "stream": stream})
     assert r.status_code == 503 and r.json()["error"]["code"] == "all_models_failed"
+
+
+# ---------- failed requests still log their attempts and primary model ----------
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_failed_named_model_request_logs_its_attempts_and_primary(tmp_path, stream):
+    db = tmp_path / "requests.sqlite3"
+    http, deps = app({"claude-haiku": REJECT}, log=SQLiteRequestLog(db))
+    chat(http, {"model": "claude-haiku", "messages": ASK, "stream": stream}, ANTHROPIC_ONLY)
+    (row,) = SQLiteRequestLog(db).rows()
+    assert (row.primary_model, row.tier, row.served_model) == ("claude-haiku", "low", None)
+    (attempt,) = row.attempts
+    assert (attempt["model"], attempt["outcome"], attempt["error_kind"]) == ("claude-haiku", "error", "auth")
+    assert "Incorrect API key" in attempt["message"] and SECRET not in attempt["message"]
+    deps.log.close()
+    for f in tmp_path.iterdir():
+        assert SECRET.encode() not in f.read_bytes(), f.name
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_failed_auto_request_logs_every_attempt_tier_and_primary(stream):
+    http, deps = app({"openai-sol": REJECT, "claude-opus": SLOW})
+    r = chat(http, {"model": "auto", "messages": ASK, "stream": stream},
+             {"x-openai-key": SECRET, "x-anthropic-key": "sk-ant-test-OTHER456", "X-Triage-Quality": "0.99"})
+    assert r.status_code == 503
+    (row,) = deps.log.rows()
+    assert (row.tier, row.primary_model) == ("high", "openai-sol")
+    assert [(a["model"], a["error_kind"]) for a in row.attempts] == [("openai-sol", "auth"),
+                                                                     ("claude-opus", "timeout")]
+    assert all(SECRET not in a.get("message", "") and "OTHER456" not in a.get("message", "") for a in row.attempts)
+
+
+def test_a_failed_no_key_request_logs_its_attempts_too():
+    http, deps = app({"groq-small": DOWN, "gemini-flash": DOWN})
+    assert chat(http, headers={"X-Triage-Quality": "0.92"}).status_code == 503
+    (row,) = deps.log.rows()
+    assert (row.tier, row.primary_model) == ("medium", "groq-small")
+    assert [a["model"] for a in row.attempts] == ["groq-small"] * 3 + ["gemini-flash"] * 3      # with retries
+
+
+def test_successful_attempts_carry_no_message():
+    http, deps = app()
+    chat(http)
+    (row,) = deps.log.rows()
+    assert row.attempts == [{"model": "groq-small", "outcome": "success", "error_kind": None}]

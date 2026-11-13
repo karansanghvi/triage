@@ -403,8 +403,9 @@ def test_api_auto_where_every_model_truncates_is_503_with_the_cost_logged():
     assert row.cost > 0 and [a["error_kind"] for a in row.attempts][-2:] == ["truncated", "truncated"]
 
 
-def test_api_503_without_truncation_logs_as_before():
+def test_api_503_without_truncation_logs_its_attempts_and_no_cost():
     http, deps = byok_style_app({"groq-large": DOWN, "gemini-flash": DOWN, "openai-sol": DOWN, "claude-opus": DOWN})
     chat(http, {"model": "auto", "messages": ASK})
     (row,) = deps.log.rows()
-    assert row.attempts == [] and row.cost is None
+    tried = list(dict.fromkeys(a["model"] for a in row.attempts))           # in order, retries collapsed
+    assert tried == ["groq-large", "gemini-flash", "openai-sol", "claude-opus"] and row.cost is None

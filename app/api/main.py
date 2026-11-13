@@ -47,6 +47,7 @@ from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
 from app.providers.base import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
 from app.providers.common import ProviderError
+from app.providers.keys import redact
 from app.reliability import AllModelsFailed, ModelNotAllowed
 
 logger = logging.getLogger("triage.api")
@@ -156,8 +157,15 @@ def _apply_costs(row: RequestRow, response, deps, providers=None) -> None:
     row.saved = row.strong_cost - row.price_as_cost
 
 
+MAX_ATTEMPT_MESSAGE_CHARS = 300
+
+
 def _attempt_dict(a) -> dict:
+    """One attempt for the request log. A failed or skipped attempt keeps its message, redacted again here (the
+    reliability layer already removed the request's keys) and shortened."""
     out = {"model": a.model_name, "outcome": a.outcome, "error_kind": a.error_kind}
+    if a.message:
+        out["message"] = redact(a.message)[:MAX_ATTEMPT_MESSAGE_CHARS]
     billed = getattr(a, "response", None)          # only a truncated attempt carries one
     if billed is not None:
         out.update(input_tokens=billed.input_tokens, output_tokens=billed.output_tokens, cost=billed.cost,
@@ -356,6 +364,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                                                   and max_tokens == training.get("max_tokens")) if auto else None,
                          prompt_hmac=prompt_hmac(messages, deps.hash_secret), verified=verify,
                          mode="byok" if byok else "api")
+        if not auto and body.model in deps.registry:       # a named model is its own primary, even if it fails
+            row.primary_model, row.tier = body.model, deps.registry[body.model].tier
 
         logged = []
         recorder = _RecordingPredictor(deps.predictor)
@@ -392,9 +402,12 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             finish("error", 400, "no_usable_model")
             raise APIError(400, NO_USABLE_MODEL_MESSAGE, code="no_usable_model") from None
         except AllModelsFailed as error:
-            if any(getattr(a, "response", None) is not None for a in error.attempts):
-                row.attempts = [_attempt_dict(a) for a in error.attempts]
-                _add_truncated_costs(row, error.attempts)
+            # Every attempt is logged (model, outcome, error_kind, redacted message), even though none answered
+            row.attempts = [_attempt_dict(a) for a in error.attempts]
+            _add_truncated_costs(row, error.attempts)
+            if auto:
+                row.tier = error.tier
+                row.primary_model = error.attempts[0].model_name if error.attempts else None
             last = error.attempts[-1] if error.attempts else None
             if not auto and last is not None and last.error_kind == "truncated":     # a named model: no chain
                 finish("error", 400, "truncated")
