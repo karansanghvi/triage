@@ -42,6 +42,24 @@ class ProviderError(Exception):
         """Only rate limits and server errors are worth retrying"""
         return self.kind in self.RETRYABLE_KINDS
 
+# The .env variable holding each provider's server-side key (None: needs no key, e.g. local Ollama)
+PROVIDER_KEY_ENV = {
+    "groq": "GROQ_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "ollama": None,
+}
+
+
+def missing_key_env(provider: str) -> Optional[str]:
+    """The env variable name if this provider needs a key and none is set, else None (scripts use this to
+    report a model as "skipped: no key" instead of a failure)."""
+    env_name = PROVIDER_KEY_ENV.get(provider)
+    return env_name if env_name and not os.getenv(env_name) else None
+
+
 def require_key(env_name: str, provider: str)-> str:
     """Read an API key from the environment, or fall with a clear error"""
     key = os.getenv(env_name)

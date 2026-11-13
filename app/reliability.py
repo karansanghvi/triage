@@ -11,7 +11,7 @@ import yaml
 
 from app.providers.base import send_request
 from app.providers.common import ProviderError
-from app.registry import PROJECT_ROOT, VALID_TIERS, ModelConfig, load_registry
+from app.registry import PROJECT_ROOT, VALID_PROVIDERS, VALID_TIERS, ModelConfig, load_registry
 
 logger = logging.getLogger("triage.reliability")
 
@@ -66,12 +66,41 @@ class RoutingConfig:
     # total-time limit on a stream: a long answer that is arriving steadily is not cut off.
     first_token_timeout_seconds: Optional[float] = None
     model_first_token_timeouts: dict = field(default_factory=dict)
+    # Providers a request may use when it brings no keys of its own (routing.yaml `server_providers`).
+    # Models on any other provider are left out of every chain for such requests, as if they weren't listed.
+    # None = no filter (only for RoutingConfigs built directly in tests; routing.yaml always sets it).
+    server_providers: Optional[frozenset] = None
 
     def timeout_for(self, model_name: str) -> float:
         return self.model_timeouts.get(model_name, self.timeout_seconds)
 
     def first_token_timeout_for(self, model_name: str) -> Optional[float]:
         return self.model_first_token_timeouts.get(model_name, self.first_token_timeout_seconds)
+
+    def allowed_providers(self, providers=None) -> Optional[frozenset]:
+        """The providers one request may use: `providers` if given (a BYOK request's own), else server_providers."""
+        return self.server_providers if providers is None else frozenset(providers)
+
+    def chain_for(self, tier: str, registry: dict, providers=None) -> list:
+        """The tier's chain (model names, in order) with every model on a provider this request may not use
+        removed. Its first entry is the request's primary model; for the high tier, its strong baseline."""
+        return filter_chain(self.chains[tier], registry, self.allowed_providers(providers))
+
+
+def filter_chain(names, registry: dict, providers: Optional[frozenset]) -> list:
+    """`names` in order, keeping only models whose provider is in `providers` (None = keep all)."""
+    if providers is None:
+        return list(names)
+    return [name for name in names if registry[name].provider in providers]
+
+
+class ModelNotAllowed(LookupError):
+    """A pass-through request named a model on a provider it may not use (e.g. anthropic with no key)."""
+
+    def __init__(self, model_name: str, provider: str):
+        super().__init__(f"The model `{model_name}` runs on {provider}, which this request can't use: "
+                         f"it needs your own {provider} API key.")
+        self.model_name, self.provider = model_name, provider
 
 
 def _positive_number(value, field: str, *, whole: bool = False):
@@ -133,13 +162,34 @@ def routing_from_dict(data: dict, registry: dict) -> RoutingConfig:
         cooldown_seconds=float(_positive_number(raw_breaker.get("cooldown_seconds", 60), "circuit_breaker.cooldown_seconds")),
     )
 
+    server_providers = _load_server_providers(data.get("server_providers"), chains, registry)
     timeout = float(_positive_number(data.get("timeout_seconds", 30), "timeout_seconds"))
     first_token, model_first_token = _load_streaming(data.get("streaming"), registry)
     return RoutingConfig(chains=chains, retry=retry, breaker=breaker, timeout_seconds=timeout,
                          generation=_load_generation(data.get("generation")),
                          model_params=_load_model_params(data.get("model_params"), registry),
                          model_timeouts=_load_model_timeouts(data.get("model_timeouts"), registry),
-                         first_token_timeout_seconds=first_token, model_first_token_timeouts=model_first_token)
+                         first_token_timeout_seconds=first_token, model_first_token_timeouts=model_first_token,
+                         server_providers=server_providers)
+
+
+def _load_server_providers(raw, chains: dict, registry: dict) -> Optional[frozenset]:
+    """routing.yaml `server_providers`: left out = no filter. Every tier must keep at least one model."""
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not raw or not all(isinstance(p, str) for p in raw):
+        raise ValueError("routing.yaml: 'server_providers' must be a non-empty list of provider names")
+    unknown = set(raw) - VALID_PROVIDERS
+    if unknown:
+        raise ValueError(f"routing.yaml: server_providers lists unknown provider(s): {', '.join(sorted(unknown))}")
+    if len(set(raw)) != len(raw):
+        raise ValueError("routing.yaml: server_providers lists the same provider twice")
+    providers = frozenset(raw)
+    for tier, names in chains.items():
+        if not filter_chain(names, registry, providers):
+            raise ValueError(f"routing.yaml: tier '{tier}' has no model on a server provider "
+                             f"({', '.join(sorted(providers))}), so requests without keys could never answer")
+    return providers
 
 
 def _load_streaming(raw, registry: dict) -> tuple:
@@ -370,10 +420,12 @@ class ReliableClient:
         self._sleep = sleep
         self._rng = rng or random.Random()
 
-    def send(self, messages: list, tier: str, stream: bool = False, **settings) -> ReliableResult:
+    def send(self, messages: list, tier: str, stream: bool = False, *, providers=None, **settings) -> ReliableResult:
         """Try each model in the tier's chain until one answers.
 
-        Raises AllModelsFailed if none of them do.
+        providers: the providers this request may use (a BYOK request's own); None = routing's server_providers.
+        Models on other providers are dropped before anything is tried: no attempt, no fallback event.
+        Raises AllModelsFailed if none of them answer.
         """
         if tier not in self.routing.chains:
             raise ValueError(f"unknown tier '{tier}'. Use one of: low, medium, high")
@@ -383,14 +435,21 @@ class ReliableClient:
             raise ValueError(f"{', '.join(sorted(per_model))} is set per model: put it under model_params "
                              "in the routing config, not in send()")
 
-        chain = [self.registry[name] for name in self.routing.chains[tier]]
+        chain = [self.registry[name] for name in self.routing.chain_for(tier, self.registry, providers)]
+        if not chain:
+            raise AllModelsFailed(tier, [])      # this request's providers have no model in the tier
         return self._send_chain(chain, tier, messages, stream, settings)
 
-    def send_model(self, messages: list, model_name: str, stream: bool = False, **settings) -> ReliableResult:
+    def send_model(self, messages: list, model_name: str, stream: bool = False, *, providers=None,
+                   **settings) -> ReliableResult:
         """Send to ONE named model (a pass-through request): its timeout, retries and circuit breaker apply,
-        but there is no fallback to another model. Raises AllModelsFailed if it fails."""
+        but there is no fallback to another model. Raises AllModelsFailed if it fails, and ModelNotAllowed
+        (before calling anything) if its provider isn't one this request may use (see send)."""
         if model_name not in self.registry:
             raise ValueError(f"unknown model '{model_name}'")
+        allowed = self.routing.allowed_providers(providers)
+        if allowed is not None and self.registry[model_name].provider not in allowed:
+            raise ModelNotAllowed(model_name, self.registry[model_name].provider)
         per_model = MODEL_PARAM_KEYS & set(settings)
         if per_model:
             raise ValueError(f"{', '.join(sorted(per_model))} is set per model: put it under model_params "

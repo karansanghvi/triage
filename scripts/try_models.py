@@ -1,6 +1,6 @@
 """Send one real question to every model, then stream one answer."""
 from app.providers.base import send_request
-from app.providers.common import ProviderError
+from app.providers.common import ProviderError, missing_key_env
 from app.registry import load_registry
 
 QUESTION = [
@@ -12,6 +12,10 @@ QUESTION = [
 def try_every_model(registry):
     print("=== Normal requests ===\n")
     for model in registry.values():
+        missing = missing_key_env(model.provider)
+        if missing:
+            print(f"[{model.name}] skipped: no key ({missing} is not set)\n")
+            continue
         try:
             response = send_request(QUESTION, model)
         except ProviderError as error:

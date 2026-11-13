@@ -46,7 +46,7 @@ from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
 from app.providers.base import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
 from app.providers.common import ProviderError
-from app.reliability import AllModelsFailed
+from app.reliability import AllModelsFailed, ModelNotAllowed
 
 logger = logging.getLogger("triage.api")
 # One JSON line per request (Step 10): ids, routing, status, latency and cost only. Never keys or text.
@@ -312,6 +312,9 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         except core.UnknownModel as error:
             finish("error", 404, "model_not_found")
             raise APIError(404, str(error), param="model", code="model_not_found") from None
+        except ModelNotAllowed as error:                   # e.g. a claude-* model, and this request has no key
+            finish("error", 403, "model_not_allowed")
+            raise APIError(403, str(error), "permission_error", param="model", code="model_not_allowed") from None
         except AllModelsFailed as error:
             finish("error", 503, "all_models_failed")
             raise APIError(503, f"No model could answer: {error}", "server_error", code="all_models_failed") from None

@@ -4,7 +4,10 @@
 # price_as = the realistic paid price, used for savings math on the dashboard
 # Tiers match the Phase 2 data collection (config/collection.yaml):
 #   low = groq-allam, medium = groq-small, high = groq-large. Other models are backups or extras.
-# Tiers are ordered by price: low < medium < high
+# Within one provider, tiers are ordered by price: low < medium < high. Across providers they are
+# not: a tier is a capability slot in a fallback chain (openai-luna is "low" but costs more than groq-large).
+# The openai and anthropic models at the end are BYOK-only (bring your own key): routing.yaml's
+# server_providers leaves them out of every chain for requests without their own key.
 
 models:
   # ---------- Low tier: cheapest ----------
@@ -94,9 +97,26 @@ models:
     output_price: 0
     avg_latency_ms: 0
     price_as:
+      # aistudio.google.com/docs/pricing, checked 2026-11-12: $0.75 / $3.75 is the price "through Dec 31 2026";
+      # from 2027-01-01 it becomes $1.50 / $7.50. Kept at the current price for now: update it on that date.
       label: Gemini 3.8 Flash (paid)
       input_price: 0.75
       output_price: 3.75
+
+  # Registry only (not in any fallback chain yet). Stable, free tier, no shutdown date announced.
+  # 1M context / 64K output; thinks by default at the "minimal" level.
+  # aistudio.google.com/docs/pricing and /docs/models, checked 2026-11-12.
+  - name: gemini-flash-lite
+    provider: gemini
+    model_id: models/gemini-3.5-flash-lite
+    tier: low
+    input_price: 0
+    output_price: 0
+    avg_latency_ms: 0
+    price_as:
+      label: Gemini 3.5 Flash-Lite (paid)
+      input_price: 0.30
+      output_price: 2.50
 
   # No longer used (blocked for collection, removed from routing). Kept for history.
   # Note: this is a Groq "preview" model, so Groq may remove it someday.
@@ -113,3 +133,66 @@ models:
       label: Groq Qwen3.8 27B (paid)
       input_price: 0.80
       output_price: 4.00
+
+  # ---------- BYOK only: OpenAI ----------
+  # Used only by requests that bring their own OpenAI key (never with Triage's keys; see routing.yaml
+  # server_providers). The caller pays, so input_price / output_price are the real list prices.
+  # Standard tier, prompts up to 272K tokens (above that: 2x input, 1.5x output).
+  # Source: developers.openai.com/api/docs/pricing and /api/docs/models/<id>, checked 2026-11-12.
+  # None of these three is promotional (the page's only promo notes name gpt-5.6-sol and gpt-6-astra-law).
+  # All three are reasoning models, 1,050,000-token context, 128K max output.
+  # NOTE: the OpenAI adapter still sends temperature and max_tokens; fixing that for reasoning models is the
+  # next step, so these don't work yet even with a key.
+  - name: openai-luna
+    provider: openai
+    model_id: gpt-6-luna
+    tier: low
+    input_price: 0.10
+    output_price: 0.50
+    avg_latency_ms: 0
+
+  - name: openai-terra
+    provider: openai
+    model_id: gpt-6.1-terra
+    tier: medium
+    input_price: 1.00
+    output_price: 5.00
+    avg_latency_ms: 0
+
+  - name: openai-sol
+    provider: openai
+    model_id: gpt-6.1-sol
+    tier: high
+    input_price: 2.00
+    output_price: 10.00
+    avg_latency_ms: 0
+
+  # ---------- BYOK only: Anthropic ----------
+  # Same rules as the OpenAI models above. Source: platform.claude.com/docs/en/about-claude/pricing and
+  # /about-claude/models/overview, checked 2026-11-12. The IDs are both alias and pinned snapshot.
+  # 1M context, 128K max output. Adaptive thinking is on by default and counts toward max_tokens.
+  # NOTE: these reject `temperature` (400), which the Anthropic adapter still sends: fixed in the next step.
+  - name: claude-haiku
+    provider: anthropic
+    model_id: claude-haiku-5-5
+    tier: low
+    # $0.10 / $0.50 for prompts up to 100K tokens; $0.50 / $2.50 above that (not modeled here)
+    input_price: 0.10
+    output_price: 0.50
+    avg_latency_ms: 0
+
+  - name: claude-sonnet
+    provider: anthropic
+    model_id: claude-sonnet-5-5
+    tier: medium
+    input_price: 2.00
+    output_price: 10.00
+    avg_latency_ms: 0
+
+  - name: claude-opus
+    provider: anthropic
+    model_id: claude-opus-5-5
+    tier: high
+    input_price: 4.00
+    output_price: 20.00
+    avg_latency_ms: 0

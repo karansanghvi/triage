@@ -6,10 +6,19 @@
 # Backups are on a different provider, so one provider outage can't take down a whole tier.
 # Backups are a reliability safety net: their answers aren't what the classifier predicted,
 # so responses served by a backup should be logged as such.
+# The openai-* and claude-* models come LAST and are BYOK only: server_providers (below) removes them for
+# requests without their own keys, so those route exactly as before. Never put a BYOK model first: the first
+# model is the Phase 2 model, and the first model of `high` is the strong baseline for savings.
 fallback_chains:
-  low: [groq-allam, ollama-llama]      # local llama3.2:3b: similar quality, no provider dependency
-  medium: [groq-small, gemini-flash]   # gemini-flash: different provider, at least medium quality
-  high: [groq-large, gemini-flash]     # only non-Groq option; free tier is tiny (20/day), backup only
+  low: [groq-allam, ollama-llama, openai-luna, claude-haiku]      # local llama3.2:3b: similar quality, no provider dependency
+  medium: [groq-small, gemini-flash, openai-terra, claude-sonnet] # gemini-flash: different provider, at least medium quality
+  high: [groq-large, gemini-flash, openai-sol, claude-opus]       # gemini-flash: free tier is tiny (20/day), backup only
+
+# Providers a request WITHOUT its own keys may use (Triage's own keys, or the local Ollama). Models on any other
+# provider are dropped from every chain for those requests before anything is tried: no attempt, no fallback
+# event, nothing logged. An explicit list, not "whichever keys are in .env", so adding OPENAI_API_KEY to .env
+# for a benchmark can never change live routing. BYOK requests will use only the providers they brought keys for.
+server_providers: [groq, gemini, ollama]
 
 # Retries apply only to rate limits (429) and server errors (5xx).
 retry:
@@ -43,6 +52,14 @@ model_timeouts:
   # (reports/latency_p95.json). With the 8 s default, 33% of its Phase 2 calls would have been killed;
   # with 32 s, 4.8%. Phase 2 ran it alongside the other tiers on the same machine.
   ollama-llama: 32
+  # BYOK models (openai-*, claude-*): no latency data at all, and they are reasoning models whose thinking can take
+  # a while. 60 s each: a guess, revisit with live data. (tests/test_timeouts.py lists them in NO_DATA_EXCEPTIONS.)
+  openai-luna: 60
+  openai-terra: 60
+  openai-sol: 60
+  claude-haiku: 60
+  claude-sonnet: 60
+  claude-opus: 60
 
 # Streaming (Phase 4 Step 5): a time-to-first-token limit, not a total-time limit. A stream whose first
 # piece doesn't arrive in time fails over to the next model in the chain (only possible before any text is
@@ -55,6 +72,12 @@ streaming:
     groq-large: 10
     gemini-flash: 30
     ollama-llama: 32
+    openai-luna: 60       # BYOK models: no data, revisit with live data
+    openai-terra: 60
+    openai-sol: 60
+    claude-haiku: 60
+    claude-sonnet: 60
+    claude-opus: 60
 
 # Answer verification in the API (Phase 4 Step 7; app/api/verification.py, app/api/background.py).
 # Not changeable with PUT /v1/routing-config: edit this file and restart.

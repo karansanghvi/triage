@@ -32,8 +32,13 @@ class RouterDeps:
     judge_settings: Optional[JudgeSettings] = None       # config/judge.yaml (background labels)
     labeler: Optional[object] = None                     # background.BackgroundLabeler
 
-    def strong_model(self) -> str:
-        return self.config.snapshot().routing.chains["high"][0]
+    def strong_model(self, providers=None) -> str:
+        """The savings baseline: the first model of the high chain after filtering by provider.
+        providers=None means routing's server_providers (requests without keys: groq-large)."""
+        chain = self.config.snapshot().routing.chain_for("high", self.registry, providers)
+        if not chain:
+            raise LookupError("no model in the high tier is on an allowed provider")
+        return chain[0]
 
     def update_config(self, patch: dict):
         snapshot = self.config.update(patch)          # raises ConfigUpdateError and changes nothing if invalid
