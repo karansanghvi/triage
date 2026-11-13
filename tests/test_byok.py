@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from app.api.auth import Auth
 from app.api.fake_models import FakeBehavior
 from app.api.main import create_app
+from app.cache import CachedSender, ResponseCache, key_fingerprint, make_cache_key
 from app.providers import anthropic_provider, gemini_provider, openai_provider
 from app.providers.base import send_request
 from app.providers.common import ProviderError
@@ -278,3 +279,50 @@ def test_byok_success_doesnt_reset_the_servers_failure_count():
     deps.fake_models.script.clear()
     chat(http, headers=GROQ_ONLY | {"X-Triage-Quality": "0.92"})
     assert dict(deps.client.breaker._failures) == before
+
+
+# ---------- e: cache keys carry a key fingerprint, never the key ----------
+
+
+OTHER_SECRET = "gsk_other-user-key-456"
+
+
+def cached_app(tmp_path):
+    return app(cache=ResponseCache(tmp_path / "cache.sqlite3"))
+
+
+def test_two_user_keys_with_the_same_prompt_dont_share_a_cache_entry(tmp_path):
+    http, deps = cached_app(tmp_path)
+    assert chat(http, headers={"x-groq-key": SECRET}).headers["x-triage-cache"] == "miss"
+    assert chat(http, headers={"x-groq-key": OTHER_SECRET}).headers["x-triage-cache"] == "miss"
+    assert chat(http, headers={"x-groq-key": SECRET}).headers["x-triage-cache"] == "hit"
+    assert chat(http).headers["x-triage-cache"] == "miss"            # a no-key request doesn't see BYOK answers
+    assert len(deps.fake_models.calls) == 3
+
+
+def test_the_key_never_enters_the_cache_file(tmp_path):
+    http, deps = cached_app(tmp_path)
+    chat(http, headers={"x-groq-key": SECRET})
+    assert SECRET.encode() not in (tmp_path / "cache.sqlite3").read_bytes()
+    keys = [k for (k,) in deps.cached_sender.cache._conn.execute("SELECT key FROM responses")]
+    assert keys and all(SECRET not in k for k in keys)
+
+
+def test_no_fingerprint_gives_todays_cache_key():
+    m = REGISTRY["groq-small"]
+    assert make_cache_key(ASK, m, 0, 4000, "low") == make_cache_key(ASK, m, 0, 4000, "low", None, None, None)
+    assert make_cache_key(ASK, m, 0, 4000, "low", key_fingerprint=key_fingerprint(SECRET, b"s")) != \
+        make_cache_key(ASK, m, 0, 4000, "low")
+
+
+def test_fingerprint_is_a_keyed_16_char_hmac():
+    fp = key_fingerprint(SECRET, b"secret-1")
+    assert len(fp) == 16 and SECRET not in fp
+    assert fp != key_fingerprint(SECRET, b"secret-2") and fp != key_fingerprint(OTHER_SECRET, b"secret-1")
+
+
+def test_byok_without_a_hash_secret_skips_the_cache(tmp_path):
+    calls = []
+    sender = CachedSender(ResponseCache(tmp_path / "c.sqlite3"), send_fn=lambda *a, **kw: calls.append(kw) or None)
+    sender(ASK, REGISTRY["groq-small"], temperature=0, max_tokens=10, api_key=SECRET)
+    assert sender.cache.count() == 0 and sender.hits == sender.misses == 0 and calls[0]["api_key"] == SECRET

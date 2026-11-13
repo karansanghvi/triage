@@ -53,12 +53,13 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
                judge_settings: Optional[JudgeSettings] = None) -> RouterDeps:
     registry = registry or load_registry()
     config = config or ActiveConfig.from_file(registry)
-    cached = CachedSender(cache, send_fn=send_fn) if cache is not None else None
-    kwargs = {"sleep": sleep} if sleep is not None else {}
-    client = ReliableClient(registry, config.snapshot().routing, send_fn=cached or send_fn, **kwargs)
     log = log or InMemoryRequestLog()
     if hash_secret is None:
         hash_secret = hash_secret_from_env(required=isinstance(log, SQLiteRequestLog))
+    # hash_secret also fingerprints BYOK keys in cache keys (never the key itself)
+    cached = CachedSender(cache, send_fn=send_fn, hash_secret=hash_secret) if cache is not None else None
+    kwargs = {"sleep": sleep} if sleep is not None else {}
+    client = ReliableClient(registry, config.snapshot().routing, send_fn=cached or send_fn, **kwargs)
     from app.api.background import BackgroundLabeler
     from app.api.verification import check_background_budget
     judge_settings = judge_settings or load_judge_settings()
