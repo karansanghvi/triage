@@ -24,7 +24,7 @@ import math
 import os
 import sqlite3
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Literal, Optional
@@ -110,6 +110,37 @@ class DemoSettings:
     max_tokens: int = 2_048
     public_byok_visitor_daily_requests: int = 200
     retention_days: int = 7
+
+
+DEFAULT_DEMO_SETTINGS_PATH = PROJECT_ROOT / "config" / "demo.yaml"
+
+
+def load_demo_settings(path=DEFAULT_DEMO_SETTINGS_PATH) -> DemoSettings:
+    """config/demo.yaml -> DemoSettings. Every field is required and must be a whole number above 0, so a typo
+    can't silently turn a limit off."""
+    import yaml
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{Path(path).name} must be a mapping")
+    names = [f.name for f in fields(DemoSettings)]
+    unknown, missing = set(data) - set(names), [n for n in names if n not in data]
+    if unknown:
+        raise ValueError(f"{Path(path).name}: unknown setting(s): {', '.join(sorted(unknown))}")
+    if missing:
+        raise ValueError(f"{Path(path).name}: missing setting(s): {', '.join(missing)}")
+    for name in names:
+        value = data[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{Path(path).name}: '{name}' must be a whole number above 0, got {value!r}")
+    return DemoSettings(**{n: data[n] for n in names})
+
+
+def demo_db_path(fake: bool) -> Optional[Path]:
+    """The limiter's SQLite file: TRIAGE_DEMO_DB, else the real or the fake-mode file. None (in memory) when the
+    request log is in memory too (TRIAGE_LOG=memory)."""
+    if os.environ.get("TRIAGE_LOG", "sqlite").lower() == "memory":
+        return None
+    return Path(os.environ.get(DEMO_DB_ENV) or (FAKE_DEMO_DB if fake else DEFAULT_DEMO_DB))
 
 
 ErrorCode = Literal["demo_limit_reached", "demo_paused", "demo_busy", "public_limit_reached"]

@@ -43,7 +43,8 @@ def routing_raw(first_token=None) -> dict:
 
 
 def make_deps(script=None, *, predictor=None, first_token=None, cache=None, model_sleep=time.sleep, log=None,
-              hash_secret=TEST_HASH_SECRET, sample_rate=0.0, labeler=None, raw=None):
+              hash_secret=TEST_HASH_SECRET, sample_rate=0.0, labeler=None, raw=None, demo_settings=None,
+              demo_limiter=None, trusted_proxy_hops=0):
     """Real registry, real routing.yaml (optionally a short first-token limit), real ReliableClient
     (backoff sleeps skipped), fake models."""
     from app.registry import load_registry
@@ -55,7 +56,8 @@ def make_deps(script=None, *, predictor=None, first_token=None, cache=None, mode
     deps = build_deps(predictor or FakePredictor(), fake, registry=registry,
                       config=ActiveConfig(raw, registry), cache=cache, labeler=labeler,
                       classifier="classifier_c_logreg_cv v2", sleep=lambda s: None, fake_models=fake, log=log,
-                      hash_secret=hash_secret)
+                      hash_secret=hash_secret, demo_settings=demo_settings, demo_limiter=demo_limiter,
+                      trusted_proxy_hops=trusted_proxy_hops)
     return deps
 
 

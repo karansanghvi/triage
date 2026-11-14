@@ -38,6 +38,7 @@ from starlette.background import BackgroundTask
 from app.api import core
 from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_env, public_from_env
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
+from app.api.demo import DemoLimitError, client_ip, visitor_id
 from app.api.errors import APIError, bad_request, stream_error_event
 from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_quality, parse_task, parse_verify,
                              resolve_keys)
@@ -295,6 +296,43 @@ def request_mode(who: Optional[Caller], keys) -> str:
 
 # key_id in the request log for requests without a Triage key (no visitor identity goes into the log)
 PUBLIC_KEY_IDS = {"demo": "demo", "byok": "public"}
+_KEY_HEADER_LIST = ", ".join(PROVIDER_KEY_HEADERS.values())
+
+
+def demo_limit_error(error: DemoLimitError, settings) -> APIError:
+    """A refused demo / public BYOK request as an OpenAI-style 429 with Retry-After."""
+    messages = {
+        "demo_limit_reached": (f"You've used today's {settings.visitor_daily_requests} free demo requests. Add your "
+                               f"own provider key ({_KEY_HEADER_LIST}) to keep going, or try again after 00:00 UTC."),
+        "demo_paused": ("The free demo has reached today's limit and is paused until 00:00 UTC. You can still use "
+                        f"Triage with your own provider key ({_KEY_HEADER_LIST})."),
+        "demo_busy": ("The free demo is busy right now. Try again in a few seconds, or add your own provider key "
+                      f"({_KEY_HEADER_LIST})."),
+        "public_limit_reached": (f"This address has used today's {settings.public_byok_visitor_daily_requests} "
+                                 "requests without a Triage API key. Send a Triage API key (Authorization: Bearer "
+                                 "<key>) or try again after 00:00 UTC."),
+    }
+    return APIError(429, messages[error.code], "rate_limit_error", code=error.code,
+                    headers={"Retry-After": str(error.retry_after)})
+
+
+def demo_headers(remaining: int, limit: int, resets_at) -> dict:
+    return {"X-Triage-Demo-Remaining": str(remaining), "X-Triage-Demo-Limit": str(limit),
+            "X-Triage-Demo-Resets": resets_at.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def demo_usage(row: RequestRow, reserved: int) -> tuple:
+    """(tokens, model calls) a finished demo request used, for DemoLimiter.settle.
+    Calls: every attempt that reached a provider (a cache hit or a circuit-breaker skip didn't).
+    Tokens: the served answer (none for a cache hit) plus billed truncated attempts. If an answer was started but
+    its token count is unknown (a stream cut off part-way), the reservation is kept as the best estimate."""
+    attempts = row.attempts or []
+    calls = max(0, sum(a.get("outcome") in ("success", "error") for a in attempts) - (1 if row.cache_hit else 0))
+    if row.served_model is not None and row.input_tokens is None:
+        return reserved, calls
+    truncated = sum((a.get("input_tokens") or 0) + (a.get("output_tokens") or 0) for a in attempts)
+    served = 0 if row.cache_hit else (row.input_tokens or 0) + (row.output_tokens or 0)
+    return served + truncated, calls
 
 
 # ---------- the app ----------
@@ -375,9 +413,30 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         verify = parse_verify(x_triage_verify, body.stream)
         check_verify_model(verify, body.model)
         auto = body.model == "auto"
+        requested_max_tokens = body.max_tokens or body.max_completion_tokens
+
+        # Requests without a Triage key: a visitor (client IP, only ever as a keyed hash) with daily limits
+        public = who is None
+        visitor = visitor_id(client_ip(request, deps.trusted_proxy_hops), deps.hash_secret) if public else None
+        demo = deps.demo_settings
+        if mode == "demo":
+            status = deps.demo_limiter.status(visitor)
+            request.state.triage_headers.update(demo_headers(status.remaining, status.limit, status.resets_at))
+            if verify == "sync":         # checks and escalations would multiply the free calls
+                raise APIError(400, "X-Triage-Verify: sync isn't available in the free demo. Add your own provider "
+                               f"key ({_KEY_HEADER_LIST}) to use it.", param="X-Triage-Verify",
+                               code="demo_unsupported")
+            prompt_chars = sum(len(m.content) for m in body.messages)
+            if prompt_chars > demo.max_prompt_chars:
+                raise APIError(413, f"Demo prompts are limited to {demo.max_prompt_chars:,} characters across all "
+                               f"messages (yours: {prompt_chars:,}). Add your own provider key ({_KEY_HEADER_LIST}) "
+                               "to send longer prompts.", param="messages", code="demo_prompt_too_long")
+            default_max = snapshot.routing.generation.get("max_tokens", DEFAULT_MAX_TOKENS)
+            requested_max_tokens = min(requested_max_tokens or default_max, demo.max_tokens)   # quietly lowered
+            request.state.triage_headers["X-Triage-Max-Tokens"] = str(requested_max_tokens)
 
         messages = [m.model_dump() for m in body.messages]
-        settings = core.GenerationSettings(body.temperature, body.max_tokens or body.max_completion_tokens)
+        settings = core.GenerationSettings(body.temperature, requested_max_tokens)
         temperature = settings.temperature if settings.temperature is not None else \
             snapshot.routing.generation.get("temperature", DEFAULT_TEMPERATURE)
         max_tokens = settings.max_tokens or snapshot.routing.generation.get("max_tokens", DEFAULT_MAX_TOKENS)
@@ -394,7 +453,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         if not auto and body.model in deps.registry:       # a named model is its own primary, even if it fails
             row.primary_model, row.tier = body.model, deps.registry[body.model].tier
 
-        logged = []
+        logged, admitted = [], []          # admitted: this request's DemoLimiter Admission, once counted
         recorder = _RecordingPredictor(deps.predictor)
         request_deps = dataclasses.replace(deps, predictor=recorder)    # same client, registry and log
 
@@ -409,10 +468,24 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             row.training_eligible = is_training_eligible(row)
             deps.log.write(row)
             request_logger.info(json_log_line(row))
+            if admitted:                   # replace the token reservation with what it really used
+                tokens, calls = demo_usage(row, admitted[0].reserved_tokens)
+                deps.demo_limiter.settle(admitted[0], tokens=tokens, calls=calls)
 
         if not auto and body.model not in deps.registry:              # logged, then an OpenAI-style 404
             finish("error", 404, "model_not_found")
             raise APIError(404, str(core.UnknownModel(body.model)), param="model", code="model_not_found")
+
+        if mode == "demo":                 # counted only now, after every check that costs nothing
+            estimate = -(-sum(len(m.content) for m in body.messages) // 4) + requested_max_tokens
+            try:
+                admitted.append(deps.demo_limiter.admit_demo(visitor, estimate))
+            except DemoLimitError as error:
+                status = deps.demo_limiter.status(visitor)
+                request.state.triage_headers.update(demo_headers(status.remaining, status.limit, status.resets_at))
+                finish("error", 429, error.code)
+                raise demo_limit_error(error, demo) from None
+            request.state.triage_headers["X-Triage-Demo-Remaining"] = str(admitted[0].remaining)
 
         try:
             routed = await core.route_and_stream(messages, tau=tau if auto else None, task_type=task,

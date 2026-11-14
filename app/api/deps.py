@@ -7,6 +7,7 @@ from app.api.config_state import ActiveConfig
 from app.api.request_log import InMemoryRequestLog, SQLiteRequestLog, hash_secret_from_env, open_request_log
 from pathlib import Path
 
+from app.api.demo import DemoLimiter, DemoSettings, demo_db_path, load_demo_settings, trusted_hops_from_env
 from app.cache import DEFAULT_CACHE_PATH, FAKE_CACHE_PATH, CachedSender, ResponseCache
 from app.providers.base import send_request
 from app.registry import load_registry
@@ -32,6 +33,9 @@ class RouterDeps:
     checker_settings: Optional[CheckerSettings] = None   # config/checker.yaml (sync verification)
     judge_settings: Optional[JudgeSettings] = None       # config/judge.yaml (background labels)
     labeler: Optional[object] = None                     # background.BackgroundLabeler
+    demo_settings: Optional[DemoSettings] = None         # config/demo.yaml
+    demo_limiter: Optional[DemoLimiter] = None           # demo and public-BYOK counters (TRIAGE_DEMO_DB)
+    trusted_proxy_hops: int = 0                          # TRIAGE_TRUSTED_PROXY_HOPS, for the visitor's IP
 
     def strong_model(self, providers=None) -> str:
         """The savings baseline: the first model of the high chain after filtering by provider.
@@ -51,7 +55,8 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
                cache: Optional[ResponseCache] = None, log=None, classifier: str = "", sleep=None,
                fake_models=None, hash_secret: Optional[bytes] = None, labeler=None,
                checker_settings: Optional[CheckerSettings] = None,
-               judge_settings: Optional[JudgeSettings] = None) -> RouterDeps:
+               judge_settings: Optional[JudgeSettings] = None, demo_settings: Optional[DemoSettings] = None,
+               demo_limiter: Optional[DemoLimiter] = None, trusted_proxy_hops: int = 0) -> RouterDeps:
     registry = registry or load_registry()
     config = config or ActiveConfig.from_file(registry)
     log = log or InMemoryRequestLog()
@@ -67,6 +72,9 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
     deps = RouterDeps(registry, config, client, predictor, log, classifier, cached, fake_models, hash_secret,
                       checker_settings or load_checker_settings(registry=registry), judge_settings,
                       labeler or BackgroundLabeler())
+    deps.demo_settings = demo_settings or (demo_limiter.settings if demo_limiter else load_demo_settings())
+    deps.demo_limiter = demo_limiter or DemoLimiter(deps.demo_settings)          # in memory unless given
+    deps.trusted_proxy_hops = trusted_proxy_hops
     # refuse to start if background labels could eat more than half of the strong or judge model's daily budget
     check_background_budget(config.snapshot().verification.background, [deps.strong_model(), judge_settings.model_name])
     return deps
@@ -132,6 +140,10 @@ def load_deps() -> RouterDeps:
     cache = ResponseCache(path) if path else None
     registry = load_registry()
     config = load_config(registry)                    # before the slow predictor, so a bad override fails fast
+    demo_settings = load_demo_settings()
+    demo_limiter = DemoLimiter(demo_settings, path=demo_db_path(fake))   # survives restarts (not ephemeral disks)
+    trusted_proxy_hops = trusted_hops_from_env()
     predictor, classifier = load_predictor_checked()
     return build_deps(predictor, send_fn, registry=registry, config=config, cache=cache, classifier=classifier,
-                      log=log, fake_models=send_fn if fake else None, hash_secret=hash_secret)
+                      log=log, fake_models=send_fn if fake else None, hash_secret=hash_secret,
+                      demo_settings=demo_settings, demo_limiter=demo_limiter, trusted_proxy_hops=trusted_proxy_hops)
