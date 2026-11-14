@@ -101,11 +101,12 @@ class RoutingDecision:
     
     @property
     def reason(self) -> str:
+        # 3 decimals: at 2, a probability just under tau could read the same as tau ("medium 0.86 < tau 0.86")
         if self.tier == "low":
-            return f"cheap pass chance {self.p_low:.2f} >= tau {self.tau:.2f}"
+            return f"cheap pass chance {self.p_low:.3f} >= tau {self.tau:.3f}"
         if self.tier == "medium":
-            return f"cheap {self.p_low:.2f} < tau {self.tau:.2f}; medium {self.p_medium:.2f} >= tau"
-        return f"cheap {self.p_low:.2f} and medium {self.p_medium:.2f} both < tau {self.tau:.2f} using strong"
+            return f"cheap {self.p_low:.3f} < tau {self.tau:.3f}; medium {self.p_medium:.3f} >= tau"
+        return f"cheap {self.p_low:.3f} and medium {self.p_medium:.3f} both < tau {self.tau:.3f} using strong"
 
 def choose_tier(p_low: float, p_medium: float, tau: float) -> str:
     """The cheapest tier whose predicted pass probability is at least tau; "high" if none is"""

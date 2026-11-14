@@ -81,3 +81,9 @@ def test_bad_config_fails_at_startup(tmp_path, yaml_text):
     path.write_text(yaml_text)
     with pytest.raises(QualityError):
         load_quality_settings(path)
+
+def test_reason_uses_three_decimals_so_near_misses_dont_look_equal():
+    """Live bug: at 2 decimals a p_medium of 0.857 under tau 0.86 read "medium 0.86 < tau 0.86"."""
+    assert route(0.2, 0.857, 0.86).reason == "cheap 0.200 and medium 0.857 both < tau 0.860 using strong"
+    assert route(0.2, 0.861, 0.86).reason == "cheap 0.200 < tau 0.860; medium 0.861 >= tau"
+    assert route(0.9, 0.95, 0.86).reason == "cheap pass chance 0.900 >= tau 0.860"
