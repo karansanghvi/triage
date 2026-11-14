@@ -404,6 +404,7 @@ def test_startup_refuses_a_predictor_that_fails_its_checks(monkeypatch):
 
 def test_startup_loads_the_predictor_once_with_fake_models(monkeypatch, tmp_path):
     monkeypatch.setenv("TRIAGE_LOG_DB", str(tmp_path / "requests.sqlite3"))     # never the real data/logs
+    monkeypatch.setenv("TRIAGE_DEMO_DB", str(tmp_path / "usage.sqlite3"))       # ...or data/demo
     monkeypatch.setenv("TRIAGE_HASH_SECRET", "startup-test-secret")
     loads = []
     monkeypatch.setattr(deps_module, "load_predictor_checked",
