@@ -5,6 +5,7 @@
 @import "@fontsource/poppins/500.css";   /* labels, nav */
 @import "@fontsource/poppins/600.css";   /* headings */
 @import "@fontsource/poppins/700.css";   /* big stat numbers */
+@plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:is(.dark *));
 
