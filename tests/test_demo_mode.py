@@ -246,3 +246,47 @@ def test_byok_requests_with_a_triage_key_have_no_limits():
         r = chat(http, headers=BEARER | {"x-groq-key": "gsk_test-key-123"})
         assert r.status_code == 200 and r.headers["x-triage-mode"] == "byok"
         assert "x-triage-demo-remaining" not in r.headers
+
+
+# ---------- GET /v1/demo/status ----------
+
+def status(http, ip="203.0.113.7", headers=None):
+    return http.get("/v1/demo/status", headers={"X-Forwarded-For": ip} | (headers or {}))
+
+
+def test_status_for_a_new_visitor_needs_no_key():
+    http, _ = app()
+    r = status(http)
+    assert r.status_code == 200
+    assert r.json() == {"enabled": True, "paused": False, "paused_reason": None,
+                        "visitor": {"limit": 10, "used": 0, "remaining": 10},
+                        "limits": {"max_prompt_chars": 8000, "max_tokens": 2048},
+                        "resets_at": "2026-11-14T00:00:00Z"}
+
+
+def test_status_follows_the_visitors_usage_and_counts_nothing():
+    http, _ = app(visitor_daily_requests=3)
+    chat(http)
+    for _ in range(5):
+        status(http)
+    assert status(http).json()["visitor"] == {"limit": 3, "used": 1, "remaining": 2}
+    assert status(http, ip="198.51.100.4").json()["visitor"]["used"] == 0
+    assert chat(http).headers["x-triage-demo-remaining"] == "1"
+
+
+def test_status_shows_a_paused_demo():
+    http, _ = app(daily_requests=1)
+    chat(http)
+    body = status(http, ip="198.51.100.4").json()
+    assert (body["paused"], body["paused_reason"]) == (True, "daily_requests")
+
+
+def test_status_when_public_access_is_off():
+    deps = make_deps(demo_limiter=DemoLimiter(settings(), clock=Clock()))
+    http = TestClient(create_app(deps=deps, auth=Auth([API_KEY]), public=False))
+    assert status(http).json() == {"enabled": False}
+
+
+def test_status_ignores_a_triage_key():
+    http, _ = app()
+    assert status(http, headers=BEARER).json()["enabled"] is True

@@ -612,6 +612,23 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                                  | request.state.triage_headers,
                                  background=BackgroundTask(stream_background))
 
+    # ----- the free demo -----
+
+    @app.get("/v1/demo/status")
+    async def demo_status(request: Request):
+        """Public (no key): this visitor's demo allowance and the demo-wide state, so a website can show its banner
+        and counters before the first request. Reading it counts nothing."""
+        if not app.state.public:
+            return {"enabled": False}
+        deps = app.state.deps
+        visitor = visitor_id(client_ip(request, deps.trusted_proxy_hops), deps.hash_secret)
+        status = deps.demo_limiter.status(visitor)
+        demo = deps.demo_settings
+        return {"enabled": True, "paused": status.paused, "paused_reason": status.paused_reason,
+                "visitor": {"limit": status.limit, "used": status.used, "remaining": status.remaining},
+                "limits": {"max_prompt_chars": demo.max_prompt_chars, "max_tokens": demo.max_tokens},
+                "resets_at": status.resets_at.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
     # ----- models, stats, requests -----
 
     @app.get("/v1/models")
