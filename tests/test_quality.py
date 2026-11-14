@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 
 from app.router.quality import (QualityError, QualitySettings, choose_tier, load_quality_settings, resolve_tau,
@@ -87,3 +89,26 @@ def test_reason_uses_three_decimals_so_near_misses_dont_look_equal():
     assert route(0.2, 0.857, 0.86).reason == "cheap 0.200 and medium 0.857 both < tau 0.860 using strong"
     assert route(0.2, 0.861, 0.86).reason == "cheap 0.200 < tau 0.860; medium 0.861 >= tau"
     assert route(0.9, 0.95, 0.86).reason == "cheap pass chance 0.900 >= tau 0.860"
+
+
+@pytest.mark.parametrize("p_medium, tau", [(0.8598, 0.86), (0.8599999, 0.86), (0.8601, 0.8604), (0.0001, 0.0004),
+                                           (0.569, 0.57), (0.12345, 0.123456)])
+def test_a_value_below_tau_never_prints_as_equal_to_it(p_medium, tau):
+    reason = route(0.0, p_medium, tau).reason            # high: both below tau
+    shown_medium = reason.split("medium ")[1].split(" ")[0]
+    shown_tau = reason.split("tau ")[1].split(" ")[0]
+    assert Decimal(shown_medium) < Decimal(shown_tau), reason
+
+
+@pytest.mark.parametrize("p_medium, tau", [(0.86, 0.86), (0.86001, 0.86), (0.8604, 0.8604), (0.57, 0.57)])
+def test_a_value_at_or_above_tau_never_prints_below_it(p_medium, tau):
+    reason = route(0.0, p_medium, tau).reason            # medium: p_medium >= tau
+    shown_medium = reason.split("medium ")[1].split(" ")[0]
+    shown_tau = reason.split("tau ")[1].split(";")[0]
+    assert Decimal(shown_medium) >= Decimal(shown_tau), reason
+
+
+def test_exact_values_are_shown_as_they_are():
+    assert route(0.57, 0.9, 0.57).reason == "cheap pass chance 0.570 >= tau 0.570"
+    assert route(0.0, 0.29, 0.86).reason == "cheap 0.000 and medium 0.290 both < tau 0.860 using strong"
+    assert route(0.0, 0.5, 0.8604).reason == "cheap 0.000 and medium 0.500 both < tau 0.8604 using strong"
