@@ -183,8 +183,22 @@ def test_groq_only_byok_never_falls_back_to_the_local_ollama():
     assert r.status_code == 503 and providers_called(deps) == {"groq"}
 
 
-def test_gemini_only_byok_on_a_low_request_escalates_to_a_tier_with_a_gemini_model():
+def without_flash_lite():
+    """routing.yaml as before Phase 5's gemini-flash-lite: no gemini model in the low tier."""
+    from tests.api_helpers import routing_raw
+    raw = routing_raw()
+    raw["fallback_chains"]["low"] = [m for m in raw["fallback_chains"]["low"] if m != "gemini-flash-lite"]
+    return raw
+
+
+def test_gemini_only_byok_on_a_low_request_uses_gemini_flash_lite():
     http, deps = app()
+    r = chat(http, headers={"x-gemini-key": SECRET, "X-Triage-Quality": "0.1"})
+    assert (r.headers["x-triage-tier"], r.headers["x-triage-model"]) == ("low", "gemini-flash-lite")
+
+
+def test_gemini_only_byok_on_a_low_request_escalates_to_a_tier_with_a_gemini_model():
+    http, deps = app(raw=without_flash_lite())
     r = chat(http, headers={"x-gemini-key": SECRET, "X-Triage-Quality": "0.1"})
     assert r.status_code == 200
     assert (r.headers["x-triage-tier"], r.headers["x-triage-model"]) == ("medium", "gemini-flash")
@@ -196,7 +210,8 @@ def test_gemini_only_byok_on_a_low_request_escalates_to_a_tier_with_a_gemini_mod
 
 def test_tier_fallback_goes_up_first_then_down():
     from app.api.core import usable_tier
-    routing = load_routing(REGISTRY)
+    from app.reliability import routing_from_dict
+    routing = routing_from_dict(without_flash_lite(), REGISTRY)
     assert usable_tier("low", routing, REGISTRY, {"gemini"}) == "medium"
     assert usable_tier("high", routing, REGISTRY, {"groq"}) == "high"
     assert usable_tier("low", routing, REGISTRY, {"openrouter"}) is None

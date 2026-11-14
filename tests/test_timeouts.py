@@ -59,7 +59,7 @@ PERCENTILE = {"groq-large": "p99_ms", "ollama-llama": "p95_ms"}
 # Models allowed a timeout without report data, each documented in routing.yaml.
 # BYOK models (Phase 5): 60 s guesses with no data at all. Revisit with live data.
 BYOK_NO_DATA = {"openai-luna", "openai-terra", "openai-sol", "claude-haiku", "claude-sonnet", "claude-opus"}
-NO_DATA_EXCEPTIONS = {"gemini-flash"} | BYOK_NO_DATA
+NO_DATA_EXCEPTIONS = {"gemini-flash", "gemini-flash-lite"} | BYOK_NO_DATA
 
 
 def report_by_model():

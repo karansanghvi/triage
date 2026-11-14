@@ -103,7 +103,8 @@ models:
       input_price: 0.75
       output_price: 3.75
 
-  # Registry only (not in any fallback chain yet). Stable, free tier, no shutdown date announced.
+  # The low tier's third backup in routing.yaml, after ollama-llama (the only non-Groq low model on a host without
+  # Ollama). Stable, free tier, no shutdown date announced.
   # 1M context / 64K output; thinks by default at the "minimal" level.
   # aistudio.google.com/docs/pricing and /docs/models, checked 2026-11-12.
   - name: gemini-flash-lite
