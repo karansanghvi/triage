@@ -23,6 +23,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -31,6 +32,7 @@ from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
@@ -286,6 +288,21 @@ def _error_response(error: APIError, headers: Optional[dict] = None) -> JSONResp
     return JSONResponse(error.body(), status_code=error.status, headers={**error.headers, **(headers or {})})
 
 
+CORS_ORIGINS_ENV = "TRIAGE_CORS_ORIGINS"      # comma-separated, e.g. https://triage.example.com
+# Request headers a browser page may send, and response headers its JavaScript may read
+CORS_REQUEST_HEADERS = ["Authorization", "Content-Type", *PROVIDER_KEY_HEADERS.values(), "X-Triage-Quality",
+                        "X-Triage-Task", "X-Triage-Verify"]
+CORS_RESPONSE_HEADERS = ["X-Triage-Request-Id", "X-Triage-Model", "X-Triage-Tier", "X-Triage-Reason",
+                         "X-Triage-Fallback", "X-Triage-Cache", "X-Triage-Verified", "X-Triage-Escalated",
+                         "X-Triage-Check", "X-Triage-Cost", "X-Triage-Saved", "X-Triage-Mode",
+                         "X-Triage-Demo-Remaining", "X-Triage-Demo-Limit", "X-Triage-Demo-Resets",
+                         "X-Triage-Max-Tokens", "Retry-After"]
+
+
+def cors_origins_from_env() -> list:
+    return [o.strip().rstrip("/") for o in os.environ.get(CORS_ORIGINS_ENV, "").split(",") if o.strip()]
+
+
 def request_mode(who: Optional[Caller], keys) -> str:
     """api: a valid Triage key and no provider keys. byok: provider keys (with or without a Triage key).
     demo: neither (only reachable when public access is on)."""
@@ -337,10 +354,13 @@ def demo_usage(row: RequestRow, reserved: int) -> tuple:
 
 # ---------- the app ----------
 
-def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = None) -> FastAPI:
+def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = None,
+               cors_origins: Optional[list] = None) -> FastAPI:
     """deps / auth given: use them (tests). Otherwise load both at startup from config and the environment,
     refusing to start if there are no keys or the predictor fails its safety checks.
-    public: accept chat requests without a Triage key (demo / BYOK); None = TRIAGE_PUBLIC (default off)."""
+    public: accept chat requests without a Triage key (demo / BYOK); None = TRIAGE_PUBLIC (default off).
+    cors_origins: browser origins allowed to call the API; None = TRIAGE_CORS_ORIGINS. Empty (the default): no
+    cross-origin access at all."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -357,6 +377,12 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app = FastAPI(title="Triage", version="0.5", lifespan=lifespan)
     app.state.deps, app.state.auth = deps, auth
     app.state.public = public_from_env() if public is None else public
+    origins = cors_origins_from_env() if cors_origins is None else list(cors_origins)
+    if origins:
+        # No cookies or credentials: the browser sends keys only as the explicit headers listed
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "OPTIONS"],
+                           allow_headers=CORS_REQUEST_HEADERS, expose_headers=CORS_RESPONSE_HEADERS,
+                           allow_credentials=False, max_age=600)
 
     @app.exception_handler(APIError)
     async def api_error(request: Request, error: APIError):
