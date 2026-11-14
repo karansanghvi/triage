@@ -57,3 +57,5 @@ data/checker_calibration/*.pid
 data/checker_val/*.pid
 
 data/checker_test/*.pid
+# Demo usage counters (Phase 5)
+data/demo/

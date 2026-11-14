@@ -9,6 +9,7 @@ import hashlib
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api import demo as demo_module
 from app.api import deps as deps_module
 from app.api import request_log
 from app.api.auth import Auth
@@ -24,12 +25,16 @@ REAL_TEXT = "Real answer from groq-small."
 @pytest.fixture
 def paths(tmp_path, monkeypatch):
     p = {"real_cache": tmp_path / "cache" / "responses.sqlite3", "fake_cache": tmp_path / "cache" / "fake.sqlite3",
-         "real_log": tmp_path / "logs" / "requests.sqlite3", "fake_log": tmp_path / "logs" / "fake.sqlite3"}
+         "real_log": tmp_path / "logs" / "requests.sqlite3", "fake_log": tmp_path / "logs" / "fake.sqlite3",
+         "real_demo": tmp_path / "demo" / "usage.sqlite3", "fake_demo": tmp_path / "demo" / "fake_usage.sqlite3"}
     monkeypatch.setattr(deps_module, "DEFAULT_CACHE_PATH", p["real_cache"])
     monkeypatch.setattr(deps_module, "FAKE_CACHE_PATH", p["fake_cache"])
     monkeypatch.setattr(request_log, "DEFAULT_LOG_DB", p["real_log"])
     monkeypatch.setattr(request_log, "FAKE_LOG_DB", p["fake_log"])
-    for name in ("TRIAGE_CACHE", "TRIAGE_CACHE_PATH", "TRIAGE_LOG_DB", "TRIAGE_LOG", "TRIAGE_FAKE_MODELS"):
+    monkeypatch.setattr(demo_module, "DEFAULT_DEMO_DB", p["real_demo"])      # never the real data/demo either
+    monkeypatch.setattr(demo_module, "FAKE_DEMO_DB", p["fake_demo"])
+    for name in ("TRIAGE_CACHE", "TRIAGE_CACHE_PATH", "TRIAGE_LOG_DB", "TRIAGE_LOG", "TRIAGE_FAKE_MODELS",
+                 "TRIAGE_DEMO_DB", "TRIAGE_SERVER_PROVIDERS", "TRIAGE_TRUSTED_PROXY_HOPS"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TRIAGE_HASH_SECRET", "isolation-test-secret")
     monkeypatch.setattr(deps_module, "load_predictor_checked", lambda: (FakePredictor(), "fake-classifier v1"))
@@ -99,3 +104,11 @@ def test_the_cache_can_still_be_turned_off(paths, monkeypatch):
     monkeypatch.setenv("TRIAGE_FAKE_MODELS", "1")
     monkeypatch.setenv("TRIAGE_CACHE", "off")
     assert deps_module.load_deps().cached_sender is None
+
+
+def test_fake_mode_keeps_its_own_demo_counters(paths, monkeypatch):
+    monkeypatch.setenv("TRIAGE_FAKE_MODELS", "1")
+    deps_module.load_deps()
+    monkeypatch.delenv("TRIAGE_FAKE_MODELS")
+    deps_module.load_deps()
+    assert paths["fake_demo"].exists() and paths["real_demo"].exists()

@@ -10,7 +10,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, Mapping
 
-Mode = Literal["byok", "demo"]
+# Whose keys a request uses: "byok" = the user's own (only those providers); "server" = Triage's own env keys and
+# routing.yaml's server_providers. (Not the request mode: RequestRow.mode is "api" | "byok" | "demo".)
+Mode = Literal["byok", "server"]
 
 REDACTED = "[redacted]"
 # Common provider key shapes, removed even when we don't know the exact value (e.g. a key echoed back by a provider

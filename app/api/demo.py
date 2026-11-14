@@ -1,0 +1,429 @@
+"""The free demo (Phase 5): visitor identity and usage limits for requests without any key.
+
+Demo requests (no Triage key, no provider keys; TRIAGE_PUBLIC on) run on the server's own free-tier keys, so they
+are limited per visitor and in total, every UTC day:
+
+    per visitor     visitor_daily_requests (10)
+    all visitors    daily_requests (300), daily_tokens (150,000), daily_model_calls (600)
+    all visitors    per_minute_requests (4) in any rolling 60 s (Groq's gpt-oss allows 8,000 tokens/minute)
+
+Public BYOK requests (provider keys, no Triage key) only get a generous per-visitor daily cap
+(public_byok_visitor_daily_requests, 200): the user pays the provider, so this only protects the server.
+
+Visitors are identified by client IP (client_ip, honouring TRIAGE_TRUSTED_PROXY_HOPS), and only ever stored as a
+keyed hash (visitor_id). Raw IPs are never stored or logged.
+
+The DemoLimiter keeps its counters in SQLite (TRIAGE_DEMO_DB) so they survive restarts, or in memory for tests.
+On a host with an ephemeral disk the file is lost on every redeploy or restart, and every limit starts over; the
+providers' own free-tier quotas are then the only backstop.
+"""
+import hashlib
+import hmac
+import ipaddress
+import math
+import os
+import sqlite3
+import threading
+from dataclasses import dataclass, fields
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Callable, Literal, Optional
+from collections import deque
+from contextlib import contextmanager
+
+from app.registry import PROJECT_ROOT
+
+TRUSTED_PROXY_HOPS_ENV = "TRIAGE_TRUSTED_PROXY_HOPS"
+DEMO_DB_ENV = "TRIAGE_DEMO_DB"
+DEFAULT_DEMO_DB = PROJECT_ROOT / "data" / "demo" / "usage.sqlite3"
+FAKE_DEMO_DB = PROJECT_ROOT / "data" / "demo" / "fake_usage.sqlite3"     # TRIAGE_FAKE_MODELS=1 runs
+VISITOR_ID_HEX_CHARS = 16
+UNKNOWN_CLIENT = "unknown"
+WINDOW_SECONDS = 60               # the per-minute window
+
+
+# ---------- visitor identity ----------
+
+def client_ip(request, trusted_hops: int = 0) -> str:
+    """The visitor's IP address as seen by the closest proxy we trust.
+
+    trusted_hops = 0 (the default, safe locally): the direct connection's address. X-Forwarded-For is ignored,
+    because any client can send one.
+    trusted_hops = N: our N proxies each append the address they received the request from, so the real client
+    is the N-th entry from the RIGHT of X-Forwarded-For. Anything a client adds itself sits further left, so a
+    faked header can't choose the address used. Too few entries (the request skipped a proxy): the direct
+    connection's address.
+    `request` is a Starlette Request (or anything with .headers and .client).
+    """
+    direct = request.client.host if getattr(request, "client", None) and request.client.host else UNKNOWN_CLIENT
+    if trusted_hops <= 0:
+        return direct
+    forwarded = [part.strip() for part in ",".join(request.headers.getlist("x-forwarded-for")).split(",")
+                 if part.strip()]
+    if len(forwarded) < trusted_hops:
+        return direct
+    return forwarded[-trusted_hops]
+
+
+def _visitor_group(ip: str) -> str:
+    """IPv4: the address. IPv6: its /64 network (one household or device usually owns a whole /64, so rotating
+    addresses inside it doesn't buy a new allowance). An IPv4-mapped IPv6 address counts as the IPv4 address.
+    Anything that isn't an IP (e.g. a test client's name) is used as it is."""
+    try:
+        address = ipaddress.ip_address(ip.strip().strip("[]"))
+    except ValueError:
+        return ip.strip()
+    if address.version == 6 and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if address.version == 6:
+        return str(ipaddress.ip_network(f"{address}/64", strict=False))
+    return str(address)
+
+
+def visitor_id(ip: str, secret: bytes) -> str:
+    """A visitor's id: HMAC-SHA256(TRIAGE_HASH_SECRET, "visitor|" + group), first 16 hex characters. Without the
+    secret, nobody can check a guessed IP against it, so the stored ids reveal no addresses."""
+    group = _visitor_group(ip)
+    digest = hmac.new(secret, f"visitor|{group}".encode("utf-8"), hashlib.sha256).hexdigest()
+    return digest[:VISITOR_ID_HEX_CHARS]
+
+
+def trusted_hops_from_env() -> int:
+    raw = os.environ.get(TRUSTED_PROXY_HOPS_ENV, "0").strip() or "0"
+    hops = int(raw)
+    if hops < 0:
+        raise ValueError(f"{TRUSTED_PROXY_HOPS_ENV} must be 0 or more, got {raw!r}")
+    return hops
+
+
+# ---------- limits ----------
+
+@dataclass(frozen=True)
+class DemoSettings:
+    """Demo limits (config/demo.yaml, loaded in a later step). Days are UTC days."""
+    visitor_daily_requests: int = 10
+    daily_requests: int = 300
+    daily_tokens: int = 150_000
+    daily_model_calls: int = 600
+    per_minute_requests: int = 4
+    max_prompt_chars: int = 8_000
+    max_tokens: int = 2_048
+    public_byok_visitor_daily_requests: int = 200
+    retention_days: int = 7
+
+
+DEFAULT_DEMO_SETTINGS_PATH = PROJECT_ROOT / "config" / "demo.yaml"
+
+
+def load_demo_settings(path=DEFAULT_DEMO_SETTINGS_PATH) -> DemoSettings:
+    """config/demo.yaml -> DemoSettings. Every field is required and must be a whole number above 0, so a typo
+    can't silently turn a limit off."""
+    import yaml
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{Path(path).name} must be a mapping")
+    names = [f.name for f in fields(DemoSettings)]
+    unknown, missing = set(data) - set(names), [n for n in names if n not in data]
+    if unknown:
+        raise ValueError(f"{Path(path).name}: unknown setting(s): {', '.join(sorted(unknown))}")
+    if missing:
+        raise ValueError(f"{Path(path).name}: missing setting(s): {', '.join(missing)}")
+    for name in names:
+        value = data[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{Path(path).name}: '{name}' must be a whole number above 0, got {value!r}")
+    return DemoSettings(**{n: data[n] for n in names})
+
+
+def demo_db_path(fake: bool) -> Optional[Path]:
+    """The limiter's SQLite file: TRIAGE_DEMO_DB, else the real or the fake-mode file. None (in memory) when the
+    request log is in memory too (TRIAGE_LOG=memory)."""
+    if os.environ.get("TRIAGE_LOG", "sqlite").lower() == "memory":
+        return None
+    return Path(os.environ.get(DEMO_DB_ENV) or (FAKE_DEMO_DB if fake else DEFAULT_DEMO_DB))
+
+
+ErrorCode = Literal["demo_limit_reached", "demo_paused", "demo_busy", "public_limit_reached"]
+PausedReason = Literal["daily_requests", "daily_tokens", "daily_model_calls"]
+
+
+class DemoLimitError(Exception):
+    """A request the limiter refused. The API turns it into an OpenAI-style 429 with Retry-After.
+
+    code         demo_limit_reached    this visitor used today's demo requests
+                 demo_paused           a demo-wide daily budget (requests, tokens or model calls) is used up
+                 demo_busy             the demo-wide per-minute limit is reached
+                 public_limit_reached  this visitor used today's public BYOK requests
+    retry_after  whole seconds until it can succeed: until 00:00 UTC for the daily limits, until the oldest
+                 request leaves the 60 s window for demo_busy (always at least 1)
+    reason       demo_paused only: which budget ran out (daily_requests, daily_tokens or daily_model_calls)
+    """
+
+    def __init__(self, code: ErrorCode, retry_after: int, reason: Optional[PausedReason] = None):
+        super().__init__(code if reason is None else f"{code}:{reason}")
+        self.code, self.retry_after, self.reason = code, retry_after, reason
+
+
+@dataclass(frozen=True)
+class Admission:
+    """A request the limiter let through. Pass it back to settle() when the request has finished.
+
+    kind             "demo" or "byok" (public BYOK)
+    visitor          the visitor id it was counted for
+    day              the UTC day it was counted on, "YYYY-MM-DD" (settle() applies to this day, even after midnight)
+    reserved_tokens  tokens held against daily_tokens until settle() (0 for byok)
+    remaining        the visitor's requests left today of this kind, after this one
+    limit            the visitor's daily limit of this kind
+    """
+    kind: Literal["demo", "byok"]
+    visitor: str
+    day: str
+    reserved_tokens: int
+    remaining: int
+    limit: int
+
+
+@dataclass(frozen=True)
+class DemoStatus:
+    """Today's demo state for one visitor (GET /v1/demo/status). Reading it never counts as a request.
+
+    paused         True if any demo-wide daily budget is used up (requests >= daily_requests,
+                   tokens >= daily_tokens or calls >= daily_model_calls)
+    paused_reason  which one, or None
+    used           the visitor's demo requests today
+    remaining      max(0, visitor_daily_requests - used)
+    limit          visitor_daily_requests
+    resets_at      the next 00:00 UTC (an aware datetime)
+    """
+    paused: bool
+    paused_reason: Optional[PausedReason]
+    used: int
+    remaining: int
+    limit: int
+    resets_at: datetime
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class DemoLimiter:
+    """Demo and public-BYOK usage counters, shared by every request (and every worker process, through SQLite).
+
+    path   a SQLite file, so counters survive restarts; None = in memory (tests, TRIAGE_LOG=memory).
+    clock  returns the current time as an aware UTC datetime; days, the per-minute window and Retry-After all
+           use it (tests pass a fake clock).
+
+    Counted per UTC day ("YYYY-MM-DD" of clock()):
+        per visitor and kind ("demo" / "byok"): requests
+        demo-wide: requests, tokens (settled actuals plus open reservations), model calls
+    The per-minute window holds the times of demo requests admitted in the last 60 s. It lives in memory in each
+    process (not in SQLite), so with several workers each enforces it separately.
+
+    Every check-and-count is atomic: with threads (a lock) and with several processes on one SQLite file (one
+    BEGIN IMMEDIATE transaction per admission or settlement). A refused request changes nothing.
+    Rows for days older than retention_days are deleted when the limiter is created, and by cleanup().
+    """
+
+    def __init__(self, settings, path=None, clock=utc_now):
+        self.settings, self._clock = settings, clock
+        self._lock = threading.Lock()
+        self._window = deque()          # admission times of recent demo requests
+        if path is not None:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self._db = sqlite3.connect(
+            ":memory:" if path is None else str(path), 
+            isolation_level=None,   # we manage transactions ourselves 
+            check_same_thread=False, # threads share this connection, guarded by self._lock
+            timeout=30,             # wait for other processes instead of failing 
+        )
+        if path is not None:
+            self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.executescript("""
+                               CREATE TABLE IF NOT EXISTS visitor_day (
+                                   day TEXT, kind TEXT, visitor TEXT, requests INTEGER NOT NULL,
+                                   PRIMARY KEY (day, kind, visitor));
+                                CREATE TABLE IF NOT EXISTS demo_day (
+                                    day TEXT PRIMARY KEY, requests INTEGER NOT NULL,
+                                    tokens INTEGER NOT NULL, calls INTEGER NOT NULL);
+        """)
+        self.cleanup();
+    
+    @contextmanager
+    def _transaction(self):
+        """One atmoic unit: everything inside commits together or not at all"""
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            yield self._db
+            self._db.execute("COMMIT")
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+    
+    def _today(self, now):
+       return now.strftime("%Y-%m-%d")
+
+    def close(self):
+        self._db.close()
+
+    def admit_demo(self, visitor: str, estimated_tokens: int) -> Admission:
+        """Count one demo request for `visitor`, or raise DemoLimitError without counting anything.
+
+        Checked in this order:
+          1. demo_paused         demo-wide: requests + 1 > daily_requests, or tokens + estimated_tokens >
+                                 daily_tokens (tokens = settled actuals plus open reservations), or
+                                 calls >= daily_model_calls. retry_after: seconds to 00:00 UTC.
+          2. demo_limit_reached  the visitor's demo requests today >= visitor_daily_requests.
+                                 retry_after: seconds to 00:00 UTC.
+          3. demo_busy           per_minute_requests demo requests were admitted in the last 60 s.
+                                 retry_after: seconds until the oldest of them is 60 s old (at least 1).
+        On success: the visitor's and the demo-wide request counts go up by 1, estimated_tokens is reserved
+        against daily_tokens, the request joins the per-minute window, and an Admission is returned
+        (remaining = visitor_daily_requests - the visitor's count, reserved_tokens = estimated_tokens).
+        """
+        now = self._clock()
+        day = self._today(now)
+        cfg = self.settings
+        with self._lock:
+            with self._transaction() as db:
+                requests, tokens, calls = self._totals(db, day)
+                # 1. demo-wide budgets (raising here rolls back: nothing has been written yet anyway)
+                if requests + 1 > cfg.daily_requests:
+                    raise DemoLimitError("demo_paused", seconds_until_midnight(now), "daily_requests")
+                if tokens + estimated_tokens > cfg.daily_tokens:
+                    raise DemoLimitError("demo_paused", seconds_until_midnight(now), "daily_tokens")
+                if calls >= cfg.daily_model_calls:
+                    raise DemoLimitError("demo_paused", seconds_until_midnight(now), "daily_model_calls")
+                # 2. this visitor's demo requests today
+                used = self._visitor_requests(db, day, "demo", visitor)
+                if used >= cfg.visitor_daily_requests:
+                    raise DemoLimitError("demo_limit_reached", seconds_until_midnight(now))
+                # 3. the demo-wide per-minute window
+                self._prune_window(now)
+                if len(self._window) >= cfg.per_minute_requests:
+                    oldest_age = (now - self._window[0]).total_seconds()
+                    raise DemoLimitError("demo_busy", max(1, math.ceil(WINDOW_SECONDS - oldest_age)))
+                # admitted: count the request and reserve its tokens
+                db.execute("INSERT INTO visitor_day (day, kind, visitor, requests) VALUES (?, 'demo', ?, 1) "
+                           "ON CONFLICT (day, kind, visitor) DO UPDATE SET requests = requests + 1",
+                           (day, visitor))
+                db.execute("INSERT INTO demo_day (day, requests, tokens, calls) VALUES (?, 1, ?, 0) "
+                           "ON CONFLICT (day) DO UPDATE SET requests = requests + 1, tokens = tokens + excluded.tokens",
+                           (day, estimated_tokens))
+            self._window.append(now)       # only once the transaction has committed
+        return Admission("demo", visitor, day, estimated_tokens, cfg.visitor_daily_requests - (used + 1),
+                         cfg.visitor_daily_requests)
+
+    def admit_public_byok(self, visitor: str) -> Admission:
+        """Count one public BYOK request (provider keys, no Triage key), or raise DemoLimitError
+        ("public_limit_reached", retry_after to 00:00 UTC) without counting.
+
+        Only the visitor's own daily count of this kind is checked (public_byok_visitor_daily_requests). It is
+        separate from the demo count, and BYOK never touches the demo-wide budgets or the per-minute window.
+        Returns an Admission with kind "byok" and reserved_tokens 0.
+        """
+        now = self._clock()
+        day = self._today(now)
+        limit = self.settings.public_byok_visitor_daily_requests
+        with self._lock:
+            with self._transaction() as db:
+                used = self._visitor_requests(db, day, "byok", visitor)
+                if used >= limit:
+                    raise DemoLimitError("public_limit_reached", seconds_until_midnight(now))
+                db.execute("INSERT INTO visitor_day (day, kind, visitor, requests) VALUES (?, 'byok', ?, 1) "
+                           "ON CONFLICT (day, kind, visitor) DO UPDATE SET requests = requests + 1",
+                           (day, visitor))
+        return Admission("byok", visitor, day, 0, limit - (used + 1), limit)
+
+    def settle(self, admission: Admission, tokens: int, calls: int) -> None:
+        """Record what an admitted request actually used, once, when it has finished (or failed).
+
+        demo: the reservation is replaced by `tokens` (the day's tokens change by tokens - reserved_tokens), and
+        `calls` (every model call it made: retries, fallbacks, truncated attempts) is added to the day's calls.
+        Applied to admission.day, so a request that ends after midnight doesn't count against the new day.
+        byok: nothing to record (a no-op).
+        """
+        if admission.kind != "demo":
+            return
+        with self._lock:
+            with self._transaction() as db:
+                # UPDATE only: if that day's row is gone (cleaned up), there's nothing left to correct
+                db.execute("UPDATE demo_day SET tokens = tokens + ?, calls = calls + ? WHERE day = ?",
+                           (tokens - admission.reserved_tokens, calls, admission.day))
+
+    def status(self, visitor: str) -> DemoStatus:
+        """Today's demo state for `visitor` (see DemoStatus). Counts nothing and needs no window slot."""
+        now = self._clock()
+        day = self._today(now)
+        cfg = self.settings
+        with self._lock:
+            requests, tokens, calls = self._totals(self._db, day)
+            used = self._visitor_requests(self._db, day, "demo", visitor)
+        if requests >= cfg.daily_requests:
+            reason = "daily_requests"
+        elif tokens >= cfg.daily_tokens:
+            reason = "daily_tokens"
+        elif calls >= cfg.daily_model_calls:
+            reason = "daily_model_calls"
+        else:
+            reason = None
+        return DemoStatus(paused=reason is not None, paused_reason=reason, used=used,
+                          remaining=max(0, cfg.visitor_daily_requests - used), limit=cfg.visitor_daily_requests,
+                          resets_at=next_midnight(now))
+
+    def requests_in_last_minute(self) -> int:
+        """How many demo requests were admitted in the rolling 60 s before clock() (the per-minute window).
+        Entries older than 60 s are dropped as a side effect."""
+        now = self._clock()
+        with self._lock:
+            self._prune_window(now)
+            return len(self._window)
+
+    # ----- private helpers (callers hold self._lock) -----
+
+    def _prune_window(self, now: datetime) -> None:
+        """Drop window entries that are 60 s old or older."""
+        while self._window and (now - self._window[0]).total_seconds() >= WINDOW_SECONDS:
+            self._window.popleft()
+
+    @staticmethod
+    def _totals(db, day: str) -> tuple:
+        """(requests, tokens, calls) for one day, demo-wide; zeros if nothing is stored yet."""
+        row = db.execute("SELECT requests, tokens, calls FROM demo_day WHERE day = ?", (day,)).fetchone()
+        return tuple(row) if row else (0, 0, 0)
+
+    @staticmethod
+    def _visitor_requests(db, day: str, kind: str, visitor: str) -> int:
+        row = db.execute("SELECT requests FROM visitor_day WHERE day = ? AND kind = ? AND visitor = ?",
+                         (day, kind, visitor)).fetchone()
+        return row[0] if row else 0
+
+    def cleanup(self) -> int:
+        """Delete stored counters for days more than retention_days before today (UTC). Returns how many day
+        records (visitor rows and demo-wide rows) were removed. Also run once by __init__."""
+        now = self._clock()
+        cutoff = self._today(now - timedelta(days=self.settings.retention_days))
+        with self._lock:
+            with self._transaction() as db:
+                visitors = db.execute("DELETE FROM visitor_day WHERE day < ?", (cutoff,)).rowcount
+                totals = db.execute("DELETE FROM demo_day WHERE day < ?", (cutoff,)).rowcount
+        return visitors + totals
+
+    def stored_days(self) -> list:
+        """The UTC days ("YYYY-MM-DD", oldest first) that have any stored counters, for cleanup checks."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT day FROM visitor_day UNION SELECT day FROM demo_day ORDER BY day"
+            ).fetchall()
+        return [row[0] for row in rows]
+
+
+def seconds_until_midnight(now: datetime) -> int:
+    """Whole seconds from `now` (aware, UTC) to the next 00:00 UTC, at least 1 (for Retry-After)."""
+    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((midnight - now).total_seconds() + 0.999999))
+
+
+def next_midnight(now: datetime) -> datetime:
+    return (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+

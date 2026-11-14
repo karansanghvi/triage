@@ -23,6 +23,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -31,13 +32,15 @@ from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 
 from app.api import core
-from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_env
+from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_env, public_from_env
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
+from app.api.demo import DemoLimitError, client_ip, visitor_id
 from app.api.errors import APIError, bad_request, stream_error_event
 from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_quality, parse_task, parse_verify,
                              resolve_keys)
@@ -87,8 +90,8 @@ class _RecordingPredictor:
 
 
 def _apply_inputs(row: RequestRow, prediction) -> None:
-    """Step 8 storage: only for model="auto" requests that answered, and never for BYOK requests."""
-    if prediction is None or row.requested_model != "auto" or row.status != "ok" or row.mode == "byok":
+    """Step 8 storage: only for model="auto" requests that answered, and only "api" requests (never BYOK or demo)."""
+    if prediction is None or row.requested_model != "auto" or row.status != "ok" or row.mode in ("byok", "demo"):
         return
     from app.router.embeddings import MODEL_NAME
     from app.router.features import FEATURE_VERSION
@@ -282,19 +285,89 @@ def invalid_key_message(providers: list) -> str:
 
 
 def _error_response(error: APIError, headers: Optional[dict] = None) -> JSONResponse:
-    return JSONResponse(error.body(), status_code=error.status, headers=headers)
+    return JSONResponse(error.body(), status_code=error.status, headers={**error.headers, **(headers or {})})
+
+
+CORS_ORIGINS_ENV = "TRIAGE_CORS_ORIGINS"      # comma-separated, e.g. https://triage.example.com
+# Request headers a browser page may send, and response headers its JavaScript may read
+CORS_REQUEST_HEADERS = ["Authorization", "Content-Type", *PROVIDER_KEY_HEADERS.values(), "X-Triage-Quality",
+                        "X-Triage-Task", "X-Triage-Verify"]
+CORS_RESPONSE_HEADERS = ["X-Triage-Request-Id", "X-Triage-Model", "X-Triage-Tier", "X-Triage-Reason",
+                         "X-Triage-Fallback", "X-Triage-Cache", "X-Triage-Verified", "X-Triage-Escalated",
+                         "X-Triage-Check", "X-Triage-Cost", "X-Triage-Saved", "X-Triage-Mode",
+                         "X-Triage-Demo-Remaining", "X-Triage-Demo-Limit", "X-Triage-Demo-Resets",
+                         "X-Triage-Max-Tokens", "Retry-After"]
+
+
+def cors_origins_from_env() -> list:
+    return [o.strip().rstrip("/") for o in os.environ.get(CORS_ORIGINS_ENV, "").split(",") if o.strip()]
+
+
+def request_mode(who: Optional[Caller], keys) -> str:
+    """api: a valid Triage key and no provider keys. byok: provider keys (with or without a Triage key).
+    demo: neither (only reachable when public access is on)."""
+    if keys.mode == "byok":
+        return "byok"
+    return "api" if who is not None else "demo"
+
+
+# key_id in the request log for requests without a Triage key (no visitor identity goes into the log)
+PUBLIC_KEY_IDS = {"demo": "demo", "byok": "public"}
+_KEY_HEADER_LIST = ", ".join(PROVIDER_KEY_HEADERS.values())
+
+
+def demo_limit_error(error: DemoLimitError, settings) -> APIError:
+    """A refused demo / public BYOK request as an OpenAI-style 429 with Retry-After."""
+    messages = {
+        "demo_limit_reached": (f"You've used today's {settings.visitor_daily_requests} free demo requests. Add your "
+                               f"own provider key ({_KEY_HEADER_LIST}) to keep going, or try again after 00:00 UTC."),
+        "demo_paused": ("The free demo has reached today's limit and is paused until 00:00 UTC. You can still use "
+                        f"Triage with your own provider key ({_KEY_HEADER_LIST})."),
+        "demo_busy": ("The free demo is busy right now. Try again in a few seconds, or add your own provider key "
+                      f"({_KEY_HEADER_LIST})."),
+        "public_limit_reached": (f"This address has used today's {settings.public_byok_visitor_daily_requests} "
+                                 "requests without a Triage API key. Send a Triage API key (Authorization: Bearer "
+                                 "<key>) or try again after 00:00 UTC."),
+    }
+    return APIError(429, messages[error.code], "rate_limit_error", code=error.code,
+                    headers={"Retry-After": str(error.retry_after)})
+
+
+def demo_headers(remaining: int, limit: int, resets_at) -> dict:
+    return {"X-Triage-Demo-Remaining": str(remaining), "X-Triage-Demo-Limit": str(limit),
+            "X-Triage-Demo-Resets": resets_at.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def demo_usage(row: RequestRow, reserved: int) -> tuple:
+    """(tokens, model calls) a finished demo request used, for DemoLimiter.settle.
+    Calls: every attempt that reached a provider (a cache hit or a circuit-breaker skip didn't).
+    Tokens: the served answer (none for a cache hit) plus billed truncated attempts. If an answer was started but
+    its token count is unknown (a stream cut off part-way), the reservation is kept as the best estimate."""
+    attempts = row.attempts or []
+    calls = max(0, sum(a.get("outcome") in ("success", "error") for a in attempts) - (1 if row.cache_hit else 0))
+    if row.served_model is not None and row.input_tokens is None:
+        return reserved, calls
+    truncated = sum((a.get("input_tokens") or 0) + (a.get("output_tokens") or 0) for a in attempts)
+    served = 0 if row.cache_hit else (row.input_tokens or 0) + (row.output_tokens or 0)
+    return served + truncated, calls
 
 
 # ---------- the app ----------
 
-def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
+def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = None,
+               cors_origins: Optional[list] = None) -> FastAPI:
     """deps / auth given: use them (tests). Otherwise load both at startup from config and the environment,
-    refusing to start if there are no keys or the predictor fails its safety checks."""
+    refusing to start if there are no keys or the predictor fails its safety checks.
+    public: accept chat requests without a Triage key (demo / BYOK); None = TRIAGE_PUBLIC (default off).
+    cors_origins: browser origins allowed to call the API; None = TRIAGE_CORS_ORIGINS. Empty (the default): no
+    cross-origin access at all."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if app.state.auth is None:
             app.state.auth = Auth(keys_from_env(API_KEYS_ENV), keys_from_env(ADMIN_KEYS_ENV))
+        if app.state.public:
+            logger.warning("public access is ON (TRIAGE_PUBLIC): chat requests without a Triage key are accepted")
         if app.state.deps is None:
             from app.api.deps import load_deps
             app.state.deps = load_deps()          # predictor + embedding model, once
@@ -303,10 +376,18 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
     _ensure_json_handler()
     app = FastAPI(title="Triage", version="0.5", lifespan=lifespan)
     app.state.deps, app.state.auth = deps, auth
+    app.state.public = public_from_env() if public is None else public
+    origins = cors_origins_from_env() if cors_origins is None else list(cors_origins)
+    if origins:
+        # No cookies or credentials: the browser sends keys only as the explicit headers listed
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "OPTIONS"],
+                           allow_headers=CORS_REQUEST_HEADERS, expose_headers=CORS_RESPONSE_HEADERS,
+                           allow_credentials=False, max_age=600)
 
     @app.exception_handler(APIError)
     async def api_error(request: Request, error: APIError):
-        return _error_response(error)
+        # headers this request already decided on (e.g. X-Triage-Mode), so errors carry them too
+        return _error_response(error, getattr(request.state, "triage_headers", None))
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError):
@@ -322,10 +403,17 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
     def admin(authorization: Optional[str] = Header(None)) -> Caller:
         return app.state.auth.check(authorization, admin=True)
 
+    def chat_caller(authorization: Optional[str] = Header(None)) -> Optional[Caller]:
+        """Public access on: no Authorization header = no caller (demo or BYOK); a header that is sent must be
+        valid. Off: exactly `caller`."""
+        if not app.state.public:
+            return app.state.auth.check(authorization)
+        return app.state.auth.optional(authorization)
+
     # ----- chat -----
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(body: ChatRequest, request: Request, who: Caller = Depends(caller),
+    async def chat_completions(body: ChatRequest, request: Request, who: Optional[Caller] = Depends(chat_caller),
                                x_triage_quality: Optional[str] = Header(None),
                                x_triage_task: Optional[str] = Header(None),
                                x_triage_verify: Optional[str] = Header(None)):
@@ -335,6 +423,9 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         # app state, the cache or a background task. Closures below use the plain `byok` flag, not `keys`.
         keys = resolve_keys(request.headers)
         byok = keys.mode == "byok"
+        mode = request_mode(who, keys)
+        key_id = who.key_id if who is not None else PUBLIC_KEY_IDS[mode]
+        request.state.triage_headers = {"X-Triage-Mode": mode}
         baseline_providers = keys.providers if byok else None     # provider names only, for the savings baseline
         unknown = sorted(set(body.model_extra or {}) - ACCEPTED_FIELDS)
         if unknown:
@@ -348,26 +439,47 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         verify = parse_verify(x_triage_verify, body.stream)
         check_verify_model(verify, body.model)
         auto = body.model == "auto"
+        requested_max_tokens = body.max_tokens or body.max_completion_tokens
+
+        # Requests without a Triage key: a visitor (client IP, only ever as a keyed hash) with daily limits
+        public = who is None
+        visitor = visitor_id(client_ip(request, deps.trusted_proxy_hops), deps.hash_secret) if public else None
+        demo = deps.demo_settings
+        if mode == "demo":
+            status = deps.demo_limiter.status(visitor)
+            request.state.triage_headers.update(demo_headers(status.remaining, status.limit, status.resets_at))
+            if verify == "sync":         # checks and escalations would multiply the free calls
+                raise APIError(400, "X-Triage-Verify: sync isn't available in the free demo. Add your own provider "
+                               f"key ({_KEY_HEADER_LIST}) to use it.", param="X-Triage-Verify",
+                               code="demo_unsupported")
+            prompt_chars = sum(len(m.content) for m in body.messages)
+            if prompt_chars > demo.max_prompt_chars:
+                raise APIError(413, f"Demo prompts are limited to {demo.max_prompt_chars:,} characters across all "
+                               f"messages (yours: {prompt_chars:,}). Add your own provider key ({_KEY_HEADER_LIST}) "
+                               "to send longer prompts.", param="messages", code="demo_prompt_too_long")
+            default_max = snapshot.routing.generation.get("max_tokens", DEFAULT_MAX_TOKENS)
+            requested_max_tokens = min(requested_max_tokens or default_max, demo.max_tokens)   # quietly lowered
+            request.state.triage_headers["X-Triage-Max-Tokens"] = str(requested_max_tokens)
 
         messages = [m.model_dump() for m in body.messages]
-        settings = core.GenerationSettings(body.temperature, body.max_tokens or body.max_completion_tokens)
+        settings = core.GenerationSettings(body.temperature, requested_max_tokens)
         temperature = settings.temperature if settings.temperature is not None else \
             snapshot.routing.generation.get("temperature", DEFAULT_TEMPERATURE)
         max_tokens = settings.max_tokens or snapshot.routing.generation.get("max_tokens", DEFAULT_MAX_TOKENS)
         training = snapshot.routing.generation
         request_id = f"chatcmpl-triage-{uuid.uuid4().hex}"
-        row = RequestRow(request_id=request_id, timestamp=_now(), key_id=who.key_id, requested_model=body.model,
+        row = RequestRow(request_id=request_id, timestamp=_now(), key_id=key_id, requested_model=body.model,
                          stream=body.stream, quality=x_triage_quality, tau=tau if auto else None,
                          task_type=task, classifier=deps.classifier if auto else None,
                          config_version=snapshot.version, temperature=temperature, max_tokens=max_tokens,
                          settings_match_training=(temperature == training.get("temperature")
                                                   and max_tokens == training.get("max_tokens")) if auto else None,
                          prompt_hmac=prompt_hmac(messages, deps.hash_secret), verified=verify,
-                         mode="byok" if byok else "api")
+                         mode=mode)
         if not auto and body.model in deps.registry:       # a named model is its own primary, even if it fails
             row.primary_model, row.tier = body.model, deps.registry[body.model].tier
 
-        logged = []
+        logged, admitted = [], []          # admitted: this request's DemoLimiter Admission, once counted
         recorder = _RecordingPredictor(deps.predictor)
         request_deps = dataclasses.replace(deps, predictor=recorder)    # same client, registry and log
 
@@ -382,10 +494,30 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
             row.training_eligible = is_training_eligible(row)
             deps.log.write(row)
             request_logger.info(json_log_line(row))
+            if admitted:                   # replace the token reservation with what it really used
+                tokens, calls = demo_usage(row, admitted[0].reserved_tokens)
+                deps.demo_limiter.settle(admitted[0], tokens=tokens, calls=calls)
 
         if not auto and body.model not in deps.registry:              # logged, then an OpenAI-style 404
             finish("error", 404, "model_not_found")
             raise APIError(404, str(core.UnknownModel(body.model)), param="model", code="model_not_found")
+
+        if mode == "demo":                 # counted only now, after every check that costs nothing
+            estimate = -(-sum(len(m.content) for m in body.messages) // 4) + requested_max_tokens
+            try:
+                admitted.append(deps.demo_limiter.admit_demo(visitor, estimate))
+            except DemoLimitError as error:
+                status = deps.demo_limiter.status(visitor)
+                request.state.triage_headers.update(demo_headers(status.remaining, status.limit, status.resets_at))
+                finish("error", 429, error.code)
+                raise demo_limit_error(error, demo) from None
+            request.state.triage_headers["X-Triage-Demo-Remaining"] = str(admitted[0].remaining)
+        elif mode == "byok" and public:   # BYOK without a Triage key: a generous per-visitor cap (the user pays)
+            try:
+                admitted.append(deps.demo_limiter.admit_public_byok(visitor))
+            except DemoLimitError as error:
+                finish("error", 429, error.code)
+                raise demo_limit_error(error, demo) from None
 
         try:
             routed = await core.route_and_stream(messages, tau=tau if auto else None, task_type=task,
@@ -429,8 +561,9 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
         # Background labels: only for auto requests with verification off. The labeler decides (eligibility,
         # sampling, daily cap) after the response has been sent; it gets the text from memory only.
         def background(answer_text):
-            # Never for BYOK: background jobs run after the response and must never receive a user key
-            if byok or not auto or verify != "off" or deps.labeler is None:
+            # Only for "api" requests: BYOK (a user key must never reach a background job) and demo (strangers'
+            # prompts, and labels would spend the free quota) get none
+            if mode != "api" or not auto or verify != "off" or deps.labeler is None:
                 return None
             return BackgroundTask(deps.labeler.run, deps, row, messages, answer_text)
 
@@ -467,7 +600,8 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                           "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
                                        "finish_reason": response.finish_reason or "stop"}],
                           "usage": _usage(response)}
-            return JSONResponse(completion, headers=headers, background=background(text))
+            return JSONResponse(completion, headers=headers | request.state.triage_headers,
+                                background=background(text))
 
         include_usage = bool(body.stream_options and body.stream_options.include_usage)
         streamed = []                                         # the answer, in memory only, for a background label
@@ -506,8 +640,26 @@ def create_app(deps=None, auth: Optional[Auth] = None) -> FastAPI:
                 await deps.labeler.run(deps, row, messages, "".join(streamed) if row.status == "ok" else None)
 
         return StreamingResponse(events(), media_type="text/event-stream",
-                                 headers=_triage_headers(decision, "bypass") | {"Cache-Control": "no-cache"},
+                                 headers=_triage_headers(decision, "bypass") | {"Cache-Control": "no-cache"}
+                                 | request.state.triage_headers,
                                  background=BackgroundTask(stream_background))
+
+    # ----- the free demo -----
+
+    @app.get("/v1/demo/status")
+    async def demo_status(request: Request):
+        """Public (no key): this visitor's demo allowance and the demo-wide state, so a website can show its banner
+        and counters before the first request. Reading it counts nothing."""
+        if not app.state.public:
+            return {"enabled": False}
+        deps = app.state.deps
+        visitor = visitor_id(client_ip(request, deps.trusted_proxy_hops), deps.hash_secret)
+        status = deps.demo_limiter.status(visitor)
+        demo = deps.demo_settings
+        return {"enabled": True, "paused": status.paused, "paused_reason": status.paused_reason,
+                "visitor": {"limit": status.limit, "used": status.used, "remaining": status.remaining},
+                "limits": {"max_prompt_chars": demo.max_prompt_chars, "max_tokens": demo.max_tokens},
+                "resets_at": status.resets_at.strftime("%Y-%m-%dT%H:%M:%SZ")}
 
     # ----- models, stats, requests -----
 

@@ -1,0 +1,31 @@
+# The free demo (Phase 5): limits for requests with no Triage key and no provider keys (TRIAGE_PUBLIC on).
+# They run on Triage's own free-tier keys (Groq, Gemini), so every limit protects those quotas.
+# Days are UTC days. Read at startup (app/api/demo.py load_demo_settings); edit and restart to change.
+
+# Per visitor (client IP, stored only as a keyed hash; IPv6 grouped by /64)
+visitor_daily_requests: 10
+
+# All demo visitors together. Reaching any of these pauses the demo until 00:00 UTC (429 demo_paused).
+daily_requests: 300
+# Tokens (input + output, reasoning included). Groq's gpt-oss models allow 200,000 tokens/day each on the free
+# tier (config/collection.yaml limits), and groq-large's budget is shared with background labels.
+daily_tokens: 150000
+# Every model call: retries, fallbacks, truncated attempts. gpt-oss allows 1,000 requests/day each.
+daily_model_calls: 600
+# In any rolling 60 s (429 demo_busy). gpt-oss allows 8,000 tokens/minute: about 2-4 demo requests.
+per_minute_requests: 4
+
+# Per request
+# All messages together. The longest Phase 2 prompt was 7,588 characters (p95 1,907); 8,000 characters is about
+# 2,000 tokens, which leaves room for an answer in groq-allam's 4,096-token context. Longer: 413.
+max_prompt_chars: 8000
+# A larger max_tokens is quietly lowered to this (X-Triage-Max-Tokens says so). In Phase 2, 3.5% of groq-small's
+# and 10.6% of groq-large's answers were longer than 2,048 tokens (15% and 19% longer than 1,024).
+max_tokens: 2048
+
+# Public BYOK (provider keys, no Triage key): the user pays the provider, so only a generous per-visitor cap that
+# protects the server (the classifier's embedding model runs on every "auto" request).
+public_byok_visitor_daily_requests: 200
+
+# Stored counters older than this many days are deleted at startup.
+retention_days: 7

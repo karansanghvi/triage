@@ -152,6 +152,45 @@ After that, the stream ends with an error event (the openai SDKs raise `APIError
 doesn't arrive within the limit in `routing.yaml` (`streaming:`) fails over. A long answer that streams steadily
 is never cut off.
 
+## Public access: the free demo and BYOK (Phase 5)
+
+With `TRIAGE_PUBLIC=on`, `POST /v1/chat/completions` also accepts requests without a Triage key. Each request
+gets a mode, sent back as `X-Triage-Mode`:
+
+| Mode | Triage key | Provider key headers | Keys used | Limits |
+|---|---|---|---|---|
+| `api` | valid | none | the server's | none (as before) |
+| `byok` | valid or none | `X-OpenAI-Key`, `X-Anthropic-Key`, `X-Groq-Key`, `X-Gemini-Key` | the user's, only their providers | 200/day per visitor without a Triage key |
+| `demo` | none | none | the server's | `config/demo.yaml` |
+
+An `Authorization` header that is sent but invalid is always a 401. Every other endpoint still needs a Triage key.
+
+**Demo limits** (`config/demo.yaml`, UTC days):
+- 10 requests per visitor, and 300 requests, 150,000 tokens and 600 model calls per day for all visitors together.
+- 4 requests per minute for all visitors together.
+- 8,000 prompt characters. `max_tokens` is lowered to 2,048, and the response says so in `X-Triage-Max-Tokens`.
+- No sync verification.
+
+Refusals are 429s with `Retry-After`: `demo_limit_reached` and `demo_busy` suggest adding a provider key, and
+`demo_paused` means the demo is paused until 00:00 UTC. A prompt over the limit is a 413 `demo_prompt_too_long`.
+
+Demo responses carry `X-Triage-Demo-Remaining`, `-Limit` and `-Resets`. `GET /v1/demo/status` (public) returns
+the visitor's allowance and whether the demo is paused, so a website can show it before the first request.
+
+**Visitors** are identified by IP. Set `TRIAGE_TRUSTED_PROXY_HOPS` to the number of proxies in front of the
+server; the default 0 ignores `X-Forwarded-For`, which any client can fake. IPs are stored only as an HMAC with
+`TRIAGE_HASH_SECRET` (IPv6 grouped by /64), and the request log only ever sees `key_id` `demo` or `public`.
+
+Demo and BYOK requests are never used for retraining and get no background labels.
+
+**Deploying:**
+- `TRIAGE_SERVER_PROVIDERS=groq,gemini` drops Ollama on a host that can't run it. The low tier then falls back
+  from groq-allam to gemini-flash-lite.
+- `TRIAGE_CORS_ORIGINS` lists the website's origins.
+- The demo counters live in `data/demo/usage.sqlite3` (`TRIAGE_DEMO_DB`). On a host with an ephemeral disk
+  they're lost on every restart or redeploy, so the limits start over; the providers' own free-tier quotas are
+  then the only backstop.
+
 ## Retraining the classifier (Phase 4)
 
 `python -m scripts.retrain` retrains the live classifier with the background labels in the request log. It

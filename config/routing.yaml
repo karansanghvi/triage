@@ -10,7 +10,9 @@
 # requests without their own keys, so those route exactly as before. Never put a BYOK model first: the first
 # model is the Phase 2 model, and the first model of `high` is the strong baseline for savings.
 fallback_chains:
-  low: [groq-allam, ollama-llama, openai-luna, claude-haiku]      # local llama3.2:3b: similar quality, no provider dependency
+  # gemini-flash-lite: the low tier's non-Groq backup on a host without Ollama (TRIAGE_SERVER_PROVIDERS=groq,gemini).
+  # Note its price_as ($0.30 / $2.50) is above groq-small's, so a low-tier fallback to it costs more than medium.
+  low: [groq-allam, ollama-llama, gemini-flash-lite, openai-luna, claude-haiku]   # ollama-llama: local llama3.2:3b
   medium: [groq-small, gemini-flash, openai-terra, claude-sonnet] # gemini-flash: different provider, at least medium quality
   high: [groq-large, gemini-flash, openai-sol, claude-opus]       # gemini-flash: free tier is tiny (20/day), backup only
 
@@ -48,6 +50,8 @@ model_timeouts:
   # gemini-flash: no Phase 2 latency data. It is the last fallback for medium and high, so a generous
   # limit beats returning an error. Revisit once live latency data exists.
   gemini-flash: 30
+  # gemini-flash-lite: no latency data either; same as gemini-flash until there is some. Revisit with live data.
+  gemini-flash-lite: 30
   # ollama-llama (local llama3.2:3b, low-tier backup): p95 30,785 ms -> 31 s + 1 s margin
   # (reports/latency_p95.json). With the 8 s default, 33% of its Phase 2 calls would have been killed;
   # with 32 s, 4.8%. Phase 2 ran it alongside the other tiers on the same machine.
@@ -71,6 +75,7 @@ streaming:
   model_first_token_timeouts:
     groq-large: 10
     gemini-flash: 30
+    gemini-flash-lite: 30
     ollama-llama: 32
     openai-luna: 60       # BYOK models: no data, revisit with live data
     openai-terra: 60

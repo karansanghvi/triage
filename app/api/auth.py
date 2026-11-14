@@ -11,6 +11,13 @@ from typing import Optional
 from app.api.errors import APIError
 
 API_KEYS_ENV, ADMIN_KEYS_ENV = "TRIAGE_API_KEYS", "TRIAGE_ADMIN_KEYS"
+# on: /v1/chat/completions also accepts requests WITHOUT a Triage key: the free demo (no provider keys) and BYOK
+# (provider keys). Off (the default): every chat request needs a Triage key, as before.
+PUBLIC_ENV = "TRIAGE_PUBLIC"
+
+
+def public_from_env() -> bool:
+    return os.environ.get(PUBLIC_ENV, "off").strip().lower() in ("on", "1", "true", "yes")
 
 
 def key_id(key: str) -> str:
@@ -40,6 +47,13 @@ class Auth:
         for k in keys:                                  # compare against every key: constant time overall
             found |= hmac.compare_digest(key.encode("utf-8"), k.encode("utf-8"))
         return found
+
+    def optional(self, authorization: Optional[str]) -> Optional[Caller]:
+        """None when no Authorization header was sent at all. A header that IS sent is checked in full, so an
+        invalid or malformed key is still a 401 (never quietly treated as no key)."""
+        if authorization is None:
+            return None
+        return self.check(authorization)
 
     def check(self, authorization: Optional[str], admin: bool = False) -> Caller:
         if not authorization or not authorization.lower().startswith("bearer ") or not authorization[7:].strip():

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Optional, Union
 
@@ -101,11 +102,35 @@ class RoutingDecision:
     
     @property
     def reason(self) -> str:
+        """The rule in words. Printed so the inequality always reads true: tau exactly (_show_tau), a probability
+        below it rounded down and one at or above it rounded up (3 decimals). Plain rounding once printed
+        "medium 0.86 < tau 0.86"."""
+        tau = _show_tau(self.tau)
         if self.tier == "low":
-            return f"cheap pass chance {self.p_low:.2f} >= tau {self.tau:.2f}"
+            return f"cheap pass chance {_show(self.p_low, ROUND_CEILING)} >= tau {tau}"
         if self.tier == "medium":
-            return f"cheap {self.p_low:.2f} < tau {self.tau:.2f}; medium {self.p_medium:.2f} >= tau"
-        return f"cheap {self.p_low:.2f} and medium {self.p_medium:.2f} both < tau {self.tau:.2f} using strong"
+            return (f"cheap {_show(self.p_low, ROUND_FLOOR)} < tau {tau}; "
+                    f"medium {_show(self.p_medium, ROUND_CEILING)} >= tau")
+        return (f"cheap {_show(self.p_low, ROUND_FLOOR)} and medium {_show(self.p_medium, ROUND_FLOOR)} "
+                f"both < tau {tau} using strong")
+
+
+_THREE_PLACES = Decimal("0.001")
+
+
+def _show(p: float, rounding: str) -> str:
+    """A probability with 3 decimals, rounded in the given direction. Decimal(repr(p)) is the number as written
+    (0.57, not 0.56999...), so an exact value is never pushed down or up a step."""
+    return str(Decimal(repr(float(p))).quantize(_THREE_PLACES, rounding=rounding))
+
+
+def _show_tau(tau: float) -> str:
+    """tau exactly: 3 decimals when that is exact (every preset, e.g. 0.860), otherwise all its digits (0.8604),
+    so the rounded probabilities beside it can never print as equal to it."""
+    exact = Decimal(repr(float(tau)))
+    if exact == exact.quantize(_THREE_PLACES):
+        return str(exact.quantize(_THREE_PLACES))
+    return format(exact.normalize(), "f")
 
 def choose_tier(p_low: float, p_medium: float, tau: float) -> str:
     """The cheapest tier whose predicted pass probability is at least tau; "high" if none is"""

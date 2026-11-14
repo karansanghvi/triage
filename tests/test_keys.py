@@ -7,9 +7,9 @@ from app.providers.keys import KeyContext
 SECRET = "sk-test-SECRET123"
 
 
-def test_no_headers_is_demo():
+def test_no_headers_uses_server_keys():
     ctx = resolve_keys({})
-    assert ctx.mode == "demo"
+    assert ctx.mode == "server"
     assert ctx.providers == frozenset()
 
 
@@ -28,7 +28,7 @@ def test_multiple_keys():
 
 def test_blank_or_whitespace_header_counts_as_missing():
     ctx = resolve_keys({"x-groq-key": "   ", "x-gemini-key": ""})
-    assert ctx.mode == "demo"
+    assert ctx.mode == "server"
     assert ctx.providers == frozenset()
 
 
@@ -39,7 +39,7 @@ def test_value_is_trimmed():
 
 def test_unrelated_headers_are_ignored():
     ctx = resolve_keys({"authorization": "Bearer triage-key", "x-triage-quality": "0.8"})
-    assert ctx.mode == "demo"
+    assert ctx.mode == "server"
 
 
 def test_real_headers_are_case_insensitive():

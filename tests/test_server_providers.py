@@ -23,8 +23,9 @@ from app.reliability import (DEFAULT_ROUTING_PATH, AllModelsFailed, BreakerSetti
 from tests.api_helpers import API_KEY, ASK, FakePredictor, make_deps
 
 BYOK_PROVIDERS = {"openai", "anthropic"}
-# The chains before any BYOK model existed (Phase 4). Requests without keys must still get exactly these.
-PHASE4_CHAINS = {"low": ["groq-allam", "ollama-llama"],
+# What requests without keys get: the Phase 4 chains, plus gemini-flash-lite as the low tier's last server backup
+# (Phase 5, for hosts without Ollama). Never an openai-* or claude-* model.
+PHASE4_CHAINS = {"low": ["groq-allam", "ollama-llama", "gemini-flash-lite"],
                  "medium": ["groq-small", "gemini-flash"],
                  "high": ["groq-large", "gemini-flash"]}
 DOWN = FakeBehavior(fail_before="server")
@@ -83,9 +84,11 @@ def test_byok_models_are_paid_at_their_real_price(registry):
             assert m.input_price > 0 and m.output_price > 0 and m.price_as is None, m.name
 
 
-def test_gemini_flash_lite_is_in_the_registry_but_no_chain(routing, registry):
+def test_gemini_flash_lite_is_the_low_tiers_backup_after_ollama(routing, registry):
     assert registry["gemini-flash-lite"].model_id == "models/gemini-3.5-flash-lite"
-    assert all("gemini-flash-lite" not in names for names in routing.chains.values())
+    low = routing.chains["low"]
+    assert low.index("gemini-flash-lite") == low.index("ollama-llama") + 1
+    assert all("gemini-flash-lite" not in routing.chains[t] for t in ("medium", "high"))
 
 
 # ---------- strong baseline ----------
