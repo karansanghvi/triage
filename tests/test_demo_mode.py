@@ -290,3 +290,40 @@ def test_status_when_public_access_is_off():
 def test_status_ignores_a_triage_key():
     http, _ = app()
     assert status(http, headers=BEARER).json()["enabled"] is True
+
+
+# ---------- public BYOK: a generous per-visitor cap ----------
+
+GROQ_KEY = {"x-groq-key": "gsk_test-key-123"}
+
+
+def test_public_byok_has_its_own_per_visitor_cap():
+    http, deps = app(public_byok_visitor_daily_requests=2)
+    for _ in range(2):
+        r = chat(http, headers=GROQ_KEY)
+        assert r.status_code == 200 and r.headers["x-triage-mode"] == "byok"
+        assert "x-triage-demo-remaining" not in r.headers
+    r = chat(http, headers=GROQ_KEY)
+    assert r.status_code == 429
+    err = r.json()["error"]
+    assert err["code"] == "public_limit_reached" and "Triage API key" in err["message"]
+    assert r.headers["retry-after"] == str(12 * 3600)
+    assert chat(http, ip="198.51.100.4", headers=GROQ_KEY).status_code == 200
+    assert chat(http, headers=GROQ_KEY | BEARER).status_code == 200            # with a Triage key: no cap
+
+
+def test_public_byok_and_the_demo_are_counted_apart():
+    http, _ = app(visitor_daily_requests=1, public_byok_visitor_daily_requests=1)
+    assert chat(http).status_code == 200
+    assert chat(http).status_code == 429                                        # demo used up
+    assert chat(http, headers=GROQ_KEY).status_code == 200                      # BYOK still fine
+    assert chat(http, headers=GROQ_KEY).status_code == 429
+
+
+def test_public_byok_doesnt_use_the_demo_budgets():
+    http, deps = app(daily_requests=1, daily_tokens=10, daily_model_calls=1, per_minute_requests=1,
+                     public_byok_visitor_daily_requests=50)
+    for i in range(5):
+        assert chat(http, ip=f"198.51.100.{i}", headers=GROQ_KEY).status_code == 200
+    assert deps.demo_limiter.status("x").paused is False
+    assert deps.demo_limiter.requests_in_last_minute() == 0

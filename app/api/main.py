@@ -512,6 +512,12 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 finish("error", 429, error.code)
                 raise demo_limit_error(error, demo) from None
             request.state.triage_headers["X-Triage-Demo-Remaining"] = str(admitted[0].remaining)
+        elif mode == "byok" and public:   # BYOK without a Triage key: a generous per-visitor cap (the user pays)
+            try:
+                admitted.append(deps.demo_limiter.admit_public_byok(visitor))
+            except DemoLimitError as error:
+                finish("error", 429, error.code)
+                raise demo_limit_error(error, demo) from None
 
         try:
             routed = await core.route_and_stream(messages, tau=tau if auto else None, task_type=task,
