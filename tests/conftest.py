@@ -7,10 +7,14 @@ about one of them sets it itself with monkeypatch.
 import pytest
 
 DEPLOYMENT_ENV = ("TRIAGE_PUBLIC", "TRIAGE_CORS_ORIGINS", "TRIAGE_SERVER_PROVIDERS", "TRIAGE_TRUSTED_PROXY_HOPS",
-                  "TRIAGE_DEMO_DB")
+                  "TRIAGE_DEMO_DB", "DATABASE_URL", "TRIAGE_FAKE_DB")
 
 
 @pytest.fixture(autouse=True)
 def _no_deployment_env(monkeypatch):
     for name in DEPLOYMENT_ENV:
         monkeypatch.delenv(name, raising=False)
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "postgres: needs TRIAGE_TEST_DATABASE_URL (a Postgres test database)")

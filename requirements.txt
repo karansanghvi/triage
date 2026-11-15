@@ -7,3 +7,7 @@ google-genai
 datasets==5.1.0
 fastapi
 uvicorn
+sqlalchemy
+alembic
+psycopg[binary]
+cryptography

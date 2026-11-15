@@ -86,6 +86,7 @@ class RequestRow:
     checker_version: Optional[int] = None  # the AI checker's version, when it ran
     mode: Optional[str] = None             # demo | byok | api ("api" for key-authenticated requests)
     preferred_provider: Optional[str] = None   # X-Triage-Prefer-Provider when applied (BYOK, key sent, "auto")
+    user_id: Optional[str] = None          # the account that made the request (accounts, later); None otherwise
     escalated_from: Optional[str] = None   # the tier the router picked
     escalated_to: Optional[str] = None     # the tier whose answer was served
     escalation_extra_cost: Optional[float] = None       # price_as cost of the extra answers
