@@ -158,13 +158,29 @@ TRIAGE_KEY_ENDPOINTS = [("post", "/v1/chat/completions"), ("get", "/v1/models"),
                         ("get", "/v1/requests/chatcmpl-x"), ("get", "/v1/routing-config")]
 
 
-@pytest.mark.parametrize("method, path", TRIAGE_KEY_ENDPOINTS)
-def test_a_valid_trk_key_gets_a_clear_403_everywhere_for_now(method, path):
+@pytest.mark.parametrize("method, path, status, code", [
+    ("get", "/v1/models", 200, None),
+    ("get", "/v1/stats", 200, None),
+    ("get", "/v1/requests/chatcmpl-x", 404, "not_found"),
+    ("get", "/v1/routing-config", 403, "admin_key_required"),        # accounts are never admins
+])
+def test_a_valid_trk_key_on_the_other_triage_key_endpoints(method, path, status, code):
     http, deps = app()
     key = create(http, session(http)).json()["key"]
-    r = http.request(method.upper(), path, json=ASK, headers={"Authorization": f"Bearer {key}"})
-    assert r.status_code == 403 and r.json()["error"]["code"] == "account_mode_unavailable"
-    assert key not in r.text and deps.fake_models.calls == [] and deps.log.rows() == []
+    r = http.request(method.upper(), path, headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == status and key not in r.text
+    if code:
+        assert r.json()["error"]["code"] == code
+    if path == "/v1/stats":
+        assert r.json()["scope"] == "your account"
+
+
+def test_a_session_token_works_on_the_triage_key_endpoints_too():
+    http, _ = app()
+    auth = session(http)
+    assert http.get("/v1/models", headers=auth).status_code == 200
+    assert http.get("/v1/stats", headers=auth).json()["scope"] == "your account"
+    assert http.get("/v1/routing-config", headers=auth).status_code == 403
 
 
 @pytest.mark.parametrize("public", [False, True])

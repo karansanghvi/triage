@@ -44,7 +44,7 @@ from starlette.background import BackgroundTask
 from app.api import core
 from app.api.auth import (ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, accounts_from_env, keys_from_env,
                           public_from_env)
-from app.accounts.credentials import API_KEY_PREFIX
+from app.accounts.credentials import API_KEY_PREFIX, SESSION_PREFIX
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
 from app.api.demo import DemoLimitError, client_ip, visitor_id
 from app.api.errors import APIError, bad_request, stream_error_event
@@ -498,42 +498,52 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         return _error_response(bad_request(f"Invalid request: {param or 'body'}: {first.get('msg', 'invalid')}",
                                            param, "invalid_request"))
 
-    async def account_key_gate(authorization: Optional[str]) -> None:
-        """Accounts on and a "trk_" bearer key: an account API key, checked in the database (a worker thread).
-        Revoked, unknown or malformed: the same 401 as any bad key. Valid: its use is recorded (at most once a
-        minute) and, until account chat exists (PR 6), a 403 account_mode_unavailable on every Triage-key
-        endpoint. Anything else falls through to the env keys (TRIAGE_API_KEYS / TRIAGE_ADMIN_KEYS), unchanged."""
+    async def account_caller(authorization: Optional[str]) -> Optional[Caller]:
+        """Accounts on and a "trk_" or "trs_" bearer token: the account behind it (a worker thread: database).
+        trk_: a user's API key (key_id = its public id; its last use is recorded, at most once a minute).
+        trs_: a session token, i.e. website chat (key_id = "session").
+        Revoked, unknown, expired or malformed: the same 401 as any bad key. Anything else: None, and the env
+        keys (TRIAGE_API_KEYS / TRIAGE_ADMIN_KEYS) decide, unchanged."""
         if not app.state.accounts or not authorization or not authorization.lower().startswith("bearer "):
-            return
-        key = authorization[7:].strip()
-        if not key.startswith(API_KEY_PREFIX):
-            return
-        api_keys = app.state.deps.api_keys
-
-        def check():
-            found = api_keys.lookup(key)
-            if found is not None:
-                api_keys.touch(found)
-            return found
-
-        if await anyio.to_thread.run_sync(check) is None:
+            return None
+        token = authorization[7:].strip()
+        deps = app.state.deps
+        if token.startswith(API_KEY_PREFIX):
+            def check():
+                found = deps.api_keys.lookup(token)
+                if found is None:
+                    return None
+                deps.api_keys.touch(found)
+                user = deps.accounts.user_by_id(found.user_id)
+                return None if user is None else (found.public_id, user)
+        elif token.startswith(SESSION_PREFIX):
+            def check():
+                found = deps.accounts.session_for_token(token)
+                return None if found is None else ("session", found[1])
+        else:
+            return None
+        found = await anyio.to_thread.run_sync(check)
+        if found is None:
             raise APIError(401, "Incorrect API key provided.", code="invalid_api_key")
-        raise APIError(403, "Account API keys can't be used yet: chat and the other endpoints with account keys "
-                       f"are coming soon. For now, send your provider keys directly ({_KEY_HEADER_LIST}).",
-                       "permission_error", code="account_mode_unavailable")
+        key_id, user = found
+        return Caller(key_id, False, "account", user.id, user.preferred_provider)
 
     async def caller(authorization: Optional[str] = Header(None)) -> Caller:
-        await account_key_gate(authorization)
-        return app.state.auth.check(authorization)
+        return await account_caller(authorization) or app.state.auth.check(authorization)
 
     async def admin(authorization: Optional[str] = Header(None)) -> Caller:
-        await account_key_gate(authorization)
+        if await account_caller(authorization) is not None:        # accounts are never admins
+            raise APIError(403, "This endpoint needs an admin key.", "permission_error", code="admin_key_required")
         return app.state.auth.check(authorization, admin=True)
 
     async def chat_caller(authorization: Optional[str] = Header(None)) -> Optional[Caller]:
         """Public access on: no Authorization header = no caller (demo or BYOK); a header that is sent must be
         valid. Off: exactly `caller`."""
-        await account_key_gate(authorization)
+        account = await account_caller(authorization)
+        if account is not None:
+            raise APIError(403, "Account API keys can't be used yet: chat with account keys is coming soon. For "
+                           f"now, send your provider keys directly ({_KEY_HEADER_LIST}).", "permission_error",
+                           code="account_mode_unavailable")
         if not app.state.public:
             return app.state.auth.check(authorization)
         return app.state.auth.optional(authorization)
@@ -835,14 +845,20 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     @app.get("/v1/stats")
     async def stats(who: Caller = Depends(caller)):
         # read from the log (survives restarts), without the feature and embedding columns
-        mine = await anyio.to_thread.run_sync(lambda: app.state.deps.log.rows(None if who.admin else who.key_id,
-                                                                             include_vectors=False))
+        log = app.state.deps.log
+        if who.kind == "account":              # every request of this account, whichever of its keys made it
+            mine = await anyio.to_thread.run_sync(lambda: log.rows(user_id=who.user_id, include_vectors=False))
+            return {"scope": "your account", **summarize(mine)}
+        mine = await anyio.to_thread.run_sync(lambda: log.rows(None if who.admin else who.key_id,
+                                                               include_vectors=False))
         return {"scope": "all keys" if who.admin else "your key", **summarize(mine)}
 
     @app.get("/v1/requests/{request_id}")
     async def get_request(request_id: str, who: Caller = Depends(caller)):
         row = await anyio.to_thread.run_sync(lambda: app.state.deps.log.get(request_id, include_vectors=False))
-        if row is None or row.key_id != who.key_id:          # someone else's request looks like a missing one
+        owner = (row.user_id == who.user_id) if (row is not None and who.kind == "account") else \
+            (row is not None and row.user_id is None and row.key_id == who.key_id)
+        if not owner:                                       # someone else's request looks like a missing one
             raise APIError(404, f"No request {request_id!r} for this key.", param="request_id", code="not_found")
         return row.public_dict()
 
