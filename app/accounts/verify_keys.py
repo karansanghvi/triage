@@ -94,3 +94,8 @@ def verify_key(provider: str, key: str, client: Optional[httpx.Client] = None) -
     if status == 400 and "API_KEY_INVALID" in response.text:
         return Verdict("invalid", detail, True)
     return Verdict("unverified", detail, False)
+
+
+def fake_verify_key(provider: str, key: str) -> Verdict:
+    """Fake-model mode (TRIAGE_FAKE_MODELS=1) makes no API calls, so keys aren't checked: always unverified."""
+    return Verdict("unverified", "not checked in fake mode", False)

@@ -125,3 +125,12 @@ def test_fake_mode_ignores_database_url(paths, monkeypatch):
     ask(fake)
     assert fake.log.engine.url.database == str(paths["fake_log"]) and len(fake.log.rows()) == 1
     assert not paths["real_log"].exists()
+
+
+def test_fake_mode_never_calls_a_provider_to_check_a_saved_key(paths, monkeypatch):
+    from app.accounts.verify_keys import fake_verify_key, verify_key
+    monkeypatch.setenv("TRIAGE_FAKE_MODELS", "1")
+    assert deps_module.load_deps().key_verifier is fake_verify_key
+    assert fake_verify_key("openai", "sk-test-SECRET123").status == "unverified"
+    monkeypatch.delenv("TRIAGE_FAKE_MODELS")
+    assert deps_module.load_deps().key_verifier is verify_key

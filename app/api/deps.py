@@ -155,6 +155,7 @@ def load_deps() -> RouterDeps:
         send_fn = FakeModels()
     else:
         send_fn = send_request
+    from app.accounts.verify_keys import fake_verify_key       # fake mode: no API calls, keys included
     # One database for the request log and the demo counters: DATABASE_URL, or fake mode's own file
     from app import db
     engine = db.open_engine(db.database_url(fake))
@@ -171,4 +172,4 @@ def load_deps() -> RouterDeps:
     return build_deps(predictor, send_fn, registry=registry, config=config, cache=cache, classifier=classifier,
                       log=log, fake_models=send_fn if fake else None, hash_secret=hash_secret,
                       demo_settings=demo_settings, demo_limiter=demo_limiter, trusted_proxy_hops=trusted_proxy_hops,
-                      engine=engine)
+                      engine=engine, key_verifier=fake_verify_key if fake else None)
