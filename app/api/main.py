@@ -500,6 +500,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         max_tokens = settings.max_tokens or snapshot.routing.generation.get("max_tokens", DEFAULT_MAX_TOKENS)
         training = snapshot.routing.generation
         request_id = f"chatcmpl-triage-{uuid.uuid4().hex}"
+        # From here on every outcome is logged under this id, so errors carry it too (GET /v1/requests/{id})
+        request.state.triage_headers["X-Triage-Request-Id"] = request_id
         row = RequestRow(request_id=request_id, timestamp=_now(), key_id=key_id, requested_model=body.model,
                          stream=body.stream, quality=x_triage_quality, tau=tau if auto else None,
                          task_type=task, classifier=deps.classifier if auto else None,

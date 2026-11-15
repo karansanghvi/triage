@@ -162,3 +162,53 @@ def test_openai_sdk_still_parses_the_response():
     client = openai.OpenAI(base_url="http://testserver/v1", api_key=API_KEY, http_client=http, max_retries=0)
     completion = client.chat.completions.create(model="auto", messages=ASK)
     assert completion.choices[0].message.content and completion.model
+
+
+# ---------- the request id on errors ----------
+
+def test_logged_errors_carry_the_request_id():
+    http, deps = app()
+    r = chat(http, {"model": "no-such-model", "messages": ASK})
+    assert r.status_code == 404
+    (row,) = deps.log.rows()
+    assert r.headers["x-triage-request-id"] == row.request_id
+
+
+def test_a_failed_answer_carries_the_request_id_of_its_log_row():
+    from app.api.fake_models import FakeBehavior
+    http, deps = app(script={name: FakeBehavior(fail_before="server") for name in deps_registry()})
+    r = chat(http)
+    assert r.status_code == 503 and r.json()["error"]["code"] == "all_models_failed"
+    (row,) = deps.log.rows()
+    assert r.headers["x-triage-request-id"] == row.request_id and row.status == "error"
+
+
+def test_the_demo_limit_429_carries_the_request_id(tmp_path):
+    from app.api.demo import DemoLimiter, DemoSettings
+    settings = DemoSettings(visitor_daily_requests=1)
+    deps = make_deps(predictor=FakePredictor(0.95, 0.95), demo_settings=settings,
+                     demo_limiter=DemoLimiter(settings, tmp_path / "demo.sqlite3"))
+    http = TestClient(create_app(deps=deps, auth=Auth([API_KEY]), public=True))
+    assert http.post("/v1/chat/completions", json={"model": "auto", "messages": ASK}).status_code == 200
+    r = http.post("/v1/chat/completions", json={"model": "auto", "messages": ASK})
+    assert r.status_code == 429 and r.headers["x-triage-request-id"] == deps.log.rows()[-1].request_id
+
+
+@pytest.mark.parametrize("body, headers", [({"model": "auto", "messages": ASK, "top_p": 1}, {}),
+                                           (None, {"X-Triage-Quality": "86%"}),
+                                           ({"model": "auto", "messages": []}, {})])
+def test_errors_before_a_request_exists_have_no_id(body, headers):
+    http, deps = app()
+    r = chat(http, body, headers)
+    assert r.status_code == 400 and "x-triage-request-id" not in r.headers and deps.log.rows() == []
+
+
+def test_the_success_id_is_unchanged():
+    http, _ = app()
+    r = chat(http)
+    assert r.headers["x-triage-request-id"] == r.json()["id"] == r.json()["triage"]["request_id"]
+
+
+def deps_registry():
+    from app.registry import load_registry
+    return load_registry()
