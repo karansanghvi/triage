@@ -528,7 +528,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         visitor = visitor_id(client_ip(request, deps.trusted_proxy_hops), deps.hash_secret) if public else None
         demo = deps.demo_settings
         if mode == "demo":
-            status = deps.demo_limiter.status(visitor)
+            # The limiter's calls are database round trips: worker threads, like the request log
+            status = await anyio.to_thread.run_sync(deps.demo_limiter.status, visitor)
             request.state.triage_headers.update(demo_headers(status.remaining, status.limit, status.resets_at))
             if verify == "sync":         # checks and escalations would multiply the free calls
                 raise APIError(400, "X-Triage-Verify: sync isn't available in the free demo. Add your own provider "
@@ -593,16 +594,16 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         if mode == "demo":                 # counted only now, after every check that costs nothing
             estimate = -(-sum(len(m.content) for m in body.messages) // 4) + requested_max_tokens
             try:
-                admitted.append(deps.demo_limiter.admit_demo(visitor, estimate))
+                admitted.append(await anyio.to_thread.run_sync(deps.demo_limiter.admit_demo, visitor, estimate))
             except DemoLimitError as error:
-                status = deps.demo_limiter.status(visitor)
+                status = await anyio.to_thread.run_sync(deps.demo_limiter.status, visitor)
                 request.state.triage_headers.update(demo_headers(status.remaining, status.limit, status.resets_at))
                 await finish("error", 429, error.code)
                 raise demo_limit_error(error, demo) from None
             request.state.triage_headers["X-Triage-Demo-Remaining"] = str(admitted[0].remaining)
         elif mode == "byok" and public:   # BYOK without a Triage key: a generous per-visitor cap (the user pays)
             try:
-                admitted.append(deps.demo_limiter.admit_public_byok(visitor))
+                admitted.append(await anyio.to_thread.run_sync(deps.demo_limiter.admit_public_byok, visitor))
             except DemoLimitError as error:
                 await finish("error", 429, error.code)
                 raise demo_limit_error(error, demo) from None
@@ -747,7 +748,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             return {"enabled": False}
         deps = app.state.deps
         visitor = visitor_id(client_ip(request, deps.trusted_proxy_hops), deps.hash_secret)
-        status = deps.demo_limiter.status(visitor)
+        status = await anyio.to_thread.run_sync(deps.demo_limiter.status, visitor)
         demo = deps.demo_settings
         return {"enabled": True, "paused": status.paused, "paused_reason": status.paused_reason,
                 "visitor": {"limit": status.limit, "used": status.used, "remaining": status.remaining},

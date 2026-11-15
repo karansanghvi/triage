@@ -67,3 +67,108 @@ def test_postgres_is_refused_until_migrated_then_matches_the_tables(schema_url):
             "AND table_schema = current_schema() ORDER BY ordinal_position"))]
     assert cols == ["id"] + [f.name for f in fields(RequestRow)]
     raw.dispose()
+
+
+# ---------- the DemoLimiter on Postgres: no limit is ever overshot ----------
+
+import threading                                                     # noqa: E402
+from datetime import datetime, timedelta, timezone                   # noqa: E402
+
+from app.api.demo import DemoLimiter, DemoLimitError, DemoSettings   # noqa: E402
+
+START = datetime(2026, 11, 13, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def instances(schema_url):
+    """Three limiters, each with its own engine (its own connection pool and in-process lock), like three
+    server instances on one database: only the database's own locking keeps them from overshooting."""
+    raw = create_engine(schema_url)
+    db.upgrade(raw)
+    raw.dispose()
+    made = []
+
+    def build(settings, n=3, clock=lambda: START):
+        for _ in range(n):
+            made.append(DemoLimiter(settings, clock=clock, engine=db.open_engine(schema_url)))
+        return made[-n:]
+
+    yield build
+    for limiter in made:
+        limiter.engine.dispose()
+
+
+def run_together(calls):
+    """Start every call at once (a barrier), wait for all; returns (results, refusal codes)."""
+    barrier = threading.Barrier(len(calls))
+    results, refused, lock = [], [], threading.Lock()
+
+    def go(call):
+        barrier.wait()
+        try:
+            out = call()
+            with lock:
+                results.append(out)
+        except DemoLimitError as error:
+            with lock:
+                refused.append(error.code)
+
+    threads = [threading.Thread(target=go, args=(c,)) for c in calls]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return results, refused
+
+
+def test_many_admissions_for_one_visitor_never_exceed_its_daily_limit(instances):
+    limiters = instances(DemoSettings(visitor_daily_requests=10, daily_requests=1_000, daily_tokens=1_000_000,
+                                      daily_model_calls=1_000, per_minute_requests=1_000))
+    results, refused = run_together([lambda l=limiters[i % 3]: l.admit_demo("v1", 1) for i in range(30)])
+    assert len(results) == 10 and refused == ["demo_limit_reached"] * 20
+    assert sorted(a.remaining for a in results) == list(range(10))
+    assert limiters[0].status("v1").used == 10
+
+
+def test_many_admissions_never_exceed_the_token_budget(instances):
+    limiters = instances(DemoSettings(visitor_daily_requests=1_000, daily_requests=1_000, daily_tokens=1_000,
+                                      daily_model_calls=1_000, per_minute_requests=1_000))
+    results, refused = run_together([lambda l=limiters[i % 3], i=i: l.admit_demo(f"v{i}", 100) for i in range(30)])
+    assert len(results) == 10 and set(refused) == {"demo_paused"} and len(refused) == 20
+    with limiters[0].engine.connect() as connection:
+        assert connection.execute(text("SELECT tokens, requests FROM demo_day")).one() == (1_000, 10)
+
+
+def test_many_admissions_never_exceed_the_daily_request_total(instances):
+    limiters = instances(DemoSettings(visitor_daily_requests=1_000, daily_requests=7, daily_tokens=1_000_000,
+                                      daily_model_calls=1_000, per_minute_requests=1_000))
+    results, _ = run_together([lambda l=limiters[i % 3], i=i: l.admit_demo(f"v{i}", 1) for i in range(24)])
+    assert len(results) == 7
+
+
+def test_public_byok_admissions_never_exceed_the_visitor_cap(instances):
+    limiters = instances(DemoSettings(public_byok_visitor_daily_requests=5))
+    results, refused = run_together([lambda l=limiters[i % 3]: l.admit_public_byok("v1") for i in range(15)])
+    assert len(results) == 5 and refused == ["public_limit_reached"] * 10
+
+
+def test_settling_concurrently_loses_no_update(instances):
+    limiters = instances(DemoSettings(visitor_daily_requests=1_000, daily_requests=1_000, daily_tokens=1_000_000,
+                                      daily_model_calls=1_000, per_minute_requests=1_000))
+    admissions = [limiters[0].admit_demo(f"v{i}", 100) for i in range(12)]
+    run_together([lambda l=limiters[i % 3], a=a: l.settle(a, tokens=40, calls=2) for i, a in enumerate(admissions)])
+    with limiters[0].engine.connect() as connection:
+        assert connection.execute(text("SELECT tokens, calls FROM demo_day")).one() == (12 * 40, 12 * 2)
+
+
+def test_settle_applies_to_the_admission_day_and_cleanup_works(instances):
+    now = [START.replace(hour=23, minute=59)]
+    (limiter,) = instances(DemoSettings(), n=1, clock=lambda: now[0])
+    admission = limiter.admit_demo("v1", 500)
+    now[0] = START + timedelta(days=1)                                 # the request ends after midnight
+    limiter.settle(admission, tokens=200, calls=3)
+    with limiter.engine.connect() as connection:
+        rows = connection.execute(text("SELECT day, tokens, calls FROM demo_day ORDER BY day")).all()
+    assert rows == [("2026-11-13", 200, 3)]
+    now[0] = START + timedelta(days=9)
+    assert limiter.cleanup() == 2 and limiter.stored_days() == []

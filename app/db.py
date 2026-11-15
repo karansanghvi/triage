@@ -9,8 +9,8 @@ The schema is owned by Alembic (migrations/). A SQLite database is upgraded to t
 opened (local files and tests need no extra step); any other database must already be at the latest revision
 (run `alembic upgrade head` as a deploy step) or Triage refuses to start.
 
-Tables here are what the code reads and writes; migrations/versions/ is what creates them. A test checks that
-the two match.
+Tables here are what the code reads and writes (the request log and labels; the demo counters);
+migrations/versions/ is what creates them. A test checks that the two match.
 """
 import os
 from dataclasses import fields
@@ -20,6 +20,7 @@ from typing import Optional, Union, get_args
 from sqlalchemy import (Boolean, Column, Double, Engine, Index, Integer, LargeBinary, MetaData, Table, Text,
                         create_engine, event, inspect)
 from sqlalchemy.engine import make_url
+from sqlalchemy.pool import StaticPool
 
 from app.registry import PROJECT_ROOT
 
@@ -62,6 +63,14 @@ def _tables():
 
 requests_table, labels_table = _tables()
 
+# The DemoLimiter's counters (app/api/demo.py), per UTC day
+visitor_day_table = Table("visitor_day", metadata,
+                          Column("day", Text, primary_key=True), Column("kind", Text, primary_key=True),
+                          Column("visitor", Text, primary_key=True), Column("requests", Integer, nullable=False))
+demo_day_table = Table("demo_day", metadata,
+                       Column("day", Text, primary_key=True), Column("requests", Integer, nullable=False),
+                       Column("tokens", Integer, nullable=False), Column("calls", Integer, nullable=False))
+
 
 # ---------- engines ----------
 
@@ -99,7 +108,10 @@ def open_engine(url: str) -> Engine:
     if parsed.get_backend_name() == "sqlite":
         if parsed.database and parsed.database != ":memory:":
             Path(parsed.database).parent.mkdir(parents=True, exist_ok=True)
-        engine = create_engine(url, connect_args={"check_same_thread": False, "timeout": 30})
+        memory = not parsed.database or parsed.database == ":memory:"
+        # In memory: one connection shared by every thread (each new connection would be a new, empty database)
+        engine = create_engine(url, connect_args={"check_same_thread": False, "timeout": 30},
+                               **({"poolclass": StaticPool} if memory else {}))
         event.listen(engine, "connect", _sqlite_pragmas)
     else:
         engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5, pool_recycle=300)

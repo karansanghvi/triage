@@ -17,10 +17,10 @@ def engine_at(tmp_path, name="t.sqlite3"):
 
 def test_opening_a_new_sqlite_file_creates_the_schema_at_the_latest_revision(tmp_path):
     engine = engine_at(tmp_path)
-    assert db.current_revision(engine) == db.head_revision() == "0001"
+    assert db.current_revision(engine) == db.head_revision() == "0002"
     raw = sqlite3.connect(tmp_path / "t.sqlite3")
     tables = {r[0] for r in raw.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    assert {"requests", "labels", "alembic_version"} <= tables
+    assert {"requests", "labels", "visitor_day", "demo_day", "alembic_version"} <= tables
     engine.dispose()
 
 
@@ -84,7 +84,7 @@ def test_a_database_behind_the_code_is_refused_unless_sqlite(tmp_path, monkeypat
     engine = engine_at(tmp_path)
     monkeypatch.setattr(db, "head_revision", lambda: "9999")
     monkeypatch.setattr(engine.dialect, "name", "postgresql")
-    with pytest.raises(RuntimeError, match="revision 0001, this code needs 9999.*alembic upgrade head"):
+    with pytest.raises(RuntimeError, match="revision 0002, this code needs 9999.*alembic upgrade head"):
         db.migrate_or_check(engine)
     engine.dispose()
 
@@ -112,3 +112,33 @@ def test_real_mode_refuses_the_fake_database(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_URL", db.sqlite_url(tmp_path / "f.sqlite3"))
     with pytest.raises(RuntimeError, match="fake-mode database"):
         db.database_url()
+
+
+def test_an_in_memory_database_is_one_database_for_every_thread():
+    import threading
+    engine = db.open_engine("sqlite://")
+    seen = []
+
+    def look():
+        with engine.connect() as connection:
+            seen.append(connection.exec_driver_sql("SELECT count(*) FROM demo_day").scalar())
+
+    thread = threading.Thread(target=look)
+    thread.start()
+    thread.join()
+    assert seen == [0]                                              # the migrated tables, seen from another thread
+    engine.dispose()
+
+
+def test_a_revision_0001_database_is_upgraded_to_add_the_demo_tables(tmp_path):
+    engine = db.open_engine(db.sqlite_url(tmp_path / "t.sqlite3"))
+    with engine.begin() as connection:
+        from alembic import command
+        command.downgrade(db.alembic_config(connection), "0001")
+    assert db.current_revision(engine) == "0001"
+    engine.dispose()
+    again = db.open_engine(db.sqlite_url(tmp_path / "t.sqlite3"))
+    assert db.current_revision(again) == "0002"
+    raw = sqlite3.connect(tmp_path / "t.sqlite3")
+    assert {"visitor_day", "demo_day"} <= {r[0] for r in raw.execute("SELECT name FROM sqlite_master")}
+    again.dispose()

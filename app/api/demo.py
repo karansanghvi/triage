@@ -13,16 +13,15 @@ Public BYOK requests (provider keys, no Triage key) only get a generous per-visi
 Visitors are identified by client IP (client_ip, honouring TRIAGE_TRUSTED_PROXY_HOPS), and only ever stored as a
 keyed hash (visitor_id). Raw IPs are never stored or logged.
 
-The DemoLimiter keeps its counters in SQLite (TRIAGE_DEMO_DB) so they survive restarts, or in memory for tests.
-On a host with an ephemeral disk the file is lost on every redeploy or restart, and every limit starts over; the
-providers' own free-tier quotas are then the only backstop.
+The DemoLimiter keeps its counters in the app's database (app/db.py: DATABASE_URL, Postgres in production), so
+they survive restarts and redeploys and are shared by every instance; or in memory for tests. (Locally the default
+is the SQLite file data/triage.sqlite3. The old data/demo/usage.sqlite3 is no longer used.)
 """
 import hashlib
 import hmac
 import ipaddress
 import math
 import os
-import sqlite3
 import threading
 from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
@@ -31,12 +30,11 @@ from typing import Callable, Literal, Optional
 from collections import deque
 from contextlib import contextmanager
 
+from sqlalchemy import delete, func, select, union, update
+
 from app.registry import PROJECT_ROOT
 
 TRUSTED_PROXY_HOPS_ENV = "TRIAGE_TRUSTED_PROXY_HOPS"
-DEMO_DB_ENV = "TRIAGE_DEMO_DB"
-DEFAULT_DEMO_DB = PROJECT_ROOT / "data" / "demo" / "usage.sqlite3"
-FAKE_DEMO_DB = PROJECT_ROOT / "data" / "demo" / "fake_usage.sqlite3"     # TRIAGE_FAKE_MODELS=1 runs
 VISITOR_ID_HEX_CHARS = 16
 UNKNOWN_CLIENT = "unknown"
 WINDOW_SECONDS = 60               # the per-minute window
@@ -135,14 +133,6 @@ def load_demo_settings(path=DEFAULT_DEMO_SETTINGS_PATH) -> DemoSettings:
     return DemoSettings(**{n: data[n] for n in names})
 
 
-def demo_db_path(fake: bool) -> Optional[Path]:
-    """The limiter's SQLite file: TRIAGE_DEMO_DB, else the real or the fake-mode file. None (in memory) when the
-    request log is in memory too (TRIAGE_LOG=memory)."""
-    if os.environ.get("TRIAGE_LOG", "sqlite").lower() == "memory":
-        return None
-    return Path(os.environ.get(DEMO_DB_ENV) or (FAKE_DEMO_DB if fake else DEFAULT_DEMO_DB))
-
-
 ErrorCode = Literal["demo_limit_reached", "demo_paused", "demo_busy", "public_limit_reached"]
 PausedReason = Literal["daily_requests", "daily_tokens", "daily_model_calls"]
 
@@ -207,64 +197,83 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# pg_advisory_xact_lock key for every DemoLimiter transaction on Postgres (any fixed 64-bit number; the
+# Postgres counterpart of SQLite's BEGIN IMMEDIATE: one check-and-count at a time, across every instance)
+DEMO_LOCK_KEY = 0x7472_6961_6765_0001
+
+
 class DemoLimiter:
-    """Demo and public-BYOK usage counters, shared by every request (and every worker process, through SQLite).
+    """Demo and public-BYOK usage counters, shared by every request, and by every instance through the database.
 
-    path   a SQLite file, so counters survive restarts; None = in memory (tests, TRIAGE_LOG=memory).
-    clock  returns the current time as an aware UTC datetime; days, the per-minute window and Retry-After all
-           use it (tests pass a fake clock).
+    settings  DemoSettings
+    path      a SQLite file of its own (tests); None and no engine = an in-memory database (tests, build_deps)
+    clock     returns the current time as an aware UTC datetime; days, the per-minute window and Retry-After all
+              use it (tests pass a fake clock)
+    engine    the app's database (app/db.py: DATABASE_URL or data/triage.sqlite3), shared with the request log
 
-    Counted per UTC day ("YYYY-MM-DD" of clock()):
+    Counted per UTC day ("YYYY-MM-DD" of clock()), in the visitor_day and demo_day tables:
         per visitor and kind ("demo" / "byok"): requests
         demo-wide: requests, tokens (settled actuals plus open reservations), model calls
     The per-minute window holds the times of demo requests admitted in the last 60 s. It lives in memory in each
-    process (not in SQLite), so with several workers each enforces it separately.
+    instance (not in the database), so with several instances each enforces it separately.
 
-    Every check-and-count is atomic: with threads (a lock) and with several processes on one SQLite file (one
-    BEGIN IMMEDIATE transaction per admission or settlement). A refused request changes nothing.
-    Rows for days older than retention_days are deleted when the limiter is created, and by cleanup().
+    Every check-and-count is atomic: with threads (a lock), and across instances by one transaction per admission
+    or settlement that runs alone (SQLite: BEGIN IMMEDIATE; Postgres: pg_advisory_xact_lock). A refused request
+    changes nothing. Rows for days older than retention_days are deleted when the limiter is created, and by
+    cleanup(). Blocking: call it from a worker thread in async code.
     """
 
-    def __init__(self, settings, path=None, clock=utc_now):
+    def __init__(self, settings, path=None, clock=utc_now, engine=None):
+        from app import db
         self.settings, self._clock = settings, clock
         self._lock = threading.Lock()
         self._window = deque()          # admission times of recent demo requests
-        if path is not None:
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(
-            ":memory:" if path is None else str(path), 
-            isolation_level=None,   # we manage transactions ourselves 
-            check_same_thread=False, # threads share this connection, guarded by self._lock
-            timeout=30,             # wait for other processes instead of failing 
-        )
-        if path is not None:
-            self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.executescript("""
-                               CREATE TABLE IF NOT EXISTS visitor_day (
-                                   day TEXT, kind TEXT, visitor TEXT, requests INTEGER NOT NULL,
-                                   PRIMARY KEY (day, kind, visitor));
-                                CREATE TABLE IF NOT EXISTS demo_day (
-                                    day TEXT PRIMARY KEY, requests INTEGER NOT NULL,
-                                    tokens INTEGER NOT NULL, calls INTEGER NOT NULL);
-        """)
-        self.cleanup();
-    
+        self._owns_engine = engine is None
+        self.engine = engine if engine is not None else db.open_engine(
+            db.sqlite_url(path) if path is not None else "sqlite://")
+        self._visitors, self._days = db.visitor_day_table, db.demo_day_table
+        self.cleanup()
+
     @contextmanager
     def _transaction(self):
-        """One atmoic unit: everything inside commits together or not at all"""
-        self._db.execute("BEGIN IMMEDIATE")
-        try:
-            yield self._db
-            self._db.execute("COMMIT")
-        except BaseException:
-            self._db.execute("ROLLBACK")
-            raise
-    
+        """One atomic unit that runs alone: everything inside commits together or not at all."""
+        if self.engine.dialect.name == "sqlite":
+            # The driver would otherwise start the transaction only at the first write, after our reads
+            with self.engine.connect() as connection:
+                connection = connection.execution_options(isolation_level="AUTOCOMMIT")
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    yield connection
+                    connection.exec_driver_sql("COMMIT")
+                except BaseException:
+                    connection.exec_driver_sql("ROLLBACK")
+                    raise
+            return
+        with self.engine.begin() as connection:
+            if self.engine.dialect.name == "postgresql":     # held until this transaction ends
+                connection.execute(select(func.pg_advisory_xact_lock(DEMO_LOCK_KEY)))
+            yield connection
+
+    def _insert(self, table):
+        """INSERT for this database's dialect, which has on_conflict_do_update."""
+        if self.engine.dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        return insert(table)
+
+    def _count_visitor(self, db, day: str, kind: str, visitor: str) -> None:
+        v = self._visitors
+        statement = self._insert(v).values(day=day, kind=kind, visitor=visitor, requests=1)
+        db.execute(statement.on_conflict_do_update(index_elements=[v.c.day, v.c.kind, v.c.visitor],
+                                                   set_={"requests": v.c.requests + 1}))
+
     def _today(self, now):
-       return now.strftime("%Y-%m-%d")
+        return now.strftime("%Y-%m-%d")
 
     def close(self):
-        self._db.close()
+        if self._owns_engine:
+            self.engine.dispose()
 
     def admit_demo(self, visitor: str, estimated_tokens: int) -> Admission:
         """Count one demo request for `visitor`, or raise DemoLimitError without counting anything.
@@ -304,12 +313,12 @@ class DemoLimiter:
                     oldest_age = (now - self._window[0]).total_seconds()
                     raise DemoLimitError("demo_busy", max(1, math.ceil(WINDOW_SECONDS - oldest_age)))
                 # admitted: count the request and reserve its tokens
-                db.execute("INSERT INTO visitor_day (day, kind, visitor, requests) VALUES (?, 'demo', ?, 1) "
-                           "ON CONFLICT (day, kind, visitor) DO UPDATE SET requests = requests + 1",
-                           (day, visitor))
-                db.execute("INSERT INTO demo_day (day, requests, tokens, calls) VALUES (?, 1, ?, 0) "
-                           "ON CONFLICT (day) DO UPDATE SET requests = requests + 1, tokens = tokens + excluded.tokens",
-                           (day, estimated_tokens))
+                self._count_visitor(db, day, "demo", visitor)
+                d = self._days
+                statement = self._insert(d).values(day=day, requests=1, tokens=estimated_tokens, calls=0)
+                db.execute(statement.on_conflict_do_update(
+                    index_elements=[d.c.day],
+                    set_={"requests": d.c.requests + 1, "tokens": d.c.tokens + statement.excluded.tokens}))
             self._window.append(now)       # only once the transaction has committed
         return Admission("demo", visitor, day, estimated_tokens, cfg.visitor_daily_requests - (used + 1),
                          cfg.visitor_daily_requests)
@@ -330,9 +339,7 @@ class DemoLimiter:
                 used = self._visitor_requests(db, day, "byok", visitor)
                 if used >= limit:
                     raise DemoLimitError("public_limit_reached", seconds_until_midnight(now))
-                db.execute("INSERT INTO visitor_day (day, kind, visitor, requests) VALUES (?, 'byok', ?, 1) "
-                           "ON CONFLICT (day, kind, visitor) DO UPDATE SET requests = requests + 1",
-                           (day, visitor))
+                self._count_visitor(db, day, "byok", visitor)
         return Admission("byok", visitor, day, 0, limit - (used + 1), limit)
 
     def settle(self, admission: Admission, tokens: int, calls: int) -> None:
@@ -345,11 +352,12 @@ class DemoLimiter:
         """
         if admission.kind != "demo":
             return
+        d = self._days
         with self._lock:
             with self._transaction() as db:
                 # UPDATE only: if that day's row is gone (cleaned up), there's nothing left to correct
-                db.execute("UPDATE demo_day SET tokens = tokens + ?, calls = calls + ? WHERE day = ?",
-                           (tokens - admission.reserved_tokens, calls, admission.day))
+                db.execute(update(d).where(d.c.day == admission.day).values(
+                    tokens=d.c.tokens + (tokens - admission.reserved_tokens), calls=d.c.calls + calls))
 
     def status(self, visitor: str) -> DemoStatus:
         """Today's demo state for `visitor` (see DemoStatus). Counts nothing and needs no window slot."""
@@ -357,8 +365,9 @@ class DemoLimiter:
         day = self._today(now)
         cfg = self.settings
         with self._lock:
-            requests, tokens, calls = self._totals(self._db, day)
-            used = self._visitor_requests(self._db, day, "demo", visitor)
+            with self.engine.connect() as db:
+                requests, tokens, calls = self._totals(db, day)
+                used = self._visitor_requests(db, day, "demo", visitor)
         if requests >= cfg.daily_requests:
             reason = "daily_requests"
         elif tokens >= cfg.daily_tokens:
@@ -386,16 +395,16 @@ class DemoLimiter:
         while self._window and (now - self._window[0]).total_seconds() >= WINDOW_SECONDS:
             self._window.popleft()
 
-    @staticmethod
-    def _totals(db, day: str) -> tuple:
+    def _totals(self, db, day: str) -> tuple:
         """(requests, tokens, calls) for one day, demo-wide; zeros if nothing is stored yet."""
-        row = db.execute("SELECT requests, tokens, calls FROM demo_day WHERE day = ?", (day,)).fetchone()
+        d = self._days
+        row = db.execute(select(d.c.requests, d.c.tokens, d.c.calls).where(d.c.day == day)).fetchone()
         return tuple(row) if row else (0, 0, 0)
 
-    @staticmethod
-    def _visitor_requests(db, day: str, kind: str, visitor: str) -> int:
-        row = db.execute("SELECT requests FROM visitor_day WHERE day = ? AND kind = ? AND visitor = ?",
-                         (day, kind, visitor)).fetchone()
+    def _visitor_requests(self, db, day: str, kind: str, visitor: str) -> int:
+        v = self._visitors
+        row = db.execute(select(v.c.requests).where(v.c.day == day, v.c.kind == kind, v.c.visitor == visitor)) \
+            .fetchone()
         return row[0] if row else 0
 
     def cleanup(self) -> int:
@@ -405,16 +414,16 @@ class DemoLimiter:
         cutoff = self._today(now - timedelta(days=self.settings.retention_days))
         with self._lock:
             with self._transaction() as db:
-                visitors = db.execute("DELETE FROM visitor_day WHERE day < ?", (cutoff,)).rowcount
-                totals = db.execute("DELETE FROM demo_day WHERE day < ?", (cutoff,)).rowcount
+                visitors = db.execute(delete(self._visitors).where(self._visitors.c.day < cutoff)).rowcount
+                totals = db.execute(delete(self._days).where(self._days.c.day < cutoff)).rowcount
         return visitors + totals
 
     def stored_days(self) -> list:
         """The UTC days ("YYYY-MM-DD", oldest first) that have any stored counters, for cleanup checks."""
+        days = union(select(self._visitors.c.day), select(self._days.c.day)).order_by("day")
         with self._lock:
-            rows = self._db.execute(
-                "SELECT day FROM visitor_day UNION SELECT day FROM demo_day ORDER BY day"
-            ).fetchall()
+            with self.engine.connect() as db:
+                rows = db.execute(days).fetchall()
         return [row[0] for row in rows]
 
 
