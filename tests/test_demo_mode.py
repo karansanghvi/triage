@@ -327,3 +327,47 @@ def test_public_byok_doesnt_use_the_demo_budgets():
         assert chat(http, ip=f"198.51.100.{i}", headers=GROQ_KEY).status_code == 200
     assert deps.demo_limiter.status("x").paused is False
     assert deps.demo_limiter.requests_in_last_minute() == 0
+
+
+# ---------- limiter calls stay off the event loop ----------
+
+class ThreadRecordingLimiter(DemoLimiter):
+    """Records the thread of every call: on Postgres each is a network round trip, so none may run on the event
+    loop's thread."""
+
+    def __init__(self, *args, **kwargs):
+        self.threads = []
+        super().__init__(*args, **kwargs)
+
+    def _record(self, name):
+        import threading
+        self.threads.append((name, threading.current_thread().name))
+
+    def status(self, visitor):
+        self._record("status")
+        return super().status(visitor)
+
+    def admit_demo(self, visitor, estimated_tokens):
+        self._record("admit_demo")
+        return super().admit_demo(visitor, estimated_tokens)
+
+    def admit_public_byok(self, visitor):
+        self._record("admit_public_byok")
+        return super().admit_public_byok(visitor)
+
+    def settle(self, admission, tokens, calls):
+        self._record("settle")
+        return super().settle(admission, tokens, calls)
+
+
+def test_every_limiter_call_from_the_api_runs_in_a_worker_thread():
+    limiter = ThreadRecordingLimiter(settings(visitor_daily_requests=1), clock=Clock())
+    deps = make_deps(predictor=FakePredictor(0.95, 0.95), demo_limiter=limiter, trusted_proxy_hops=1)
+    http = TestClient(create_app(deps=deps, auth=Auth([API_KEY]), public=True))
+    assert chat(http).status_code == 200                                   # status, admit_demo, settle
+    assert chat(http).status_code == 429                                   # refused: status again
+    assert chat(http, ip="203.0.113.8", headers={"x-groq-key": "sk-test-SECRET123"}).status_code == 200
+    http.get("/v1/demo/status", headers={"X-Forwarded-For": "203.0.113.7"})
+    assert {"status", "admit_demo", "admit_public_byok", "settle"} <= {name for name, _ in limiter.threads}
+    on_loop = [(n, t) for n, t in limiter.threads if not t.startswith("AnyIO worker thread")]
+    assert on_loop == []
