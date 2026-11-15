@@ -15,8 +15,10 @@ Endpoints
     PUT  /v1/routing-config       update quality presets/default and backup models live (admin; not persisted)
 
 Response headers: X-Triage-Request-Id, -Model, -Tier, -Reason, -Fallback, -Cache, -Verified, -Escalated,
--Check, and on non-streaming responses -Cost and -Saved (including any checks and escalation). A stream's headers are sent once its first token exists, so
-model, tier and fallback are real; its cost isn't known yet, so -Cost and -Saved are left out (never faked).
+-Check, -P-Low, -P-Medium and -Tau (model "auto" only, 6 decimals), and on non-streaming responses -Cost,
+-Strong-Cost and -Saved (including any checks and escalation). A stream's headers are sent once its first token
+exists, so model, tier and fallback are real; its cost isn't known yet, so -Cost, -Strong-Cost and -Saved are left
+out (never faked).
 The real figures are in GET /v1/requests/{id} once the stream ends, and in /v1/stats.
 """
 import dataclasses
@@ -203,7 +205,19 @@ def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] =
             "X-Triage-Reason": _header_safe(reason or d.reason),
             "X-Triage-Fallback": f"{d.primary_model}->{d.model}" if d.fell_back else "none",
             "X-Triage-Cache": cache, "X-Triage-Verified": verified,
-            "X-Triage-Escalated": "true" if escalated else "false", "X-Triage-Check": check}
+            "X-Triage-Escalated": "true" if escalated else "false", "X-Triage-Check": check,
+            **_probability_headers(d)}
+
+
+def _six(x: float) -> str:
+    return f"{x:.6f}"
+
+
+def _probability_headers(d: core.RouteDecision) -> dict:
+    """The routing numbers as plain numbers (6 decimals). model="auto" only: a named model has no prediction and
+    no tau, so these are left out, not faked. With sync verification they stay the first decision's."""
+    values = {"X-Triage-P-Low": d.p_low, "X-Triage-P-Medium": d.p_medium, "X-Triage-Tau": d.tau}
+    return {name: _six(v) for name, v in values.items() if v is not None}
 
 
 def _apply_verification(row: RequestRow, first, outcome, deps, providers=None) -> None:
@@ -294,7 +308,8 @@ CORS_REQUEST_HEADERS = ["Authorization", "Content-Type", *PROVIDER_KEY_HEADERS.v
                         "X-Triage-Task", "X-Triage-Verify"]
 CORS_RESPONSE_HEADERS = ["X-Triage-Request-Id", "X-Triage-Model", "X-Triage-Tier", "X-Triage-Reason",
                          "X-Triage-Fallback", "X-Triage-Cache", "X-Triage-Verified", "X-Triage-Escalated",
-                         "X-Triage-Check", "X-Triage-Cost", "X-Triage-Saved", "X-Triage-Mode",
+                         "X-Triage-Check", "X-Triage-P-Low", "X-Triage-P-Medium", "X-Triage-Tau",
+                         "X-Triage-Cost", "X-Triage-Strong-Cost", "X-Triage-Saved", "X-Triage-Mode",
                          "X-Triage-Demo-Remaining", "X-Triage-Demo-Limit", "X-Triage-Demo-Resets",
                          "X-Triage-Max-Tokens", "Retry-After"]
 
@@ -594,7 +609,9 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             headers = _triage_headers(decision, cache, model=served_model, tier=served_tier, reason=reason,
                                       verified=verify, escalated=escalated, check=check) | {
                 "X-Triage-Cost": _money(row.price_as_cost)}
-            if row.saved is not None:          # unknown when no baseline model is reachable: left out, not faked
+            if row.strong_cost is not None:    # unknown when no baseline model is reachable: left out, not faked
+                headers["X-Triage-Strong-Cost"] = _money(row.strong_cost)
+            if row.saved is not None:
                 headers["X-Triage-Saved"] = _money(row.saved)
             completion = {"id": request_id, "object": "chat.completion", "created": created, "model": served_model,
                           "choices": [{"index": 0, "message": {"role": "assistant", "content": text},

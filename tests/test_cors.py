@@ -61,7 +61,8 @@ def test_responses_expose_the_triage_headers():
     r = http.post("/v1/chat/completions", json={"model": "auto", "messages": ASK}, headers={"Origin": SITE})
     assert r.status_code == 200 and r.headers["access-control-allow-origin"] == SITE
     exposed = {h.strip().lower() for h in r.headers["access-control-expose-headers"].split(",")}
-    for header in ("x-triage-mode", "x-triage-demo-remaining", "x-triage-model", "x-triage-cost", "retry-after"):
+    for header in ("x-triage-mode", "x-triage-demo-remaining", "x-triage-model", "x-triage-cost", "retry-after",
+                   "x-triage-p-low", "x-triage-p-medium", "x-triage-tau", "x-triage-strong-cost"):
         assert header in exposed
 
 
