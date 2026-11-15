@@ -3,7 +3,8 @@
     TRIAGE_TEST_DATABASE_URL='postgresql+psycopg://user:pass@host/db?sslmode=require' venv/bin/python -m pytest -m postgres
 
 Each test works in its own new schema, dropped afterwards, so the database's existing tables are never touched.
-Use Neon's direct (not pooled) connection string: the pooler doesn't pass the search_path option through.
+Neon's pooled endpoint rejects the search_path startup option, so a "-pooler" host is switched to its direct
+host here (Neon's naming: ep-x-pooler.region... -> ep-x.region...). A plain `pytest` skips these (conftest.py).
 """
 import os
 import uuid
@@ -17,7 +18,25 @@ from sqlalchemy import create_engine, text
 from app import db
 from app.api.request_log import RequestRow
 
-URL = os.environ.get("TRIAGE_TEST_DATABASE_URL")
+from sqlalchemy.engine import make_url
+
+
+def _direct(url):
+    """A Neon pooled URL as its direct (unpooled) one; any other URL unchanged."""
+    if not url:
+        return url
+    parsed = make_url(url)
+    if parsed.host and "-pooler." in parsed.host:
+        parsed = parsed.set(host=parsed.host.replace("-pooler.", ".", 1))
+    return parsed.render_as_string(hide_password=False)
+
+
+from dotenv import load_dotenv                                       # noqa: E402
+
+from app.registry import PROJECT_ROOT                                # noqa: E402
+
+load_dotenv(PROJECT_ROOT / ".env")             # the same whether or not another module loaded it first
+URL = _direct(os.environ.get("TRIAGE_TEST_DATABASE_URL"))
 pytestmark = [pytest.mark.postgres, pytest.mark.skipif(not URL, reason="TRIAGE_TEST_DATABASE_URL not set")]
 
 
