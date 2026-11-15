@@ -17,6 +17,12 @@ const TIER_DOT: Record<Tier, string> = {
   high: "bg-warning",
 }
 
+const TIER_SHORT: Record<Tier, string> = {
+  low: "Cheapest",
+  medium: "Mid-range",
+  high: "Most powerful",
+}
+
 export default function AssistantMessage({ message, selected, onSelect }: AssistantMessageProps) {
   const routing = message.routing
   const savedShare =
@@ -63,7 +69,7 @@ export default function AssistantMessage({ message, selected, onSelect }: Assist
                 )}
               >
                 <span className={cn("h-1.5 w-1.5 rounded-full", TIER_DOT[routing.tier])} />
-                <span className="capitalize">{routing.tier}</span>
+                <span>{TIER_SHORT[routing.tier]}</span>
                 <span className="text-muted-foreground/40">·</span>
                 <span>{routing.model}</span>
                 <span className="text-muted-foreground/40">·</span>

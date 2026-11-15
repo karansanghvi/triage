@@ -7,6 +7,7 @@ import { useVisitorName } from "@/hooks/useVisitorName"
 import { sendFakeChat } from "@/lib/fakeTriage"
 import { TriageError } from "@/lib/errors"
 import type { AssistantMessage, ChatError, Message, UserMessage } from "@/types/chat"
+import RoutingPanel from "@/components/chat/RoutingPanel";
 
 export default function ChatPage() {
   const { name } = useVisitorName()
@@ -17,6 +18,9 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false)
 
   const isEmpty = messages.length === 0
+  const selectedMessage = messages.find((m) => m.id === selectedId)
+  const selectedRouting =
+    selectedMessage && selectedMessage.role === "assistant" ? selectedMessage.routing ?? null : null
 
   async function handleSend() {
     const content = input.trim()
@@ -88,11 +92,8 @@ export default function ChatPage() {
         )}
       </div>
 
-      {/* Routing panel: built in Step 5 */}
-      <aside className="hidden w-80 shrink-0 rounded-2xl border border-border bg-card p-5 xl:block">
-        <p className="text-sm font-semibold">Routing</p>
-        <p className="mt-2 text-xs text-muted-foreground">Send a message to see how Triage routes it.</p>
-      </aside>
+      {/* Routing panel */}
+      <RoutingPanel selected={selectedRouting} messages={messages} />
     </div>
   )
 }
