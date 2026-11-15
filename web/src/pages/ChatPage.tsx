@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { Plus } from "lucide-react"
 import Welcome from "@/components/chat/Welcome"
 import SuggestionChips from "@/components/chat/SuggestionChips"
 import ChatInput from "@/components/chat/ChatInput"
@@ -6,6 +7,7 @@ import MessageList from "@/components/chat/MessageList"
 import RoutingPanel from "@/components/chat/RoutingPanel"
 import { useVisitorName } from "@/hooks/useVisitorName"
 import { useDemoStatus } from "@/context/DemoStatusContext"
+import { useChats } from "@/context/ChatsContext"
 import { sendChat } from "@/lib/api"
 import { TriageError } from "@/lib/errors"
 import { DEFAULT_QUALITY } from "@/lib/quality"
@@ -14,29 +16,35 @@ import type { AssistantMessage, ChatError, Message, UserMessage } from "@/types/
 export default function ChatPage() {
   const { name } = useVisitorName()
   const demoStatus = useDemoStatus()
+  const { activeId, activeMessages: messages, updateMessages, newChat, busy, setBusy } = useChats()
+
   const [input, setInput] = useState("")
   const [quality, setQuality] = useState(DEFAULT_QUALITY)
-  const [messages, setMessages] = useState<Message[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [sending, setSending] = useState(false)
 
   const isEmpty = messages.length === 0
-  const selectedMessage = messages.find((m) => m.id === selectedId)
+
+  // The selected answer: the one the visitor clicked, or else the latest answer in this chat.
+  // Switching chats falls back to the latest answer automatically.
+  const latestAnswer = [...messages].reverse().find((m) => m.role === "assistant" && m.routing)
+  const clicked = messages.find((m) => m.id === selectedId)
+  const selectedMessage = clicked ?? latestAnswer
   const selectedRouting =
     selectedMessage && selectedMessage.role === "assistant" ? selectedMessage.routing ?? null : null
 
   // Sends a conversation to Triage and fills in the answer
-  async function requestAnswer(history: Message[]) {
+  async function requestAnswer(history: Message[], chatId: string | null) {
     const pendingId = crypto.randomUUID()
     const pending: AssistantMessage = { id: pendingId, role: "assistant", content: "", status: "pending" }
 
-    setMessages([...history, pending])
-    setSending(true)
+    // Passing null starts a new chat; keep its id so the answer lands in the same chat
+    const id = updateMessages(chatId, () => [...history, pending])
+    setBusy(true)
 
     try {
       const result = await sendChat(history, quality)
       if (result.demo) demoStatus.update(result.demo)
-      setMessages((prev) =>
+      updateMessages(id, (prev) =>
         prev.map((m) =>
           m.id === pendingId && m.role === "assistant"
             ? { ...m, content: result.content, status: "done", routing: result.routing, truncated: result.truncated }
@@ -52,29 +60,36 @@ export default function ChatPage() {
           ? { code: err.code, message: err.message, retryAfter: err.retryAfter }
           : { code: "network_error", message: "Couldn't reach Triage. Please try again." }
 
-      setMessages((prev) =>
+      updateMessages(id, (prev) =>
         prev.map((m) => (m.id === pendingId && m.role === "assistant" ? { ...m, status: "error", error } : m))
       )
     } finally {
-      setSending(false)
+      setBusy(false)
     }
   }
 
   function handleSend() {
     const content = input.trim()
-    if (!content || sending) return
+    if (!content || busy) return
 
     const userMessage: UserMessage = { id: crypto.randomUUID(), role: "user", content }
     setInput("")
-    requestAnswer([...messages, userMessage])
+    requestAnswer([...messages, userMessage], activeId)
   }
 
   // Resend the conversation up to the failed answer
   function handleRetry(failedId: string) {
-    if (sending) return
+    if (busy) return
     const index = messages.findIndex((m) => m.id === failedId)
     if (index === -1) return
-    requestAnswer(messages.slice(0, index))
+    requestAnswer(messages.slice(0, index), activeId)
+  }
+
+  function handleNewChat() {
+    if (busy) return
+    newChat()
+    setSelectedId(null)
+    setInput("")
   }
 
   const chatInput = (
@@ -102,10 +117,20 @@ export default function ChatPage() {
         ) : (
           /* Scene 2: messages scroll, input at the bottom */
           <>
+            <div className="flex items-center justify-end pb-2">
+              <button
+                onClick={handleNewChat}
+                disabled={busy}
+                className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                New chat
+              </button>
+            </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               <MessageList
                 messages={messages}
-                selectedId={selectedId}
+                selectedId={selectedMessage?.id ?? null}
                 onSelect={setSelectedId}
                 onRetry={handleRetry}
               />
@@ -115,7 +140,6 @@ export default function ChatPage() {
         )}
       </div>
 
-      {/* Routing panel */}
       <RoutingPanel selected={selectedRouting} messages={messages} />
     </div>
   )

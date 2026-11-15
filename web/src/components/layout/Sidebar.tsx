@@ -1,8 +1,9 @@
-import { Link, NavLink } from "react-router-dom"
+import { Link, NavLink, useLocation } from "react-router-dom"
 import { LayoutDashboard, MessageSquare, Settings, Split, KeyRound, type LucideIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useVisitorName } from "@/hooks/useVisitorName"
 import { useDemoStatus } from "@/context/DemoStatusContext"
+import ChatHistory from "./ChatHistory"
 
 type NavItem = {
   to: string
@@ -18,9 +19,11 @@ const navItems: NavItem[] = [
 
 export default function Sidebar() {
   const { name } = useVisitorName()
+  const { pathname } = useLocation()
+  const onChatPage = pathname.startsWith("/chat")
 
   return (
-    <aside className="flex h-full w-64 flex-col overflow-y-auto border-r border-border bg-card p-4">
+    <aside className="flex h-full w-64 flex-col overflow-hidden border-r border-border bg-card p-4">
       {/* Logo */}
       <div className="mb-8 flex items-center gap-3 px-2">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
@@ -50,7 +53,10 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="mt-auto flex flex-col gap-3 pt-6">
+      {/* Recent chats: takes the free space and scrolls on its own */}
+      {onChatPage ? <ChatHistory /> : <div className="flex-1" />}
+
+      <div className="flex flex-col gap-3 pt-4">
         <DemoCard />
 
         {/* Profile row: click to change the name in Settings */}
