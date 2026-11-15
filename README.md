@@ -193,6 +193,34 @@ Demo and BYOK requests are never used for retraining and get no background label
   on every redeploy. The old `data/demo/usage.sqlite3` and `TRIAGE_DEMO_DB` are no longer used; the counters
   weren't copied (they're per day and kept 7 days).
 
+## Accounts (Phase 5, in progress)
+
+With `TRIAGE_ACCOUNTS=on`, people can sign up with an email and password. Off (the default), these paths don't
+exist. Accounts don't change chat yet: saved provider keys, account API keys and account chat come in later PRs.
+
+| Endpoint | Body | Result |
+|---|---|---|
+| `POST /v1/auth/signup` | `email`, `password`, `display_name?` | 201 `{user, session_token, expires_at}`; 409 `email_taken` |
+| `POST /v1/auth/login` | `email`, `password` | 200, same shape; any failure is 401 `invalid_credentials` |
+| `POST /v1/auth/logout` | | 204, revokes this session |
+| `GET /v1/auth/me` | | `{id, email, display_name, preferred_provider, created_at}` |
+| `PATCH /v1/account` | `display_name?`, `preferred_provider?` | the user; `null` clears a field |
+| `POST /v1/account/password` | `current_password`, `new_password` | 204; every other session is revoked |
+| `DELETE /v1/account` | `password` | 204; request log rows are kept, unlinked |
+
+- **Sessions** are bearer tokens (`Authorization: Bearer trs_...`), not cookies, because the website and the API
+  are on different domains. A token is shown once; only its SHA-256 is stored. It ends at logout, 30 days after
+  login, or after 7 days unused. Every endpoint except signup and login needs one, and accepts nothing else (not
+  a Triage API key). A wrong password on the last two endpoints is 403 `incorrect_password`, so 401 always means
+  "log in again".
+- **Passwords**: 10 to 128 characters, hashed with argon2id (19 MiB, t=2, p=1). Never stored, logged or echoed.
+- **Emails** are trimmed, NFKC-normalized and lowercased; dots and `+tags` are kept. There's no email
+  verification or password reset yet.
+- **Rate limits** (in the database, shared by every instance): 5 signups per IP per hour and 10 logins per IP per
+  15 minutes (429 with `Retry-After`), and 5 failed logins per email per 15 minutes (the same 401 as a wrong
+  password, so it reveals nothing). Attempts are stored under keyed hashes, never IPs or emails.
+- **Logs** carry the event, the outcome and the visitor's hash; never an email, password or token.
+
 ## Retraining the classifier (Phase 4)
 
 `python -m scripts.retrain` retrains the live classifier with the background labels in the request log. It
@@ -209,7 +237,7 @@ retraining points `config/routing.yaml` at a new version, restart the server (fo
 
 ## Database
 
-Triage keeps its request log and the demo counters (and, later, accounts) in one database through SQLAlchemy
+Triage keeps its request log, the demo counters and accounts in one database through SQLAlchemy
 Core, with the schema managed by Alembic (`migrations/`). Demo admissions are atomic across instances: SQLite runs
 each check-and-count in a `BEGIN IMMEDIATE` transaction, Postgres under a transaction-level advisory lock.
 

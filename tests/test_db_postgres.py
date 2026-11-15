@@ -172,3 +172,116 @@ def test_settle_applies_to_the_admission_day_and_cleanup_works(instances):
     assert rows == [("2026-11-13", 200, 3)]
     now[0] = START + timedelta(days=9)
     assert limiter.cleanup() == 2 and limiter.stored_days() == []
+
+
+# ---------- accounts on Postgres ----------
+
+from fastapi.testclient import TestClient                            # noqa: E402
+
+from app.accounts.ratelimit import AuthRateLimiter, RateLimited      # noqa: E402
+from app.accounts.store import AccountStore                          # noqa: E402
+from app.api.auth import Auth                                        # noqa: E402
+from app.api.main import create_app                                  # noqa: E402
+from app.api.request_log import RequestRow, SQLRequestLog            # noqa: E402
+from tests.api_helpers import API_KEY, make_deps                     # noqa: E402
+
+PASSWORD = "correct horse battery"
+
+
+@pytest.fixture
+def migrated_url(schema_url):
+    raw = create_engine(schema_url)
+    db.upgrade(raw)
+    raw.dispose()
+    return schema_url
+
+
+@pytest.fixture
+def pg_app(migrated_url):
+    engine = db.open_engine(migrated_url)
+    log = SQLRequestLog(engine)
+    deps = make_deps(engine=engine, log=log, trusted_proxy_hops=1)
+    yield TestClient(create_app(deps=deps, auth=Auth([API_KEY]), accounts=True)), deps, log
+    engine.dispose()
+
+
+def bearer(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_the_whole_account_lifecycle_on_postgres(pg_app):
+    http, deps, log = pg_app
+    ip = {"X-Forwarded-For": "203.0.113.5"}
+    r = http.post("/v1/auth/signup", json={"email": " Ada@Example.com ", "password": PASSWORD, "display_name": "Ada"},
+                  headers=ip)
+    assert r.status_code == 201
+    token, user_id = r.json()["session_token"], r.json()["user"]["id"]
+    assert http.post("/v1/auth/signup", json={"email": "ada@example.com", "password": PASSWORD},
+                     headers=ip).status_code == 409
+    assert http.get("/v1/auth/me", headers=bearer(token)).json()["email"] == "ada@example.com"
+    other = http.post("/v1/auth/login", json={"email": "ada@example.com", "password": PASSWORD},
+                      headers=ip).json()["session_token"]
+    assert http.patch("/v1/account", json={"preferred_provider": "gemini"},
+                      headers=bearer(token)).json()["preferred_provider"] == "gemini"
+    assert http.post("/v1/account/password", json={"current_password": PASSWORD, "new_password": "a brand new secret"},
+                     headers=bearer(token)).status_code == 204
+    assert http.get("/v1/auth/me", headers=bearer(other)).status_code == 401
+    log.write(RequestRow(request_id="r0", timestamp="t", key_id="k", requested_model="auto", stream=False,
+                         user_id=user_id))
+    assert http.request("DELETE", "/v1/account", json={"password": "a brand new secret"},
+                        headers=bearer(token)).status_code == 204
+    assert [(row.request_id, row.user_id) for row in log.rows()] == [("r0", None)]     # ON DELETE SET NULL
+    assert http.get("/v1/auth/me", headers=bearer(token)).status_code == 401
+    with deps.engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM sessions")).scalar() == 0
+
+
+def test_concurrent_signups_with_one_email_create_one_account(pg_app):
+    http, deps, _ = pg_app
+    results, _ = run_together([lambda n=n: http.post(
+        "/v1/auth/signup", json={"email": "race@example.com", "password": PASSWORD},
+        headers={"X-Forwarded-For": f"203.0.113.{n}"}).status_code for n in range(8)])
+    assert sorted(results) == [201] + [409] * 7
+
+
+def test_session_expiry_with_postgres_timestamps(migrated_url):
+    engine = db.open_engine(migrated_url)
+    now = [datetime.now(timezone.utc)]
+    store = AccountStore(engine, clock=lambda: now[0])
+    user = store.create_user("ada@example.com", "$argon2id$fake", None)
+    token, session = store.create_session(user.id)
+    assert store.session_for_token(token)[0].expires_at == session.expires_at          # tz survives the round trip
+    now[0] += timedelta(days=7, seconds=1)
+    assert store.session_for_token(token) is None
+    engine.dispose()
+
+
+def test_concurrent_login_attempts_never_overshoot_the_ip_limit(migrated_url):
+    limiters = [AuthRateLimiter(db.open_engine(migrated_url)) for _ in range(3)]
+
+    def attempt(limiter):
+        limiter.hit("login_ip", "visitor-x")
+        return True
+
+    calls = [lambda l=limiters[i % 3]: attempt(l) for i in range(25)]
+    barrier = threading.Barrier(len(calls))
+    allowed, refused, lock = [], [], threading.Lock()
+
+    def go(call):
+        barrier.wait()
+        try:
+            call()
+            with lock:
+                allowed.append(1)
+        except RateLimited:
+            with lock:
+                refused.append(1)
+
+    threads = [threading.Thread(target=go, args=(c,)) for c in calls]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(allowed) == 10 and len(refused) == 15
+    for limiter in limiters:
+        limiter.engine.dispose()
