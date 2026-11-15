@@ -127,6 +127,13 @@ api_keys_table = Table(
 Index("idx_api_keys_public_id", api_keys_table.c.public_id, unique=True)
 Index("idx_api_keys_user_id", api_keys_table.c.user_id)
 
+account_day_table = Table(
+    "account_day", metadata,
+    Column("day", Text, primary_key=True),
+    Column("user_id", Text, ForeignKey("users.id", name="fk_account_day_user_id_users", ondelete="CASCADE"),
+           primary_key=True),
+    Column("requests", Integer, nullable=False))
+
 demo_day_table = Table("demo_day", metadata,
                        Column("day", Text, primary_key=True), Column("requests", Integer, nullable=False),
                        Column("tokens", Integer, nullable=False), Column("calls", Integer, nullable=False))

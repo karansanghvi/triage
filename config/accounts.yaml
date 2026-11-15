@@ -1,0 +1,5 @@
+# Per-account chat limits (Phase 5, account mode). Accounts use their own provider keys, so these only protect
+# the server (the classifier runs on every request). Over either: 429 account_rate_limited with Retry-After.
+requests_per_minute: 60      # rolling 60 s, kept in memory by each server instance
+requests_per_day: 10000      # per UTC day, in the database (shared by every instance)
+retention_days: 7            # daily counts older than this are deleted
