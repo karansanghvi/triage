@@ -17,11 +17,11 @@ def engine_at(tmp_path, name="t.sqlite3"):
 
 def test_opening_a_new_sqlite_file_creates_the_schema_at_the_latest_revision(tmp_path):
     engine = engine_at(tmp_path)
-    assert db.current_revision(engine) == db.head_revision() == "0003"
+    assert db.current_revision(engine) == db.head_revision() == "0004"
     raw = sqlite3.connect(tmp_path / "t.sqlite3")
     tables = {r[0] for r in raw.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"requests", "labels", "visitor_day", "demo_day", "users", "sessions", "auth_attempts",
-            "alembic_version"} <= tables
+            "provider_keys", "alembic_version"} <= tables
     engine.dispose()
 
 
@@ -85,7 +85,7 @@ def test_a_database_behind_the_code_is_refused_unless_sqlite(tmp_path, monkeypat
     engine = engine_at(tmp_path)
     monkeypatch.setattr(db, "head_revision", lambda: "9999")
     monkeypatch.setattr(engine.dialect, "name", "postgresql")
-    with pytest.raises(RuntimeError, match="revision 0003, this code needs 9999.*alembic upgrade head"):
+    with pytest.raises(RuntimeError, match="revision 0004, this code needs 9999.*alembic upgrade head"):
         db.migrate_or_check(engine)
     engine.dispose()
 

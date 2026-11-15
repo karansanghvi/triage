@@ -101,6 +101,19 @@ auth_attempts_table = Table(
 Index("idx_auth_attempts_lookup", auth_attempts_table.c.kind, auth_attempts_table.c.subject,
       auth_attempts_table.c.created_at)
 
+provider_keys_table = Table(
+    "provider_keys", metadata,
+    Column("user_id", Text, ForeignKey("users.id", name="fk_provider_keys_user_id_users", ondelete="CASCADE"),
+           primary_key=True),
+    Column("provider", Text, primary_key=True),
+    Column("ciphertext", LargeBinary, nullable=False), Column("nonce", LargeBinary, nullable=False),
+    Column("enc_key_id", Text, nullable=False),                # which TRIAGE_ENCRYPTION_KEYS key encrypted it
+    Column("last4", Text, nullable=False),
+    Column("status", Text, nullable=False), Column("status_detail", Text),
+    Column("verified_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False))
+
 demo_day_table = Table("demo_day", metadata,
                        Column("day", Text, primary_key=True), Column("requests", Integer, nullable=False),
                        Column("tokens", Integer, nullable=False), Column("calls", Integer, nullable=False))
