@@ -78,6 +78,12 @@ def _ensure_json_handler() -> None:
         request_logger.addHandler(handler)
         request_logger.setLevel(logging.INFO)
         request_logger.propagate = False
+    auth_logger = logging.getLogger("triage.auth")      # sign-in events: event, outcome, visitor hash only
+    if not auth_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        auth_logger.addHandler(handler)
+        auth_logger.setLevel(logging.INFO)
 
 
 class _RecordingPredictor:

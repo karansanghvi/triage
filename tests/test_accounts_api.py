@@ -412,3 +412,11 @@ def test_account_settings_need_a_session_token(method, path, body):
     signup(http)
     r = http.request(method.upper(), path, json=body, headers={"Authorization": f"Bearer {API_KEY}"})
     assert r.status_code == 401 and r.json()["error"]["code"] == "invalid_session"
+
+
+def test_auth_events_are_printed_by_the_server():
+    """Not only visible to tests: the server prints the auth lines (to stderr, like the request lines)."""
+    app()
+    auth_logger = logging.getLogger("triage.auth")
+    assert auth_logger.isEnabledFor(logging.INFO)
+    assert any(isinstance(h, logging.StreamHandler) for h in auth_logger.handlers)
