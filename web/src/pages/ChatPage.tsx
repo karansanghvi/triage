@@ -8,11 +8,12 @@ import { sendFakeChat } from "@/lib/fakeTriage"
 import { TriageError } from "@/lib/errors"
 import type { AssistantMessage, ChatError, Message, UserMessage } from "@/types/chat"
 import RoutingPanel from "@/components/chat/RoutingPanel";
+import { DEFAULT_QUALITY } from "@/lib/quality";
 
 export default function ChatPage() {
   const { name } = useVisitorName()
   const [input, setInput] = useState("")
-  const [quality, setQuality] = useState(50)
+  const [quality, setQuality] = useState(DEFAULT_QUALITY)
   const [messages, setMessages] = useState<Message[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [sending, setSending] = useState(false)

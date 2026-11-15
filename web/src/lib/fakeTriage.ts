@@ -1,5 +1,6 @@
 import type { Message, RoutingInfo, Tier } from "@/types/chat"
 import { TriageError } from "@/lib/errors"
+import { qualityToTau } from "@/lib/quality"
 
 type ChatResult = {
   content: string
@@ -25,11 +26,6 @@ const FAKE_ANSWERS: Record<Tier, string> = {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-// quality 0..100 on the dial -> tau 0.50..0.95 (the real mapping comes from the backend check)
-function qualityToTau(quality: number): number {
-  return 0.5 + (quality / 100) * 0.45
 }
 
 export async function sendFakeChat(messages: Message[], quality: number): Promise<ChatResult> {
