@@ -114,6 +114,19 @@ provider_keys_table = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False))
 
+api_keys_table = Table(
+    "api_keys", metadata,
+    Column("id", Text, primary_key=True),
+    Column("user_id", Text, ForeignKey("users.id", name="fk_api_keys_user_id_users", ondelete="CASCADE"),
+           nullable=False),
+    Column("name", Text, nullable=False),
+    Column("public_id", Text, nullable=False),                 # "trk_" + 8 characters; the full key is never stored
+    Column("secret_hash", Text, nullable=False),               # HMAC-SHA256 of the full key (TRIAGE_HASH_SECRET)
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("last_used_at", DateTime(timezone=True)), Column("revoked_at", DateTime(timezone=True)))
+Index("idx_api_keys_public_id", api_keys_table.c.public_id, unique=True)
+Index("idx_api_keys_user_id", api_keys_table.c.user_id)
+
 demo_day_table = Table("demo_day", metadata,
                        Column("day", Text, primary_key=True), Column("requests", Integer, nullable=False),
                        Column("tokens", Integer, nullable=False), Column("calls", Integer, nullable=False))

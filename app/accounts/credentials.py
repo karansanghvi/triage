@@ -115,6 +115,32 @@ def hashes_match(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode("ascii"), b.encode("ascii"))
 
 
+# ---------- account API keys ----------
+
+API_KEY_PREFIX = "trk_"
+PUBLIC_ID_CHARS = 8                   # after the prefix: "trk_" + 8 characters is the key's public id
+
+
+def new_api_key() -> str:
+    """ "trk_" + 32 random bytes in base62. Shown once; only its public id and an HMAC are stored."""
+    return API_KEY_PREFIX + _base62(secrets.token_bytes(TOKEN_BYTES))
+
+
+def looks_like_api_key(key: str) -> bool:
+    return (key.startswith(API_KEY_PREFIX) and len(key) == len(API_KEY_PREFIX) + _TOKEN_CHARS
+            and all(c in _BASE62 for c in key[len(API_KEY_PREFIX):]))
+
+
+def api_key_public_id(key: str) -> str:
+    return key[:len(API_KEY_PREFIX) + PUBLIC_ID_CHARS]
+
+
+def api_key_hash(key: str, secret: bytes) -> str:
+    """HMAC-SHA256 of the full key with TRIAGE_HASH_SECRET: without the secret, a stolen table can't even test a
+    guessed key."""
+    return hmac.new(secret, b"api-key:" + key.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def looks_like_session_token(token: str) -> bool:
     return (token.startswith(SESSION_PREFIX) and len(token) == len(SESSION_PREFIX) + _TOKEN_CHARS
             and all(c in _BASE62 for c in token[len(SESSION_PREFIX):]))
