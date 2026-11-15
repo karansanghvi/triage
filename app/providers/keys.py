@@ -22,6 +22,8 @@ _KEY_PATTERNS = re.compile(
     r"|sk-[A-Za-z0-9_\-]{8,}"           # OpenAI (sk-..., sk-proj-...)
     r"|gsk_[A-Za-z0-9]{8,}"             # Groq
     r"|AIza[0-9A-Za-z_\-]{20,}"         # Google / Gemini
+    r"|trs_[0-9A-Za-z]{20,}"            # Triage session tokens (app/accounts)
+    r"|trk_[0-9A-Za-z_]{20,}"           # Triage account API keys (accounts, later)
 )
 
 

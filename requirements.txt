@@ -11,3 +11,4 @@ sqlalchemy
 alembic
 psycopg[binary]
 cryptography
+argon2-cffi
