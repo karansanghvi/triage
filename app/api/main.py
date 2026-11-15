@@ -44,6 +44,7 @@ from starlette.background import BackgroundTask
 from app.api import core
 from app.api.auth import (ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, accounts_from_env, keys_from_env,
                           public_from_env)
+from app.accounts.credentials import API_KEY_PREFIX
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
 from app.api.demo import DemoLimitError, client_ip, visitor_id
 from app.api.errors import APIError, bad_request, stream_error_event
@@ -496,15 +497,42 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         return _error_response(bad_request(f"Invalid request: {param or 'body'}: {first.get('msg', 'invalid')}",
                                            param, "invalid_request"))
 
-    def caller(authorization: Optional[str] = Header(None)) -> Caller:
+    async def account_key_gate(authorization: Optional[str]) -> None:
+        """Accounts on and a "trk_" bearer key: an account API key, checked in the database (a worker thread).
+        Revoked, unknown or malformed: the same 401 as any bad key. Valid: its use is recorded (at most once a
+        minute) and, until account chat exists (PR 6), a 403 account_mode_unavailable on every Triage-key
+        endpoint. Anything else falls through to the env keys (TRIAGE_API_KEYS / TRIAGE_ADMIN_KEYS), unchanged."""
+        if not app.state.accounts or not authorization or not authorization.lower().startswith("bearer "):
+            return
+        key = authorization[7:].strip()
+        if not key.startswith(API_KEY_PREFIX):
+            return
+        api_keys = app.state.deps.api_keys
+
+        def check():
+            found = api_keys.lookup(key)
+            if found is not None:
+                api_keys.touch(found)
+            return found
+
+        if await anyio.to_thread.run_sync(check) is None:
+            raise APIError(401, "Incorrect API key provided.", code="invalid_api_key")
+        raise APIError(403, "Account API keys can't be used yet: chat and the other endpoints with account keys "
+                       f"are coming soon. For now, send your provider keys directly ({_KEY_HEADER_LIST}).",
+                       "permission_error", code="account_mode_unavailable")
+
+    async def caller(authorization: Optional[str] = Header(None)) -> Caller:
+        await account_key_gate(authorization)
         return app.state.auth.check(authorization)
 
-    def admin(authorization: Optional[str] = Header(None)) -> Caller:
+    async def admin(authorization: Optional[str] = Header(None)) -> Caller:
+        await account_key_gate(authorization)
         return app.state.auth.check(authorization, admin=True)
 
-    def chat_caller(authorization: Optional[str] = Header(None)) -> Optional[Caller]:
+    async def chat_caller(authorization: Optional[str] = Header(None)) -> Optional[Caller]:
         """Public access on: no Authorization header = no caller (demo or BYOK); a header that is sent must be
         valid. Off: exactly `caller`."""
+        await account_key_gate(authorization)
         if not app.state.public:
             return app.state.auth.check(authorization)
         return app.state.auth.optional(authorization)

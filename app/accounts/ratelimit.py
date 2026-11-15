@@ -4,6 +4,7 @@
     login_ip              10 logins per IP per 15 minutes
     login_failure_email   5 failed logins per email per 15 minutes
     provider_key_user     20 provider-key saves or re-checks per user per hour (each is a call to a provider)
+    api_key_create_user   10 account API keys created per user per hour
 
 Sliding windows: one row per counted attempt, counted over the last window. The subject is always a keyed hash:
 an IP's visitor_id (app/api/demo.py), email_subject() of a normalized email, or a user's id (an opaque UUID).
@@ -37,6 +38,7 @@ LIMITS = {
     "login_failure_email": Limit(5, timedelta(minutes=15)),
     # Triage mustn't become a way to hammer providers or test stolen keys in bulk
     "provider_key_user": Limit(20, timedelta(hours=1)),
+    "api_key_create_user": Limit(10, timedelta(hours=1)),
 }
 
 

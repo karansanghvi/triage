@@ -15,6 +15,12 @@
     POST   /v1/account/provider-keys/{provider}/verify  -> the summary after checking the saved key again
     DELETE /v1/account/provider-keys/{provider}         -> 204
 
+    GET    /v1/account/api-keys          -> [{id, name, public_id, created_at, last_used_at, revoked_at}], newest
+                                            first (never the key)
+    POST   /v1/account/api-keys {name}   -> 201 {id, name, public_id, created_at, key, note}: the only time the
+                                            full key is shown
+    DELETE /v1/account/api-keys/{id}     -> 204 (revokes it; unknown or someone else's: 404)
+
 Everything except signup and login needs a session token (Authorization: Bearer trs_...), never a Triage API key.
 
 Never logged or echoed: emails, passwords, tokens. Auth failures log only the visitor's hash and the outcome.
@@ -22,6 +28,7 @@ Every database call and password hash runs in a worker thread.
 """
 import json
 import logging
+import unicodedata
 from typing import Optional
 
 import anyio
@@ -31,6 +38,7 @@ from pydantic import BaseModel, ConfigDict
 from app.accounts.credentials import (CredentialError, check_password_rules, hash_password,
                                       looks_like_session_token, needs_rehash, normalize_display_name,
                                       normalize_email, verify_password)
+from app.accounts.api_keys import MAX_ACTIVE_KEYS, NAME_MAX as API_KEY_NAME_MAX, TooManyKeys
 from app.accounts.encryption import DecryptionError
 from app.accounts.ratelimit import RateLimited, email_subject
 from app.accounts.verify_keys import NAMES
@@ -105,6 +113,14 @@ class AccountDelete(_Body):
 
 class ProviderKeyBody(_Body):
     key: str
+
+
+class ApiKeyCreate(_Body):
+    name: str
+
+
+ONLY_ONCE = ("This is the only time the full key is shown. Store it somewhere safe: Triage keeps only a hash "
+             "and can't show it again. If you lose it, revoke it and create a new one.")
 
 
 MAX_PROVIDER_KEY_CHARS = 512
@@ -365,6 +381,47 @@ def account_router() -> APIRouter:
         provider = provider_name(provider)
         await anyio.to_thread.run_sync(key_store(request).delete, current[1].id, provider)
         _log(f"provider_key_delete:{provider}", "ok", visitor(request))
+        return Response(status_code=204)
+
+    # ----- account API keys -----
+
+    @router.get("/v1/account/api-keys")
+    async def list_api_keys(request: Request, current=Depends(current_session)):
+        keys = await anyio.to_thread.run_sync(request.app.state.deps.api_keys.list, current[1].id)
+        return [k.public() for k in keys]
+
+    @router.post("/v1/account/api-keys", status_code=201)
+    async def create_api_key(body: ApiKeyCreate, request: Request, current=Depends(current_session)):
+        _, user = current
+        name = unicodedata.normalize("NFKC", body.name).strip()
+        if not name or len(name) > API_KEY_NAME_MAX:
+            raise bad_request(f"name must be 1 to {API_KEY_NAME_MAX} characters.", "name", "invalid_value")
+        deps = request.app.state.deps
+        try:
+            await anyio.to_thread.run_sync(deps.auth_limiter.hit, "api_key_create_user", user.id)
+        except RateLimited as error:
+            _log("api_key_create", "rate_limited", visitor(request))
+            raise _too_many(error, "API key creation") from None
+        try:
+            key, created = await anyio.to_thread.run_sync(deps.api_keys.create, user.id, name)
+        except TooManyKeys:
+            _log("api_key_create", "too_many_keys", visitor(request))
+            raise APIError(409, f"You already have {MAX_ACTIVE_KEYS} active API keys, the most allowed. Revoke one "
+                           "first.", code="too_many_api_keys") from None
+        _log("api_key_create", "ok", visitor(request))
+        from fastapi.responses import JSONResponse
+        public = created.public()
+        return JSONResponse({"id": public["id"], "name": public["name"], "public_id": public["public_id"],
+                             "created_at": public["created_at"], "key": key, "note": ONLY_ONCE},
+                            status_code=201, headers={"Cache-Control": "no-store"})
+
+    @router.delete("/v1/account/api-keys/{key_id}", status_code=204)
+    async def revoke_api_key(key_id: str, request: Request, current=Depends(current_session)):
+        """Unknown ids and other users' keys are the same 404, so a key's existence isn't revealed."""
+        found = await anyio.to_thread.run_sync(request.app.state.deps.api_keys.revoke, current[1].id, key_id)
+        if not found:
+            raise APIError(404, "No API key with that id.", param="id", code="not_found")
+        _log("api_key_revoke", "ok", visitor(request))
         return Response(status_code=204)
 
     return router

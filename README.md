@@ -196,7 +196,7 @@ Demo and BYOK requests are never used for retraining and get no background label
 ## Accounts (Phase 5, in progress)
 
 With `TRIAGE_ACCOUNTS=on`, people can sign up with an email and password. Off (the default), these paths don't
-exist. Accounts don't change chat yet: account API keys and chat with saved keys come in later PRs.
+exist. Accounts don't change chat yet: chat with account keys and saved provider keys comes in a later PR.
 
 | Endpoint | Body | Result |
 |---|---|---|
@@ -256,6 +256,23 @@ exist. Accounts don't change chat yet: account API keys and chat with saved keys
   saved keys unreadable (409 `key_unreadable`), and users must save them again.
 - A key is never returned, logged or put in an error, a status detail or the request log; provider messages
   are redacted with the key as a secret.
+
+**Account API keys** (session token only), for calling Triage from your own apps:
+
+| Endpoint | Body | Result |
+|---|---|---|
+| `GET /v1/account/api-keys` | | `[{id, name, public_id, created_at, last_used_at, revoked_at}]`, newest first |
+| `POST /v1/account/api-keys` | `name` | 201 `{id, name, public_id, created_at, key, note}`: the only time the key is shown |
+| `DELETE /v1/account/api-keys/{id}` | | 204, revokes it (an unknown id or someone else's key: 404) |
+
+- Keys look like `trk_` + 43 characters. Triage stores only the public id (`trk_` + the next 8 characters,
+  shown in lists) and an HMAC-SHA256 of the full key with `TRIAGE_HASH_SECRET`, so a lost key can't be shown
+  again: revoke it and create another. Changing `TRIAGE_HASH_SECRET` invalidates every account key.
+- Names: 1 to 60 characters. At most 20 active keys per user (409 `too_many_api_keys`) and 10 new keys per user
+  per hour (429 with `Retry-After`).
+- **Not usable for chat yet.** A valid `trk_` key gets 403 `account_mode_unavailable` on chat and every other
+  Triage-key endpoint until account mode arrives; a revoked or unknown one gets the usual 401. Using a key
+  records `last_used_at` (at most once a minute). `TRIAGE_API_KEYS` / `TRIAGE_ADMIN_KEYS` work as before.
 
 ## Retraining the classifier (Phase 4)
 

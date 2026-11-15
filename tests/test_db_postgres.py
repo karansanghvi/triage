@@ -366,3 +366,46 @@ def test_status_detail_round_trips_on_postgres(migrated_url):
     (saved,) = http.get("/v1/account/provider-keys", headers=bearer(token)).json()
     assert (saved["status"], saved["status_detail"]) == ("unverified", "Groq answered 503: try later")
     engine.dispose()
+
+
+# ---------- account API keys on Postgres ----------
+
+from app.accounts.api_keys import ApiKeyStore, TooManyKeys           # noqa: E402
+
+
+def test_api_key_lifecycle_on_postgres(pg_app):
+    http, deps, _ = pg_app
+    auth = bearer(http.post("/v1/auth/signup", json={"email": "ada@example.com", "password": PASSWORD},
+                            headers={"X-Forwarded-For": "203.0.113.5"}).json()["session_token"])
+    created = http.post("/v1/account/api-keys", json={"name": "laptop"}, headers=auth).json()
+    key = created["key"]
+    with deps.engine.connect() as connection:
+        row = connection.execute(text("SELECT public_id, secret_hash FROM api_keys")).one()
+    assert row.public_id == key[:12] and key not in row.secret_hash
+    r = http.get("/v1/models", headers=bearer(key))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "account_mode_unavailable"
+    assert http.get("/v1/account/api-keys", headers=auth).json()[0]["last_used_at"] is not None
+    assert http.delete(f"/v1/account/api-keys/{created['id']}", headers=auth).status_code == 204
+    assert http.get("/v1/models", headers=bearer(key)).status_code == 401
+    assert http.request("DELETE", "/v1/account", json={"password": PASSWORD}, headers=auth).status_code == 204
+    with deps.engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM api_keys")).scalar() == 0
+
+
+def test_the_active_key_cap_holds_across_instances_on_postgres(migrated_url):
+    engine = db.open_engine(migrated_url)
+    user = AccountStore(engine).create_user("ada@example.com", "$argon2id$fake", None)
+    stores = [ApiKeyStore(db.open_engine(migrated_url), b"secret") for _ in range(3)]
+
+    def make(store):
+        try:
+            store.create(user.id, "k")
+            return "made"
+        except TooManyKeys:
+            return "refused"
+
+    results, _ = run_together([lambda s=stores[i % 3]: make(s) for i in range(26)])
+    assert results.count("made") == 20 and results.count("refused") == 6
+    for store in stores:
+        store.engine.dispose()
+    engine.dispose()
