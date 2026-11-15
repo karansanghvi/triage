@@ -455,7 +455,12 @@ def test_preferred_provider_round_trips_and_is_in_public_dict(tmp_path):
 
 
 def test_user_id_round_trips(tmp_path):
+    from datetime import datetime, timezone
     log = SQLiteRequestLog(tmp_path / "r.sqlite3")
+    now = datetime.now(timezone.utc)
+    with log.engine.begin() as connection:                  # user_id references users (ON DELETE SET NULL)
+        connection.execute(db_module.users_table.insert(), dict(id="u-123", email="a@example.com",
+                                                                password_hash="h", created_at=now, updated_at=now))
     log.write(row(request_id="a", user_id="u-123"))
     log.write(row(request_id="b"))
     assert [r.user_id for r in log.rows()] == ["u-123", None]
