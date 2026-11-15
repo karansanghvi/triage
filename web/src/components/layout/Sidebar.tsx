@@ -53,7 +53,7 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Recent chats: takes the free space and scrolls on its own */}
+      {/* Recent chats only on the Chat page; elsewhere, empty space keeps the bottom pinned */}
       {onChatPage ? <ChatHistory /> : <div className="flex-1" />}
 
       <div className="flex flex-col gap-3 pt-4">

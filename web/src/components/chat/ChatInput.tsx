@@ -9,6 +9,7 @@ type ChatInputProps = {
   onSend: () => void
   quality: number
   onQualityChange: (value: number) => void
+  disabled?: boolean
 }
 
 // Where a value sits along the slider, as a percentage of its width
@@ -16,9 +17,9 @@ function position(value: number): string {
   return `${((value - QUALITY_MIN) / (QUALITY_MAX - QUALITY_MIN)) * 100}%`
 }
 
-export default function ChatInput({ value, onChange, onSend, quality, onQualityChange }: ChatInputProps) {
+export default function ChatInput({ value, onChange, onSend, quality, onQualityChange, disabled = false }: ChatInputProps) {
   const [showDial, setShowDial] = useState(false)
-  const canSend = value.trim().length > 0
+  const canSend = value.trim().length > 0 && !disabled
 
   return (
     <div className="mx-auto w-full max-w-3xl">
@@ -86,6 +87,7 @@ export default function ChatInput({ value, onChange, onSend, quality, onQualityC
       <div className="rounded-2xl border border-border bg-card p-3 transition-colors focus-within:border-primary/60">
         <textarea
           value={value}
+          disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {

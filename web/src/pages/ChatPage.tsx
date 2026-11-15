@@ -12,6 +12,7 @@ import { sendChat } from "@/lib/api"
 import { TriageError } from "@/lib/errors"
 import { DEFAULT_QUALITY } from "@/lib/quality"
 import type { AssistantMessage, ChatError, Message, UserMessage } from "@/types/chat"
+import LimitBanner from "@/components/chat/LimitBanner";
 
 export default function ChatPage() {
   const { name } = useVisitorName()
@@ -23,6 +24,9 @@ export default function ChatPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const isEmpty = messages.length === 0
+  // Free demo used up (when BYOK keys exist, this will also check that the visitor has none)
+  const limitStatus = demoStatus.status
+  const outOfRequests = !!limitStatus && (limitStatus.remaining === 0 || limitStatus.paused)
 
   // The selected answer: the one the visitor clicked, or else the latest answer in this chat.
   // Switching chats falls back to the latest answer automatically.
@@ -93,13 +97,16 @@ export default function ChatPage() {
   }
 
   const chatInput = (
-    <ChatInput
-      value={input}
-      onChange={setInput}
-      onSend={handleSend}
-      quality={quality}
-      onQualityChange={setQuality}
-    />
+    <>
+        {outOfRequests && limitStatus && <LimitBanner status={limitStatus} />}
+        <ChatInput
+            value={input}
+            onChange={setInput}
+            onSend={handleSend}
+            quality={quality}
+            onQualityChange={setQuality}
+        />
+    </>
   )
 
   return (
