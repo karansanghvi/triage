@@ -42,6 +42,7 @@ class RouterDeps:
     keyring: Optional[object] = field(default=None, repr=False)   # TRIAGE_ENCRYPTION_KEYS (accounts on)
     provider_keys: Optional[object] = None               # app.accounts.provider_keys.ProviderKeyStore
     key_verifier: Optional[object] = None                # app.accounts.verify_keys.verify_key (tests: a fake)
+    api_keys: Optional[object] = None                    # app.accounts.api_keys.ApiKeyStore
 
     def strong_model(self, providers=None, prefer=None) -> str:
         """The savings baseline: the first model of the high chain after filtering by provider, and reordering
@@ -96,6 +97,8 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
     deps.keyring = keyring
     deps.provider_keys = ProviderKeyStore(engine, keyring)
     deps.key_verifier = key_verifier or verify_key
+    from app.accounts.api_keys import ApiKeyStore
+    deps.api_keys = ApiKeyStore(engine, hash_secret)            # keys are kept as an HMAC with this secret
     # refuse to start if background labels could eat more than half of the strong or judge model's daily budget
     check_background_budget(config.snapshot().verification.background, [deps.strong_model(), judge_settings.model_name])
     return deps
