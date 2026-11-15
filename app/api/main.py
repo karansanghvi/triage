@@ -50,13 +50,14 @@ from app.api.demo import DemoLimitError, client_ip, visitor_id
 from app.api.errors import APIError, bad_request, stream_error_event
 from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_prefer_provider, parse_quality,
                              parse_task, parse_verify, resolve_keys)
+from app.accounts.limits import AccountLimitError
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
 from app.providers.base import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
 from app.providers.common import ProviderError
-from app.providers.keys import redact
+from app.providers.keys import KeyContext, redact
 from app.reliability import AllModelsFailed, ModelNotAllowed
 
 logger = logging.getLogger("triage.api")
@@ -321,8 +322,28 @@ def _join(items: list) -> str:
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def invalid_key_message(providers: list) -> str:
-    """Names the provider(s) and header(s), never a key or a tier."""
+def auth_rejections(attempts) -> list:
+    """(provider, redacted message) of every attempt a provider refused as unauthorized (401/403)."""
+    return [(a.provider, a.message) for a in attempts if a.outcome == "error" and a.error_kind == "auth"]
+
+
+def invalid_key_message(providers: list, saved=frozenset()) -> str:
+    """Names the provider(s) and header(s), or says a saved account key, never a key or a tier."""
+    from_saved = [p for p in providers if p in saved]
+    sent = [p for p in providers if p not in saved]
+    parts = []
+    if from_saved:
+        names = _join([PROVIDER_NAMES.get(p, p) for p in from_saved])
+        plural = len(from_saved) > 1
+        parts.append(f"{names} rejected your saved key{'s' if plural else ''}. Update "
+                     f"{'them' if plural else 'it'} in your account settings (PUT /v1/account/provider-keys/"
+                     f"{from_saved[0] if not plural else '{provider}'}).")
+    if sent:
+        parts.append(_sent_key_message(sent))
+    return " ".join(parts)
+
+
+def _sent_key_message(providers: list) -> str:
     names = _join([PROVIDER_NAMES.get(p, p) for p in providers])
     headers = _join([PROVIDER_KEY_HEADERS.get(p, p) for p in providers])
     plural = len(providers) > 1
@@ -397,8 +418,11 @@ def cors_origins_from_env() -> list:
 
 
 def request_mode(who: Optional[Caller], keys) -> str:
-    """api: a valid Triage key and no provider keys. byok: provider keys (with or without a Triage key).
-    demo: neither (only reachable when public access is on)."""
+    """account: a user's trk_ key or session (their saved keys, plus any X-*-Key headers). api: a valid Triage
+    key and no provider keys. byok: provider keys (with or without a Triage key). demo: neither (only reachable
+    when public access is on)."""
+    if who is not None and who.kind == "account":
+        return "account"
     if keys.mode == "byok":
         return "byok"
     return "api" if who is not None else "demo"
@@ -540,10 +564,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         """Public access on: no Authorization header = no caller (demo or BYOK); a header that is sent must be
         valid. Off: exactly `caller`."""
         account = await account_caller(authorization)
-        if account is not None:
-            raise APIError(403, "Account API keys can't be used yet: chat with account keys is coming soon. For "
-                           f"now, send your provider keys directly ({_KEY_HEADER_LIST}).", "permission_error",
-                           code="account_mode_unavailable")
+        if account is not None:                  # a trk_ key or a session: account mode
+            return account
         if not app.state.public:
             return app.state.auth.check(authorization)
         return app.state.auth.optional(authorization)
@@ -561,10 +583,26 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         # This request's provider keys (X-OpenAI-Key, ...). Passed down the call path only: never stored on deps,
         # app state, the cache or a background task. Closures below use the plain `byok` flag, not `keys`.
         keys = resolve_keys(request.headers)
+        account = who is not None and who.kind == "account"
+        saved_providers = frozenset()            # account: providers whose SAVED key this request uses
+        if account:
+            # The account's saved keys (valid or unverified), decrypted for this request only; X-*-Key headers
+            # replace the saved key for their provider. The plain keys live only in this request's KeyContext.
+            header_keys = dict(keys.keys)
+            saved = await anyio.to_thread.run_sync(deps.provider_keys.usable_keys, who.user_id) \
+                if deps.provider_keys.keyring is not None else {}
+            saved_providers = frozenset(saved) - frozenset(header_keys)
+            merged = {**saved, **header_keys}
+            keys = KeyContext("byok", merged) if merged else KeyContext("server")    # none: 400 below
+            saved = header_keys = merged = None
         byok = keys.mode == "byok"
         mode = request_mode(who, keys)
         key_id = who.key_id if who is not None else PUBLIC_KEY_IDS[mode]
         request.state.triage_headers = {"X-Triage-Mode": mode}
+        if account and not byok:
+            raise APIError(400, "Your account has no usable provider keys. Add one in your account settings "
+                           "(PUT /v1/account/provider-keys/{provider}), or send one with this request "
+                           f"({_KEY_HEADER_LIST}).", code="no_provider_keys")
         baseline_providers = keys.providers if byok else None     # provider names only, for the savings baseline
         unknown = sorted(set(body.model_extra or {}) - ACCEPTED_FIELDS)
         if unknown:
@@ -581,6 +619,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         # Checked in every mode, applied only to BYOK "auto" requests with a key for that provider (else ignored,
         # so api and demo requests route exactly as before)
         prefer = parse_prefer_provider(x_triage_prefer_provider)
+        if prefer is None and account:           # the account's saved preference is the default
+            prefer = who.preferred_provider
         if not (byok and auto and prefer in keys.providers):
             prefer = None
         requested_max_tokens = body.max_tokens or body.max_completion_tokens
@@ -622,17 +662,33 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                          settings_match_training=(temperature == training.get("temperature")
                                                   and max_tokens == training.get("max_tokens")) if auto else None,
                          prompt_hmac=prompt_hmac(messages, deps.hash_secret), verified=verify,
-                         mode=mode)
+                         mode=mode, user_id=who.user_id if account else None)
         if not auto and body.model in deps.registry:       # a named model is its own primary, even if it fails
             row.primary_model, row.tier = body.model, deps.registry[body.model].tier
 
         logged, admitted = [], []          # admitted: this request's DemoLimiter Admission, once counted
+        invalidate = []                    # account: (provider, redacted detail) of saved keys a provider rejected
+        user_id = who.user_id if account else None
+
+        def note_rejected_saved_keys(attempts):
+            """Any 401/403 on a SAVED key marks it invalid (even if a fallback then answered), so later requests
+            skip it. Header keys are the caller's own business and are never touched."""
+            if not account:
+                return
+            for provider, message in auth_rejections(attempts):
+                if provider in saved_providers and provider not in {p for p, _ in invalidate}:
+                    detail = f"{PROVIDER_NAMES.get(provider, provider)} rejected it during a chat request"
+                    if message:
+                        detail += f" ({redact(message, keys.secrets)})"
+                    invalidate.append((provider, detail[:160]))
         recorder = _RecordingPredictor(deps.predictor)
         request_deps = dataclasses.replace(deps, predictor=recorder)    # same client, registry and log
 
         def persist():
             deps.log.write(row)
             request_logger.info(json_log_line(row))
+            for provider, detail in invalidate:
+                deps.provider_keys.set_status(user_id, provider, "invalid", detail, verified=True)
             if admitted:                   # replace the token reservation with what it really used
                 tokens, calls = demo_usage(row, admitted[0].reserved_tokens)
                 deps.demo_limiter.settle(admitted[0], tokens=tokens, calls=calls)
@@ -663,6 +719,15 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 await finish("error", 429, error.code)
                 raise demo_limit_error(error, demo) from None
             request.state.triage_headers["X-Triage-Demo-Remaining"] = str(admitted[0].remaining)
+        elif mode == "account":            # no demo or public-BYOK limits; per-account ones instead
+            try:
+                await anyio.to_thread.run_sync(deps.account_limiter.admit, user_id)
+            except AccountLimitError as error:
+                await finish("error", 429, "account_rate_limited")
+                per = "minute" if error.which == "minute" else "day"
+                raise APIError(429, f"Your account has reached its requests-per-{per} limit. Try again in "
+                               f"{error.retry_after} seconds.", "rate_limit_error", code="account_rate_limited",
+                               headers={"Retry-After": str(error.retry_after)}) from None
         elif mode == "byok" and public:   # BYOK without a Triage key: a generous per-visitor cap (the user pays)
             try:
                 admitted.append(await anyio.to_thread.run_sync(deps.demo_limiter.admit_public_byok, visitor))
@@ -700,14 +765,17 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 raise APIError(400, f"`{body.model}` used {used} output tokens thinking and wrote no answer. "
                                "Send a higher max_tokens: thinking counts toward it.", param="max_tokens",
                                code="max_tokens_too_low") from None
+            note_rejected_saved_keys(error.attempts)
             rejected = rejected_key_providers(error.attempts) if byok else []
             if rejected:                                    # the user's own key(s) were refused: say so, as a 401
                 await finish("error", 401, "invalid_provider_key")
-                raise APIError(401, invalid_key_message(rejected), code="invalid_provider_key") from None
+                raise APIError(401, invalid_key_message(rejected, saved_providers), code="invalid_provider_key") \
+                    from None
             await finish("error", 503, "all_models_failed")
             raise APIError(503, f"No model could answer: {error}", "server_error", code="all_models_failed") from None
         decision = routed.decision
         _apply_decision(row, decision)
+        note_rejected_saved_keys(decision.attempts)
         row.ttft_ms = round((time.perf_counter() - started) * 1000, 1)
         created = int(time.time())
 

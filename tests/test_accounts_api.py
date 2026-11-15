@@ -197,7 +197,8 @@ def test_a_session_token_on_chat_is_an_account_caller():
     token = signup(http).json()["session_token"]
     r = http.post("/v1/chat/completions", json={"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
                   headers=bearer(token))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "account_mode_unavailable"   # until account chat
+    assert r.status_code == 400 and r.json()["error"]["code"] == "no_provider_keys"    # account mode, no keys yet
+    assert r.headers["x-triage-mode"] == "account"
 
 
 # ---------- rate limits ----------

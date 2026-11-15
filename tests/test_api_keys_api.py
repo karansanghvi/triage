@@ -184,14 +184,16 @@ def test_a_session_token_works_on_the_triage_key_endpoints_too():
 
 
 @pytest.mark.parametrize("public", [False, True])
-def test_chat_with_a_trk_key_never_half_works(public):
+def test_chat_with_a_trk_key_runs_in_account_mode(public):
     engine = db.open_engine("sqlite://")
     deps = make_deps(engine=engine, log=SQLRequestLog(engine), trusted_proxy_hops=1)
     http = TestClient(create_app(deps=deps, auth=Auth([API_KEY]), accounts=True, public=public))
     key = create(http, session(http)).json()["key"]
     r = http.post("/v1/chat/completions", json=ASK, headers={"Authorization": f"Bearer {key}",
                                                              "x-groq-key": "sk-test-SECRET123"})
-    assert r.status_code == 403 and deps.fake_models.calls == []
+    assert r.status_code == 200 and r.headers["x-triage-mode"] == "account"
+    (row,) = deps.log.rows()
+    assert (row.mode, row.key_id) == ("account", key[:12])
 
 
 def bad_keys(http, auth):
