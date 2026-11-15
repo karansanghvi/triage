@@ -1,14 +1,16 @@
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { AlertCircle, ChevronRight, Split } from "lucide-react"
+import { ChevronRight, Split, Scissors } from "lucide-react"
 import type { AssistantMessage as AssistantMessageType, Tier } from "@/types/chat"
 import { formatCost, formatPercent } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import ErrorCard from "./ErrorCard"
 
 type AssistantMessageProps = {
   message: AssistantMessageType
   selected: boolean
   onSelect: () => void
+  onRetry?: () => void
 }
 
 const TIER_DOT: Record<Tier, string> = {
@@ -23,7 +25,7 @@ const TIER_SHORT: Record<Tier, string> = {
   high: "Most powerful",
 }
 
-export default function AssistantMessage({ message, selected, onSelect }: AssistantMessageProps) {
+export default function AssistantMessage({ message, selected, onSelect, onRetry }: AssistantMessageProps) {
   const routing = message.routing
   const savedShare =
     routing && routing.saved !== null && routing.strongCost ? routing.saved / routing.strongCost : null
@@ -45,13 +47,8 @@ export default function AssistantMessage({ message, selected, onSelect }: Assist
           </div>
         )}
 
-        {/* Error (full design in Step 8) */}
-        {message.status === "error" && message.error && (
-          <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            {message.error.message}
-          </div>
-        )}
+        {/* Error */}
+        {message.status === "error" && message.error && <ErrorCard error={message.error} onRetry={onRetry} />}
 
         {/* Answer */}
         {message.status === "done" && (
@@ -59,6 +56,13 @@ export default function AssistantMessage({ message, selected, onSelect }: Assist
             <div className="prose prose-sm prose-invert max-w-none pt-1">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
             </div>
+
+            {message.truncated && (
+              <p className="mt-2 flex items-center gap-1.5 text-xs text-warning">
+                <Scissors className="h-3.5 w-3.5" />
+                This answer was cut off because it reached the length limit.
+              </p>
+            )}
 
             {routing && (
               <button

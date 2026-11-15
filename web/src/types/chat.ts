@@ -41,8 +41,9 @@ export type AssistantMessage = {
   role: "assistant"
   content: string
   status: MessageStatus
-  routing?: RoutingInfo       // filled in once the answer arrives
-  error?: ChatError           // filled in if the request failed
+  routing?: RoutingInfo
+  error?: ChatError
+  truncated?: boolean         // the answer stopped at the length limit
 }
 
 export type Message = UserMessage | AssistantMessage

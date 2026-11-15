@@ -3,39 +3,34 @@ import Welcome from "@/components/chat/Welcome"
 import SuggestionChips from "@/components/chat/SuggestionChips"
 import ChatInput from "@/components/chat/ChatInput"
 import MessageList from "@/components/chat/MessageList"
+import RoutingPanel from "@/components/chat/RoutingPanel"
 import { useVisitorName } from "@/hooks/useVisitorName"
+import { useDemoStatus } from "@/context/DemoStatusContext"
 import { sendChat } from "@/lib/api"
 import { TriageError } from "@/lib/errors"
+import { DEFAULT_QUALITY } from "@/lib/quality"
 import type { AssistantMessage, ChatError, Message, UserMessage } from "@/types/chat"
-import RoutingPanel from "@/components/chat/RoutingPanel";
-import { DEFAULT_QUALITY } from "@/lib/quality";
-import { useDemoStatus } from "@/context/DemoStatusContext"
 
 export default function ChatPage() {
   const { name } = useVisitorName()
+  const demoStatus = useDemoStatus()
   const [input, setInput] = useState("")
   const [quality, setQuality] = useState(DEFAULT_QUALITY)
   const [messages, setMessages] = useState<Message[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
-  const demoStatus = useDemoStatus()
 
   const isEmpty = messages.length === 0
   const selectedMessage = messages.find((m) => m.id === selectedId)
   const selectedRouting =
     selectedMessage && selectedMessage.role === "assistant" ? selectedMessage.routing ?? null : null
 
-  async function handleSend() {
-    const content = input.trim()
-    if (!content || sending) return
-
-    const userMessage: UserMessage = { id: crypto.randomUUID(), role: "user", content }
+  // Sends a conversation to Triage and fills in the answer
+  async function requestAnswer(history: Message[]) {
     const pendingId = crypto.randomUUID()
     const pending: AssistantMessage = { id: pendingId, role: "assistant", content: "", status: "pending" }
-    const history = [...messages, userMessage]
 
     setMessages([...history, pending])
-    setInput("")
     setSending(true)
 
     try {
@@ -44,14 +39,14 @@ export default function ChatPage() {
       setMessages((prev) =>
         prev.map((m) =>
           m.id === pendingId && m.role === "assistant"
-            ? { ...m, content: result.content, status: "done", routing: result.routing }
+            ? { ...m, content: result.content, status: "done", routing: result.routing, truncated: result.truncated }
             : m
         )
       )
       setSelectedId(pendingId)
     } catch (err) {
       demoStatus.refresh()
-      
+
       const error: ChatError =
         err instanceof TriageError
           ? { code: err.code, message: err.message, retryAfter: err.retryAfter }
@@ -63,6 +58,23 @@ export default function ChatPage() {
     } finally {
       setSending(false)
     }
+  }
+
+  function handleSend() {
+    const content = input.trim()
+    if (!content || sending) return
+
+    const userMessage: UserMessage = { id: crypto.randomUUID(), role: "user", content }
+    setInput("")
+    requestAnswer([...messages, userMessage])
+  }
+
+  // Resend the conversation up to the failed answer
+  function handleRetry(failedId: string) {
+    if (sending) return
+    const index = messages.findIndex((m) => m.id === failedId)
+    if (index === -1) return
+    requestAnswer(messages.slice(0, index))
   }
 
   const chatInput = (
@@ -91,7 +103,12 @@ export default function ChatPage() {
           /* Scene 2: messages scroll, input at the bottom */
           <>
             <div className="min-h-0 flex-1 overflow-y-auto">
-              <MessageList messages={messages} selectedId={selectedId} onSelect={setSelectedId} />
+              <MessageList
+                messages={messages}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onRetry={handleRetry}
+              />
             </div>
             <div className="pt-4">{chatInput}</div>
           </>

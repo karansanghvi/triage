@@ -24,7 +24,7 @@ type ApiTriage = {
 }
 
 type ApiChatResponse = {
-  choices: { message: { content: string } }[]
+  choices: { message: { content: string }; finish_reason?: string }[]
   triage: ApiTriage
 }
 
@@ -50,6 +50,7 @@ export type ChatResult = {
   content: string
   routing: RoutingInfo
   demo: DemoHeaders | null
+  truncated: boolean
 }
 
 // ---------- Helpers ----------
@@ -147,10 +148,12 @@ export async function sendChat(
   }
 
   const data = (await response.json()) as ApiChatResponse
+  const choice = data.choices[0]
   return {
     content: data.choices[0]?.message.content ?? "",
     routing: toRoutingInfo(data.triage),
     demo: readDemoHeaders(response.headers),
+    truncated: choice?.finish_reason === "length",
   }
 }
 
