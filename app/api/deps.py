@@ -7,7 +7,7 @@ from app.api.config_state import ActiveConfig
 from app.api.request_log import InMemoryRequestLog, SQLRequestLog, hash_secret_from_env, open_request_log
 from pathlib import Path
 
-from app.api.demo import DemoLimiter, DemoSettings, demo_db_path, load_demo_settings, trusted_hops_from_env
+from app.api.demo import DemoLimiter, DemoSettings, load_demo_settings, trusted_hops_from_env
 from app.cache import DEFAULT_CACHE_PATH, FAKE_CACHE_PATH, CachedSender, ResponseCache
 from app.providers.base import send_request
 from app.registry import load_registry
@@ -34,7 +34,7 @@ class RouterDeps:
     judge_settings: Optional[JudgeSettings] = None       # config/judge.yaml (background labels)
     labeler: Optional[object] = None                     # background.BackgroundLabeler
     demo_settings: Optional[DemoSettings] = None         # config/demo.yaml
-    demo_limiter: Optional[DemoLimiter] = None           # demo and public-BYOK counters (TRIAGE_DEMO_DB)
+    demo_limiter: Optional[DemoLimiter] = None           # demo and public-BYOK counters (in the database)
     trusted_proxy_hops: int = 0                          # TRIAGE_TRUSTED_PROXY_HOPS, for the visitor's IP
 
     def strong_model(self, providers=None, prefer=None) -> str:
@@ -135,14 +135,17 @@ def load_deps() -> RouterDeps:
         send_fn = FakeModels()
     else:
         send_fn = send_request
-    log = open_request_log(fake=fake)
+    # One database for the request log and the demo counters: DATABASE_URL, or fake mode's own file
+    from app import db
+    engine = db.open_engine(db.database_url(fake))
+    log = open_request_log(fake=fake, engine=engine)
     hash_secret = hash_secret_from_env(required=isinstance(log, SQLRequestLog))   # before loading anything slow
     path = cache_path(fake)
     cache = ResponseCache(path) if path else None
     registry = load_registry()
     config = load_config(registry)                    # before the slow predictor, so a bad override fails fast
     demo_settings = load_demo_settings()
-    demo_limiter = DemoLimiter(demo_settings, path=demo_db_path(fake))   # survives restarts (not ephemeral disks)
+    demo_limiter = DemoLimiter(demo_settings, engine=engine)   # survives restarts and redeploys
     trusted_proxy_hops = trusted_hops_from_env()
     predictor, classifier = load_predictor_checked()
     return build_deps(predictor, send_fn, registry=registry, config=config, cache=cache, classifier=classifier,

@@ -7,7 +7,7 @@ about one of them sets it itself with monkeypatch.
 import pytest
 
 DEPLOYMENT_ENV = ("TRIAGE_PUBLIC", "TRIAGE_CORS_ORIGINS", "TRIAGE_SERVER_PROVIDERS", "TRIAGE_TRUSTED_PROXY_HOPS",
-                  "TRIAGE_DEMO_DB", "DATABASE_URL", "TRIAGE_FAKE_DB")
+                  "DATABASE_URL", "TRIAGE_FAKE_DB")
 
 
 @pytest.fixture(autouse=True)

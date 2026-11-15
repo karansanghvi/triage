@@ -187,9 +187,11 @@ Demo and BYOK requests are never used for retraining and get no background label
 - `TRIAGE_SERVER_PROVIDERS=groq,gemini` drops Ollama on a host that can't run it. The low tier then falls back
   from groq-allam to gemini-flash-lite.
 - `TRIAGE_CORS_ORIGINS` lists the website's origins.
-- The demo counters live in `data/demo/usage.sqlite3` (`TRIAGE_DEMO_DB`). On a host with an ephemeral disk
-  they're lost on every restart or redeploy, so the limits start over; the providers' own free-tier quotas are
-  then the only backstop.
+- The demo counters live in the database with the request log (`DATABASE_URL`; see "Database"), so on Postgres
+  they survive restarts and redeploys and every instance shares them. The per-minute limit is kept in memory by
+  each instance. Without `DATABASE_URL` they're in the local `data/triage.sqlite3`, which an ephemeral disk loses
+  on every redeploy. The old `data/demo/usage.sqlite3` and `TRIAGE_DEMO_DB` are no longer used; the counters
+  weren't copied (they're per day and kept 7 days).
 
 ## Retraining the classifier (Phase 4)
 
@@ -207,8 +209,9 @@ retraining points `config/routing.yaml` at a new version, restart the server (fo
 
 ## Database
 
-Triage keeps its request log (and, later, accounts and demo counters) in one database through SQLAlchemy Core,
-with the schema managed by Alembic (`migrations/`).
+Triage keeps its request log and the demo counters (and, later, accounts) in one database through SQLAlchemy
+Core, with the schema managed by Alembic (`migrations/`). Demo admissions are atomic across instances: SQLite runs
+each check-and-count in a `BEGIN IMMEDIATE` transaction, Postgres under a transaction-level advisory lock.
 
 - **Local and tests:** SQLite. Without `DATABASE_URL` the server uses `data/triage.sqlite3`, creating it and
   applying migrations when it opens. Tests never need a network.

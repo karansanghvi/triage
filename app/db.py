@@ -9,8 +9,8 @@ The schema is owned by Alembic (migrations/). A SQLite database is upgraded to t
 opened (local files and tests need no extra step); any other database must already be at the latest revision
 (run `alembic upgrade head` as a deploy step) or Triage refuses to start.
 
-Tables here are what the code reads and writes (the request log and labels; the demo counters); migrations/versions/ is what creates them. A test checks that
-the two match.
+Tables here are what the code reads and writes (the request log and labels; the demo counters);
+migrations/versions/ is what creates them. A test checks that the two match.
 """
 import os
 from dataclasses import fields
