@@ -111,13 +111,13 @@ export function clearStore(): void {
 
 // ------------ Creating -------------
 
-export function createChat(messages: Message[]): Chat {
-    const now = new Date().toISOString()
-    return {
-        id: crypto.randomUUID(),
-        title: makeTitle(messages),
-        createdAt: now,
-        updatedAt: now,
-        messages,
-    }
+export function createChat(messages: Message[], id: string = crypto.randomUUID()): Chat {
+  const now = new Date().toISOString()
+  return {
+    id,
+    title: makeTitle(messages),
+    createdAt: now,
+    updatedAt: now,
+    messages,
+  }
 }
