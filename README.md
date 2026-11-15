@@ -196,7 +196,7 @@ Demo and BYOK requests are never used for retraining and get no background label
 ## Accounts (Phase 5, in progress)
 
 With `TRIAGE_ACCOUNTS=on`, people can sign up with an email and password. Off (the default), these paths don't
-exist. Accounts don't change chat yet: saved provider keys, account API keys and account chat come in later PRs.
+exist. Accounts don't change chat yet: account API keys and chat with saved keys come in later PRs.
 
 | Endpoint | Body | Result |
 |---|---|---|
@@ -222,6 +222,40 @@ exist. Accounts don't change chat yet: saved provider keys, account API keys and
   login gives the same 401 as a wrong password (so it reveals nothing) and those two endpoints give 429 with
   `Retry-After`. Attempts are stored under keyed hashes, never IPs or emails.
 - **Logs** carry the event, the outcome and the visitor's hash; never an email, password or token.
+
+**Saved provider keys** (session token only):
+
+| Endpoint | Body | Result |
+|---|---|---|
+| `GET /v1/account/provider-keys` | | `[{provider, last4, status, status_detail, verified_at, created_at, updated_at}]`, never the key |
+| `PUT /v1/account/provider-keys/{provider}` | `key` | the summary; 400 `invalid_provider_key` if the provider rejects it |
+| `POST /v1/account/provider-keys/{provider}/verify` | | the summary after checking the saved key again |
+| `DELETE /v1/account/provider-keys/{provider}` | | 204 |
+
+- `provider` is `openai`, `anthropic`, `groq` or `gemini`; one key per provider, and saving again replaces it.
+- **Checked before saving** with one free call to the provider's list-models endpoint (10 s timeout; Gemini's key
+  goes in the `x-goog-api-key` header, never the URL). `valid` means the provider accepted the key, not that it
+  has credit or quota. Rejected (401/403, or Gemini's `API_KEY_INVALID` 400): not stored. No clear answer
+  (timeout, network error, 429, 5xx, anything else): stored as `unverified`. A re-check that's rejected marks the
+  saved key `invalid`. `status_detail` says why a key is `unverified` or `invalid` (short, redacted; `null` once
+  accepted). A Gemini 403 is refused with a message saying Google refused the key for a project, billing or
+  permission reason, since that key is usually typed correctly.
+- **Rate limit:** 20 saves or re-checks per user per hour (429 with `Retry-After`).
+- **Encrypted at rest** with AES-256-GCM, a fresh nonce each time, bound to the user and provider (a ciphertext
+  copied to another row won't decrypt). Only the last 4 characters are kept in plain form. The encryption keys
+  live only in `TRIAGE_ENCRYPTION_KEYS`, never in the database or the repo, and with `TRIAGE_ACCOUNTS=on` the server
+  refuses to start without valid ones:
+
+  ```bash
+  python3 -c "import base64, secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+  TRIAGE_ENCRYPTION_KEYS="k1:<that output>"
+  ```
+
+  To rotate: put a new key first (`k2:<new>,k1:<old>`) and deploy. New saves use `k2` and old rows still decrypt
+  with `k1`; drop `k1` only once nothing uses it (a re-encryption script comes later). Losing every key makes
+  saved keys unreadable (409 `key_unreadable`), and users must save them again.
+- A key is never returned, logged or put in an error, a status detail or the request log; provider messages
+  are redacted with the key as a secret.
 
 ## Retraining the classifier (Phase 4)
 

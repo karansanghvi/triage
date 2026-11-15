@@ -9,6 +9,12 @@
     POST   /v1/account/password {current_password, new_password}               -> 204
     DELETE /v1/account          {password}                                     -> 204
 
+    GET    /v1/account/provider-keys                    -> [{provider, last4, status, verified_at, created_at,
+                                                             updated_at}]   (never the key)
+    PUT    /v1/account/provider-keys/{provider} {key}   -> the saved key's summary (checked with the provider first)
+    POST   /v1/account/provider-keys/{provider}/verify  -> the summary after checking the saved key again
+    DELETE /v1/account/provider-keys/{provider}         -> 204
+
 Everything except signup and login needs a session token (Authorization: Bearer trs_...), never a Triage API key.
 
 Never logged or echoed: emails, passwords, tokens. Auth failures log only the visitor's hash and the outcome.
@@ -25,7 +31,9 @@ from pydantic import BaseModel, ConfigDict
 from app.accounts.credentials import (CredentialError, check_password_rules, hash_password,
                                       looks_like_session_token, needs_rehash, normalize_display_name,
                                       normalize_email, verify_password)
+from app.accounts.encryption import DecryptionError
 from app.accounts.ratelimit import RateLimited, email_subject
+from app.accounts.verify_keys import NAMES
 from app.accounts.store import PROVIDERS, EmailTaken
 from app.api.demo import client_ip, visitor_id
 from app.api.errors import APIError, bad_request
@@ -93,6 +101,25 @@ class PasswordChange(_Body):
 
 class AccountDelete(_Body):
     password: str
+
+
+class ProviderKeyBody(_Body):
+    key: str
+
+
+MAX_PROVIDER_KEY_CHARS = 512
+
+
+def rejected_message(provider: str, verdict) -> str:
+    """Why a key wasn't saved. Gemini's 403 is a project-level refusal (billing, verification, restrictions, a
+    blocked key), not a typo, so it says so. verdict.detail is already redacted; the key itself is never used."""
+    if provider == "gemini" and verdict.http_status == 403:
+        text = ("Google refused this Gemini key for a project, billing or permission reason (HTTP 403), so it "
+                "wasn't saved. The key itself may be typed correctly: check its Google Cloud project, billing, "
+                "verification and API restrictions in Google AI Studio.")
+    else:
+        text = f"{NAMES[provider]} rejected this key, so it wasn't saved. Check that it was copied correctly."
+    return f"{text} ({verdict.detail})" if verdict.detail else text
 
 
 def account_router() -> APIRouter:
@@ -256,6 +283,88 @@ def account_router() -> APIRouter:
         await check_password(request, user, body.password, "delete_account")
         await anyio.to_thread.run_sync(request.app.state.deps.accounts.delete_user, user.id)
         _log("delete_account", "ok", visitor(request))
+        return Response(status_code=204)
+
+    # ----- saved provider keys -----
+
+    def provider_name(provider: str) -> str:
+        name = provider.strip().lower()
+        if name not in PROVIDERS:
+            raise bad_request(f"provider must be one of {', '.join(PROVIDERS)}.", "provider", "invalid_value")
+        return name
+
+    def key_store(request: Request):
+        store = request.app.state.deps.provider_keys
+        if store.keyring is None:          # only when started without set_up_keyring (it refuses to start)
+            raise APIError(503, "Saving provider keys isn't available: the server has no encryption keys.",
+                           "server_error", code="encryption_unavailable")
+        return store
+
+    async def count_key_check(request: Request, user) -> None:
+        try:
+            await anyio.to_thread.run_sync(request.app.state.deps.auth_limiter.hit, "provider_key_user", user.id)
+        except RateLimited as error:
+            _log("provider_key", "rate_limited", visitor(request))
+            raise _too_many(error, "provider key") from None
+
+    @router.get("/v1/account/provider-keys")
+    async def list_provider_keys(request: Request, current=Depends(current_session)):
+        saved = await anyio.to_thread.run_sync(key_store(request).list, current[1].id)
+        return [k.public() for k in saved]
+
+    @router.put("/v1/account/provider-keys/{provider}")
+    async def save_provider_key(provider: str, body: ProviderKeyBody, request: Request,
+                                current=Depends(current_session)):
+        """Checked with the provider first: rejected (401/403) is a 400 and nothing is stored; no clear answer
+        (timeout, network error, 429, 5xx) is stored as "unverified". Replaces any saved key for the provider."""
+        _, user = current
+        provider = provider_name(provider)
+        store = key_store(request)
+        key = body.key.strip()
+        if not key or len(key) > MAX_PROVIDER_KEY_CHARS:
+            raise bad_request(f"key must be 1 to {MAX_PROVIDER_KEY_CHARS} characters.", "key", "invalid_value")
+        await count_key_check(request, user)
+        verdict = await anyio.to_thread.run_sync(request.app.state.deps.key_verifier, provider, key)
+        if verdict.status == "invalid":
+            _log(f"provider_key_save:{provider}", "rejected", visitor(request))
+            raise APIError(400, rejected_message(provider, verdict), code="invalid_provider_key", param="key")
+        saved = await anyio.to_thread.run_sync(
+            lambda: store.save(user.id, provider, key, verdict.status, verdict.detail, verdict.answered))
+        key = None                                     # the only plain copy; nothing keeps it
+        _log(f"provider_key_save:{provider}", saved.status, visitor(request))
+        return saved.public()
+
+    @router.post("/v1/account/provider-keys/{provider}/verify")
+    async def verify_provider_key(provider: str, request: Request, current=Depends(current_session)):
+        """Check the saved key again and record the result (a rejected key stays saved, marked "invalid")."""
+        _, user = current
+        provider = provider_name(provider)
+        store = key_store(request)
+        if await anyio.to_thread.run_sync(store.get, user.id, provider) is None:
+            raise APIError(404, f"No saved {NAMES[provider]} key.", param="provider", code="not_found")
+        await count_key_check(request, user)
+
+        def check():                                   # decrypt, check and drop, all in the worker thread
+            try:
+                plain = store.decrypt(user.id, provider)
+            except DecryptionError:
+                return None
+            return request.app.state.deps.key_verifier(provider, plain)
+
+        verdict = await anyio.to_thread.run_sync(check)
+        if verdict is None:
+            raise APIError(409, f"The saved {NAMES[provider]} key can't be decrypted any more (its encryption key "
+                           "was removed). Save it again.", code="key_unreadable", param="provider")
+        saved = await anyio.to_thread.run_sync(
+            lambda: store.set_status(user.id, provider, verdict.status, verdict.detail, verdict.answered))
+        _log(f"provider_key_verify:{provider}", saved.status, visitor(request))
+        return saved.public()
+
+    @router.delete("/v1/account/provider-keys/{provider}", status_code=204)
+    async def delete_provider_key(provider: str, request: Request, current=Depends(current_session)):
+        provider = provider_name(provider)
+        await anyio.to_thread.run_sync(key_store(request).delete, current[1].id, provider)
+        _log(f"provider_key_delete:{provider}", "ok", visitor(request))
         return Response(status_code=204)
 
     return router

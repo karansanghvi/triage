@@ -381,6 +381,15 @@ CORS_RESPONSE_HEADERS = ["X-Triage-Request-Id", "X-Triage-Model", "X-Triage-Tier
                          "X-Triage-Max-Tokens", "Retry-After"]
 
 
+def set_up_keyring(deps) -> None:
+    """Accounts need TRIAGE_ENCRYPTION_KEYS to encrypt saved provider keys: load and check it (raising
+    EncryptionConfigError, which never prints a key) unless deps already has a keyring."""
+    if deps.keyring is None:
+        from app.accounts.encryption import KeyRing
+        deps.keyring = KeyRing.from_env()
+    deps.provider_keys.keyring = deps.keyring
+
+
 def cors_origins_from_env() -> list:
     return [o.strip().rstrip("/") for o in os.environ.get(CORS_ORIGINS_ENV, "").split(",") if o.strip()]
 
@@ -457,6 +466,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         if app.state.deps is None:
             from app.api.deps import load_deps
             app.state.deps = load_deps()          # predictor + embedding model, once
+        if app.state.accounts:
+            set_up_keyring(app.state.deps)        # refuses to start without valid TRIAGE_ENCRYPTION_KEYS
         yield
 
     _ensure_json_handler()
