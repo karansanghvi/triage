@@ -1,4 +1,4 @@
-"""The SQLite request log, JSON request lines and Step 8 storage (Phase 4 Steps 8 and 10). Fake models only.
+"""The request log (in the database, app/db.py; SQLite here), JSON request lines and Step 8 storage (Phase 4 Steps 8 and 10). Fake models only.
 
 These use the real route_and_stream (app/api/core.py), not the reference version.
 """
@@ -15,7 +15,8 @@ from fastapi.testclient import TestClient
 from app.api.auth import Auth, key_id
 from app.api.fake_models import FakeBehavior
 from app.api.main import create_app, request_logger
-from app.api.request_log import (SCHEMA_VERSION, InMemoryRequestLog, RequestRow, SQLiteRequestLog,
+from app import db as db_module
+from app.api.request_log import (InMemoryRequestLog, RequestRow, SQLiteRequestLog, SQLRequestLog,
                                  embedding_from_bytes, embedding_to_bytes, is_training_eligible, open_request_log)
 from app.router.embeddings import MODEL_NAME
 from app.router.features import FEATURE_NAMES, FEATURE_VERSION
@@ -73,10 +74,10 @@ def row(i=0, **kw):
 
 # ---------- schema ----------
 
-def test_schema_tables_indexes_version_and_wal(tmp_path):
+def test_schema_tables_indexes_revision_and_wal(tmp_path):
     log = SQLiteRequestLog(tmp_path / "r.sqlite3")
     db = sqlite3.connect(tmp_path / "r.sqlite3")
-    assert db.execute("SELECT version FROM schema_version").fetchall() == [(SCHEMA_VERSION,)]
+    assert db.execute("SELECT version_num FROM alembic_version").fetchall() == [(db_module.head_revision(),)]
     cols = [c[1] for c in db.execute("PRAGMA table_info(requests)")]
     assert cols[0] == "id" and cols[1:] == [f for f in RequestRow.__dataclass_fields__]
     indexes = {i[1] for i in db.execute("PRAGMA index_list(requests)")}
@@ -85,20 +86,13 @@ def test_schema_tables_indexes_version_and_wal(tmp_path):
     log.close()
 
 
-def test_a_database_from_another_schema_version_is_refused(tmp_path):
-    SQLiteRequestLog(tmp_path / "r.sqlite3").close()
-    db = sqlite3.connect(tmp_path / "r.sqlite3")
-    db.execute("UPDATE schema_version SET version = 99")
-    db.commit()
-    with pytest.raises(RuntimeError, match="schema version 99"):
-        SQLiteRequestLog(tmp_path / "r.sqlite3")
-
-
 def test_log_location_and_kind_come_from_the_environment(tmp_path, monkeypatch):
-    monkeypatch.setenv("TRIAGE_LOG_DB", str(tmp_path / "env.sqlite3"))
+    monkeypatch.setenv("DATABASE_URL", db_module.sqlite_url(tmp_path / "env.sqlite3"))
     log = open_request_log()
-    assert isinstance(log, SQLiteRequestLog) and log.path == tmp_path / "env.sqlite3"
+    assert isinstance(log, SQLRequestLog) and log.engine.url.database == str(tmp_path / "env.sqlite3")
+    log.write(row())
     log.close()
+    assert [r.request_id for r in SQLiteRequestLog(tmp_path / "env.sqlite3").rows()] == ["r0"]
     monkeypatch.setenv("TRIAGE_LOG", "memory")
     assert isinstance(open_request_log(), InMemoryRequestLog)
 
@@ -388,13 +382,13 @@ def test_the_app_stores_the_hmac_under_its_own_secret(tmp_path):
     assert values[0] != values[1]
 
 
-def test_sqlite_log_refuses_to_start_without_a_hash_secret(tmp_path, monkeypatch):
+def test_database_log_refuses_to_start_without_a_hash_secret(tmp_path, monkeypatch):
     from app.api import deps as deps_module
     from app.api.fake_models import FakeModels
     monkeypatch.delenv("TRIAGE_HASH_SECRET", raising=False)
     with pytest.raises(RuntimeError, match="TRIAGE_HASH_SECRET"):
         deps_module.build_deps(VectorPredictor(), FakeModels(), log=SQLiteRequestLog(tmp_path / "r.sqlite3"))
-    monkeypatch.setenv("TRIAGE_LOG_DB", str(tmp_path / "s.sqlite3"))
+    monkeypatch.setenv("DATABASE_URL", db_module.sqlite_url(tmp_path / "s.sqlite3"))
     monkeypatch.setattr(deps_module, "load_predictor_checked", lambda: pytest.fail("checked the secret first"))
     with pytest.raises(RuntimeError, match="TRIAGE_HASH_SECRET"):
         deps_module.load_deps()
@@ -410,7 +404,7 @@ def test_schema_v2_has_prompt_hmac_and_no_plain_hash(tmp_path):
     SQLiteRequestLog(tmp_path / "r.sqlite3").close()
     db = sqlite3.connect(tmp_path / "r.sqlite3")
     cols = {c[1] for c in db.execute("PRAGMA table_info(requests)")}
-    assert SCHEMA_VERSION >= 2 and "prompt_hmac" in cols and "prompt_sha256" not in cols
+    assert "prompt_hmac" in cols and "prompt_sha256" not in cols
 
 
 # ---------- stats and lookups don't read the vectors ----------
@@ -419,16 +413,21 @@ def test_stats_and_request_lookup_never_select_the_vector_columns(tmp_path):
     http, deps, log = app_with(tmp_path)
     rid = post(http).headers["x-triage-request-id"]
     assert log.get(rid).embedding is not None                              # they are stored
+    from sqlalchemy import event
     statements = []
-    log._db.set_trace_callback(statements.append)
+
+    def record(conn, cursor, statement, *args):
+        statements.append(statement)
+    event.listen(log.engine, "before_cursor_execute", record)
     assert http.get("/v1/stats", headers=auth()).status_code == 200
     assert http.get("/v1/stats", headers=auth(ADMIN_KEY)).status_code == 200
     assert http.get(f"/v1/requests/{rid}", headers=auth()).status_code == 200
-    log._db.set_trace_callback(None)
-    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    event.remove(log.engine, "before_cursor_execute", record)
+    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT") and "FROM requests" in s]
     assert len(selects) == 3
     for s in selects:
-        columns = {c.strip() for c in s.split("FROM")[0].replace("SELECT", "", 1).split(",")}
+        columns = {c.strip().removeprefix("requests.") for c in
+                   s.split("FROM")[0].replace("SELECT", "", 1).split(",")}
         assert not {"embedding", "features"} & columns, s
         assert {"feature_version", "embedding_model", "price_as_cost"} <= columns
 
@@ -444,48 +443,7 @@ def test_reads_without_vectors_still_return_everything_else(tmp_path):
         assert log.rows(include_vectors=False)[0] == light and log.get("r0") == full   # nothing was lost
 
 
-# ---------- schema 3 -> 4 (preferred_provider) ----------
-
-def _version_3_file(path):
-    """A request log exactly as schema version 3 wrote it: no preferred_provider column, one row."""
-    from app.api.request_log import _FIELDS, _column
-    v3 = [f for f in _FIELDS if f.name != "preferred_provider"]
-    db = sqlite3.connect(path)
-    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
-    db.execute("INSERT INTO schema_version (version) VALUES (3)")
-    db.execute("CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-               + ", ".join(_column(f) for f in v3) + ")")
-    db.execute("INSERT INTO requests (request_id, timestamp, key_id, requested_model, stream, mode) "
-               "VALUES ('old-1', '2026-11-01T00:00:00+00:00', 'k1', 'auto', 0, 'byok')")
-    db.commit()
-    db.close()
-
-
-def test_a_version_3_log_is_migrated_in_place(tmp_path):
-    path = tmp_path / "r.sqlite3"
-    _version_3_file(path)
-    log = SQLiteRequestLog(path)
-    db = sqlite3.connect(path)
-    assert db.execute("SELECT version FROM schema_version").fetchall() == [(SCHEMA_VERSION,)] == [(4,)]
-    assert "preferred_provider" in [c[1] for c in db.execute("PRAGMA table_info(requests)")]
-    (old,) = log.rows()
-    assert (old.request_id, old.mode, old.preferred_provider) == ("old-1", "byok", None)
-    log.write(row(request_id="new-1", preferred_provider="anthropic"))
-    assert log.get("new-1").preferred_provider == "anthropic"
-    log.close()
-    reopened = SQLiteRequestLog(path)                    # already version 4: nothing more to do
-    assert [r.request_id for r in reopened.rows()] == ["old-1", "new-1"]
-    reopened.close()
-
-
-def test_versions_without_a_migration_are_still_refused(tmp_path):
-    SQLiteRequestLog(tmp_path / "r.sqlite3").close()
-    db = sqlite3.connect(tmp_path / "r.sqlite3")
-    db.execute("UPDATE schema_version SET version = 2")
-    db.commit()
-    with pytest.raises(RuntimeError, match="schema version 2"):
-        SQLiteRequestLog(tmp_path / "r.sqlite3")
-
+# ---------- preferred_provider and user_id ----------
 
 def test_preferred_provider_round_trips_and_is_in_public_dict(tmp_path):
     log = SQLiteRequestLog(tmp_path / "r.sqlite3")
@@ -494,3 +452,62 @@ def test_preferred_provider_round_trips_and_is_in_public_dict(tmp_path):
     assert [r.preferred_provider for r in log.rows()] == ["gemini", None]
     assert log.get("a").public_dict()["preferred_provider"] == "gemini"
     log.close()
+
+
+def test_user_id_round_trips(tmp_path):
+    log = SQLiteRequestLog(tmp_path / "r.sqlite3")
+    log.write(row(request_id="a", user_id="u-123"))
+    log.write(row(request_id="b"))
+    assert [r.user_id for r in log.rows()] == ["u-123", None]
+    log.close()
+
+
+# ---------- database calls stay off the event loop ----------
+
+class ThreadRecordingLog(InMemoryRequestLog):
+    """Records which thread each call ran on. With Postgres every call is a network round trip, so none may run
+    on the event loop's thread (it would stall every other request)."""
+
+    def __init__(self):
+        super().__init__()
+        self.threads = []
+
+    def _record(self, name):
+        self.threads.append((name, threading.current_thread().name))
+
+    def write(self, row):
+        self._record("write")
+        super().write(row)
+
+    def rows(self, *args, **kwargs):
+        self._record("rows")
+        return super().rows(*args, **kwargs)
+
+    def get(self, *args, **kwargs):
+        self._record("get")
+        return super().get(*args, **kwargs)
+
+    def write_label(self, label):
+        self._record("write_label")
+        super().write_label(label)
+
+    def label_usage_since(self, created_at):
+        self._record("label_usage_since")
+        return super().label_usage_since(created_at)
+
+
+def test_every_log_call_from_the_api_runs_in_a_worker_thread():
+    log = ThreadRecordingLog()
+    deps = make_deps(predictor=VectorPredictor(), log=log, sample_rate=1.0)
+    http = TestClient(create_app(deps=deps, auth=AUTH))
+    rid = post(http).headers["x-triage-request-id"]                                  # write (+ a background label)
+    with http.stream("POST", "/v1/chat/completions", headers=auth(),
+                     json={"model": "auto", "messages": ASK, "stream": True}) as r:
+        "".join(r.iter_text())                                                      # a stream's write
+    post(http, {"model": "no-such-model", "messages": ASK})                          # an error's write
+    http.get("/v1/stats", headers=auth())                                           # rows
+    http.get(f"/v1/requests/{rid}", headers=auth())                                 # get
+    calls = {name for name, _ in log.threads}
+    assert {"write", "rows", "get", "write_label", "label_usage_since"} <= calls
+    on_loop = [(name, thread) for name, thread in log.threads if not thread.startswith("AnyIO worker thread")]
+    assert on_loop == []

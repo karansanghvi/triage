@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from app.api.config_state import ActiveConfig
-from app.api.request_log import InMemoryRequestLog, SQLiteRequestLog, hash_secret_from_env, open_request_log
+from app.api.request_log import InMemoryRequestLog, SQLRequestLog, hash_secret_from_env, open_request_log
 from pathlib import Path
 
 from app.api.demo import DemoLimiter, DemoSettings, demo_db_path, load_demo_settings, trusted_hops_from_env
@@ -62,7 +62,7 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
     config = config or ActiveConfig.from_file(registry)
     log = log or InMemoryRequestLog()
     if hash_secret is None:
-        hash_secret = hash_secret_from_env(required=isinstance(log, SQLiteRequestLog))
+        hash_secret = hash_secret_from_env(required=isinstance(log, SQLRequestLog))
     # hash_secret also fingerprints BYOK keys in cache keys (never the key itself)
     cached = CachedSender(cache, send_fn=send_fn, hash_secret=hash_secret) if cache is not None else None
     kwargs = {"sleep": sleep} if sleep is not None else {}
@@ -136,7 +136,7 @@ def load_deps() -> RouterDeps:
     else:
         send_fn = send_request
     log = open_request_log(fake=fake)
-    hash_secret = hash_secret_from_env(required=isinstance(log, SQLiteRequestLog))   # before loading anything slow
+    hash_secret = hash_secret_from_env(required=isinstance(log, SQLRequestLog))   # before loading anything slow
     path = cache_path(fake)
     cache = ResponseCache(path) if path else None
     registry = load_registry()

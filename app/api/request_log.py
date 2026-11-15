@@ -1,6 +1,7 @@
 """One row per API request (Phase 4 Steps 5, 8 and 10).
 
-    SQLiteRequestLog    what the app uses (TRIAGE_LOG_DB, default data/logs/requests.sqlite3): survives restarts
+    SQLRequestLog       what the app uses: the database (app/db.py; DATABASE_URL, default data/triage.sqlite3)
+    SQLiteRequestLog    the same in one SQLite file of its own (tests, scripts)
     InMemoryRequestLog  for tests (or TRIAGE_LOG=memory)
 
 Never stores API keys (only key_id, a short hash) or prompt/answer text. The prompt is kept only as an
@@ -14,26 +15,16 @@ notice to the user; that is not built.
 import hashlib
 import hmac
 import json
-import logging
 import os
 import secrets
-import sqlite3
 import threading
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
-from typing import Optional, Protocol, get_args
+from typing import Optional, Protocol
 
 import numpy as np
 
-from app.registry import PROJECT_ROOT
-
-logger = logging.getLogger("triage.request_log")
-
-LOG_DB_ENV, LOG_KIND_ENV, HASH_SECRET_ENV = "TRIAGE_LOG_DB", "TRIAGE_LOG", "TRIAGE_HASH_SECRET"
-DEFAULT_LOG_DB = PROJECT_ROOT / "data" / "logs" / "requests.sqlite3"
-FAKE_LOG_DB = PROJECT_ROOT / "data" / "logs" / "fake_requests.sqlite3"   # TRIAGE_FAKE_MODELS=1 runs log here
-SCHEMA_VERSION = 4        # 2: prompt_sha256 -> prompt_hmac. 3: verification fields and the labels table (Step 7).
-                          # 4: preferred_provider (Phase 5; MIGRATIONS upgrades a version-3 file in place)
+LOG_KIND_ENV, HASH_SECRET_ENV = "TRIAGE_LOG", "TRIAGE_HASH_SECRET"
 VECTOR_FIELDS = ("features", "embedding")          # skipped by reads that don't need them (stats, lookups)
 
 
@@ -86,6 +77,7 @@ class RequestRow:
     checker_version: Optional[int] = None  # the AI checker's version, when it ran
     mode: Optional[str] = None             # demo | byok | api ("api" for key-authenticated requests)
     preferred_provider: Optional[str] = None   # X-Triage-Prefer-Provider when applied (BYOK, key sent, "auto")
+    user_id: Optional[str] = None          # the account that made the request (accounts, later); None otherwise
     escalated_from: Optional[str] = None   # the tier the router picked
     escalated_to: Optional[str] = None     # the tier whose answer was served
     escalation_extra_cost: Optional[float] = None       # price_as cost of the extra answers
@@ -116,7 +108,7 @@ def prompt_hmac(messages: list, secret: bytes) -> str:
 
 
 def hash_secret_from_env(required: bool) -> bytes:
-    """TRIAGE_HASH_SECRET as bytes. Missing: an error if required (the SQLite log keeps hashes across restarts,
+    """TRIAGE_HASH_SECRET as bytes. Missing: an error if required (the database log keeps hashes across restarts,
     so they must use a fixed secret), otherwise a random per-process secret (the in-memory log)."""
     value = os.environ.get(HASH_SECRET_ENV, "")
     if value:
@@ -213,121 +205,54 @@ class InMemoryRequestLog:
         return None if r is None else self._view(r, include_vectors)
 
 
-# ---------- SQLite ----------
+# ---------- the database (app/db.py: SQLite locally, Postgres in production) ----------
 
-_FIELDS = [f for f in fields(RequestRow)]
-_LABEL_FIELDS = [f for f in fields(LabelRow)]
-
-
-def _base_type(t):
-    """Optional[X] -> X; X -> X."""
-    args = [a for a in get_args(t) if a is not type(None)]
-    return args[0] if args else t
-
-
-_SQL_TYPE = {str: "TEXT", int: "INTEGER", float: "REAL", bool: "INTEGER", bytes: "BLOB", list: "TEXT"}
 _JSON = {"attempts", "features"}            # stored as JSON text
-_BOOL = {f.name for f in _FIELDS + _LABEL_FIELDS if _base_type(f.type) is bool}
+_REQUEST_NAMES = [f.name for f in fields(RequestRow)]
+_LABEL_NAMES = [f.name for f in fields(LabelRow)]
 
 
-def _column(f) -> str:
-    return f"{f.name} {_SQL_TYPE[_base_type(f.type)]}" + (" NOT NULL UNIQUE" if f.name == "request_id" else "")
+def _to_sql(name, value):
+    if value is not None and name in _JSON:
+        return json.dumps(value)
+    return value
 
 
-# version -> the statements that upgrade a file from it to version + 1, applied in order up to SCHEMA_VERSION.
-# Only additive changes: a new nullable column is NULL on existing rows. Older versions are still refused.
-MIGRATIONS = {
-    3: ("ALTER TABLE requests ADD COLUMN preferred_provider TEXT",),
-}
-
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-    + ", ".join(_column(f) for f in _FIELDS) + ")",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_request_id ON requests (request_id)",
-    "CREATE INDEX IF NOT EXISTS idx_requests_key_id ON requests (key_id)",
-    "CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests (timestamp)",
-    "CREATE TABLE IF NOT EXISTS labels (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-    + ", ".join(_column(f) for f in _LABEL_FIELDS) + ")",
-    "CREATE INDEX IF NOT EXISTS idx_labels_request_id ON labels (request_id)",
-    "CREATE INDEX IF NOT EXISTS idx_labels_created_at ON labels (created_at)",
-)
+def _from_sql(name, value):
+    if value is None:
+        return None
+    if name in _JSON:
+        return json.loads(value)
+    if name == "embedding":
+        return bytes(value)                 # Postgres drivers may hand back a memoryview
+    return value
 
 
-class SQLiteRequestLog:
-    """The request log in one SQLite file, in WAL mode (readers don't block the writer, and a crash keeps
-    every committed row). One connection shared by the server's worker threads, behind a lock; each write
-    is its own transaction."""
+class SQLRequestLog:
+    """The request log in the database (app/db.py). Each write is its own transaction; the engine's pool gives
+    every worker thread its own connection. `owns_engine`: close() disposes it (a log opened on its own)."""
 
-    def __init__(self, path=None):
-        self.path = Path(path or os.environ.get(LOG_DB_ENV) or DEFAULT_LOG_DB)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
-        self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None, timeout=30)
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("PRAGMA synchronous=NORMAL")
-        self._db.execute("PRAGMA busy_timeout=30000")
-        with self._lock:
-            self._db.execute("BEGIN IMMEDIATE")
-            for statement in SCHEMA:
-                self._db.execute(statement)
-            found = self._db.execute("SELECT version FROM schema_version").fetchall()
-            if not found:
-                self._db.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-            elif found[0][0] in MIGRATIONS and found[0][0] < SCHEMA_VERSION:
-                found = [(self._migrate(found[0][0]),)]
-            self._db.execute("COMMIT")
-        if found and found[0][0] != SCHEMA_VERSION:
-            self._db.close()
-            raise RuntimeError(f"{self.path} has request-log schema version {found[0][0]}, this code writes "
-                               f"version {SCHEMA_VERSION}; migrate it or point {LOG_DB_ENV} at a new file")
-        self._names = [f.name for f in _FIELDS]
-
-    def _migrate(self, version: int) -> int:
-        """Upgrade the file step by step, inside the caller's transaction (all or nothing). Returns the version
-        reached: SCHEMA_VERSION, or an older one with no migration (then refused as before)."""
-        while version in MIGRATIONS and version < SCHEMA_VERSION:
-            for statement in MIGRATIONS[version]:
-                self._db.execute(statement)
-            version += 1
-            self._db.execute("UPDATE schema_version SET version = ?", (version,))
-            logger.info("request log %s migrated to schema version %d", self.path, version)
-        return version
-
-    @staticmethod
-    def _to_sql(name, value):
-        if value is None:
-            return None
-        if name in _JSON:
-            return json.dumps(value)
-        if name in _BOOL:
-            return int(bool(value))
-        return value
-
-    @staticmethod
-    def _from_sql(name, value):
-        if value is None:
-            return None
-        if name in _JSON:
-            return json.loads(value)
-        if name in _BOOL:
-            return bool(value)
-        return value
+    def __init__(self, engine, owns_engine: bool = False):
+        from app import db
+        self.engine, self._owns_engine = engine, owns_engine
+        self._requests, self._labels = db.requests_table, db.labels_table
 
     def write(self, row: RequestRow) -> None:
-        values = [self._to_sql(n, getattr(row, n)) for n in self._names]
-        sql = f"INSERT INTO requests ({', '.join(self._names)}) VALUES ({', '.join('?' * len(self._names))})"
-        with self._lock:
-            self._db.execute(sql, values)
+        values = {n: _to_sql(n, getattr(row, n)) for n in _REQUEST_NAMES}
+        with self.engine.begin() as connection:
+            connection.execute(self._requests.insert(), values)
 
-    def _select(self, where: str = "", args: tuple = (), include_vectors: bool = True) -> list:
-        names = self._names if include_vectors else [n for n in self._names if n not in VECTOR_FIELDS]
-        sql = f"SELECT {', '.join(names)} FROM requests {where} ORDER BY id"     # skipped columns aren't read
-        with self._lock:
-            found = self._db.execute(sql, args).fetchall()
+    def _select(self, where=None, include_vectors: bool = True) -> list:
+        from sqlalchemy import select
+        names = _REQUEST_NAMES if include_vectors else [n for n in _REQUEST_NAMES if n not in VECTOR_FIELDS]
+        query = select(*[self._requests.c[n] for n in names]).order_by(self._requests.c.id)   # skipped: not read
+        if where is not None:
+            query = query.where(where)
+        with self.engine.connect() as connection:
+            found = connection.execute(query).fetchall()
         rows = []
         for values in found:
-            data = {n: self._from_sql(n, v) for n, v in zip(names, values)}
+            data = {n: _from_sql(n, v) for n, v in zip(names, values)}
             if data["attempts"] is None:
                 data["attempts"] = []
             if data["training_eligible"] is None:
@@ -336,51 +261,58 @@ class SQLiteRequestLog:
         return rows
 
     def rows(self, key_id: Optional[str] = None, include_vectors: bool = True) -> list:
-        if key_id is not None:
-            return self._select("WHERE key_id = ?", (key_id,), include_vectors)
-        return self._select(include_vectors=include_vectors)
+        where = None if key_id is None else self._requests.c.key_id == key_id
+        return self._select(where, include_vectors)
 
     def get(self, request_id: str, include_vectors: bool = True) -> Optional[RequestRow]:
-        found = self._select("WHERE request_id = ?", (request_id,), include_vectors)
+        found = self._select(self._requests.c.request_id == request_id, include_vectors)
         return found[0] if found else None
 
     # ----- labels -----
 
     def write_label(self, label: LabelRow) -> None:
-        names = [f.name for f in _LABEL_FIELDS]
-        values = [self._to_sql(n, getattr(label, n)) for n in names]
-        sql = f"INSERT INTO labels ({', '.join(names)}) VALUES ({', '.join('?' * len(names))})"
-        with self._lock:
-            self._db.execute(sql, values)
+        with self.engine.begin() as connection:
+            connection.execute(self._labels.insert(), {n: _to_sql(n, getattr(label, n)) for n in _LABEL_NAMES})
 
     def labels(self, request_id: Optional[str] = None) -> list:
-        names = [f.name for f in _LABEL_FIELDS]
-        where, args = ("WHERE request_id = ?", (request_id,)) if request_id is not None else ("", ())
-        with self._lock:
-            found = self._db.execute(f"SELECT {', '.join(names)} FROM labels {where} ORDER BY id", args).fetchall()
-        return [LabelRow(**{n: self._from_sql(n, v) for n, v in zip(names, values)}) for values in found]
+        from sqlalchemy import select
+        query = select(*[self._labels.c[n] for n in _LABEL_NAMES]).order_by(self._labels.c.id)
+        if request_id is not None:
+            query = query.where(self._labels.c.request_id == request_id)
+        with self.engine.connect() as connection:
+            found = connection.execute(query).fetchall()
+        return [LabelRow(**{n: _from_sql(n, v) for n, v in zip(_LABEL_NAMES, values)}) for values in found]
 
     def label_usage_since(self, created_at: str) -> tuple:
-        with self._lock:
-            calls, tokens = self._db.execute("SELECT COALESCE(SUM(calls), 0), COALESCE(SUM(tokens), 0) FROM labels "
-                                             "WHERE created_at >= ?", (created_at,)).fetchone()
+        from sqlalchemy import func, select
+        c = self._labels.c
+        query = select(func.coalesce(func.sum(c.calls), 0), func.coalesce(func.sum(c.tokens), 0)) \
+            .where(c.created_at >= created_at)
+        with self.engine.connect() as connection:
+            calls, tokens = connection.execute(query).one()
         return int(calls), int(tokens)
 
     def close(self) -> None:
-        with self._lock:
-            self._db.close()
+        if self._owns_engine:
+            self.engine.dispose()
 
 
-def open_request_log(fake: bool = False):
-    """The app's log: SQLite unless TRIAGE_LOG=memory. The file is TRIAGE_LOG_DB if set, else the real log, or
-    FAKE_LOG_DB in fake-model mode, so fake answers never land in the real log (they would look like real
-    traffic to stats and retraining). Fake mode refuses the real log's path even when it is set explicitly,
-    and real mode refuses the fake log's path."""
-    if os.environ.get(LOG_KIND_ENV, "sqlite").lower() == "memory":
+class SQLiteRequestLog(SQLRequestLog):
+    """A request log in its own SQLite file (tests, scripts), created and upgraded on open."""
+
+    def __init__(self, path=None):
+        from app import db
+        self.path = Path(path or db.DEFAULT_DB)
+        super().__init__(db.open_engine(db.sqlite_url(self.path)), owns_engine=True)
+
+
+def open_request_log(fake: bool = False, engine=None):
+    """The app's log: in the database unless TRIAGE_LOG=memory. `engine`: the app's shared one; None opens
+    app.db.database_url(fake): DATABASE_URL, or in fake-model mode its own SQLite file, so fake answers never land
+    in the real log (they would look like real traffic to stats and retraining)."""
+    if os.environ.get(LOG_KIND_ENV, "sql").lower() == "memory":
         return InMemoryRequestLog()
-    path = Path(os.environ.get(LOG_DB_ENV) or (FAKE_LOG_DB if fake else DEFAULT_LOG_DB))
-    forbidden = DEFAULT_LOG_DB if fake else FAKE_LOG_DB
-    if path.resolve() == forbidden.resolve():
-        raise RuntimeError(f"refusing to start: {'fake' if fake else 'real'}-model mode can't use {forbidden.name} "
-                           f"({LOG_DB_ENV}); fake and real requests must be logged apart")
-    return SQLiteRequestLog(path)
+    if engine is not None:
+        return SQLRequestLog(engine)
+    from app import db
+    return SQLRequestLog(db.open_engine(db.database_url(fake)), owns_engine=True)
