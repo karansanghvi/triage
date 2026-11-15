@@ -36,6 +36,9 @@ class RouterDeps:
     demo_settings: Optional[DemoSettings] = None         # config/demo.yaml
     demo_limiter: Optional[DemoLimiter] = None           # demo and public-BYOK counters (in the database)
     trusted_proxy_hops: int = 0                          # TRIAGE_TRUSTED_PROXY_HOPS, for the visitor's IP
+    engine: Optional[object] = None                      # the database (app/db.py), shared by everything below
+    accounts: Optional[object] = None                    # app.accounts.store.AccountStore
+    auth_limiter: Optional[object] = None                # app.accounts.ratelimit.AuthRateLimiter
 
     def strong_model(self, providers=None, prefer=None) -> str:
         """The savings baseline: the first model of the high chain after filtering by provider, and reordering
@@ -57,7 +60,9 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
                fake_models=None, hash_secret: Optional[bytes] = None, labeler=None,
                checker_settings: Optional[CheckerSettings] = None,
                judge_settings: Optional[JudgeSettings] = None, demo_settings: Optional[DemoSettings] = None,
-               demo_limiter: Optional[DemoLimiter] = None, trusted_proxy_hops: int = 0) -> RouterDeps:
+               demo_limiter: Optional[DemoLimiter] = None, trusted_proxy_hops: int = 0,
+               engine=None) -> RouterDeps:
+    """engine: the database; None = the demo limiter's if one is given, else a new in-memory one (tests)."""
     registry = registry or load_registry()
     config = config or ActiveConfig.from_file(registry)
     log = log or InMemoryRequestLog()
@@ -74,8 +79,15 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
                       checker_settings or load_checker_settings(registry=registry), judge_settings,
                       labeler or BackgroundLabeler())
     deps.demo_settings = demo_settings or (demo_limiter.settings if demo_limiter else load_demo_settings())
-    deps.demo_limiter = demo_limiter or DemoLimiter(deps.demo_settings)          # in memory unless given
+    if engine is None:
+        from app import db
+        engine = demo_limiter.engine if demo_limiter is not None else db.open_engine("sqlite://")
+    deps.engine = engine
+    deps.demo_limiter = demo_limiter or DemoLimiter(deps.demo_settings, engine=engine)
     deps.trusted_proxy_hops = trusted_proxy_hops
+    from app.accounts.ratelimit import AuthRateLimiter
+    from app.accounts.store import AccountStore
+    deps.accounts, deps.auth_limiter = AccountStore(engine), AuthRateLimiter(engine)
     # refuse to start if background labels could eat more than half of the strong or judge model's daily budget
     check_background_budget(config.snapshot().verification.background, [deps.strong_model(), judge_settings.model_name])
     return deps
@@ -150,4 +162,5 @@ def load_deps() -> RouterDeps:
     predictor, classifier = load_predictor_checked()
     return build_deps(predictor, send_fn, registry=registry, config=config, cache=cache, classifier=classifier,
                       log=log, fake_models=send_fn if fake else None, hash_secret=hash_secret,
-                      demo_settings=demo_settings, demo_limiter=demo_limiter, trusted_proxy_hops=trusted_proxy_hops)
+                      demo_settings=demo_settings, demo_limiter=demo_limiter, trusted_proxy_hops=trusted_proxy_hops,
+                      engine=engine)

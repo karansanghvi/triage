@@ -16,8 +16,20 @@ API_KEYS_ENV, ADMIN_KEYS_ENV = "TRIAGE_API_KEYS", "TRIAGE_ADMIN_KEYS"
 PUBLIC_ENV = "TRIAGE_PUBLIC"
 
 
+# on: user accounts (POST /v1/auth/signup, /login, ...; /v1/account). Off (the default): those paths don't exist.
+ACCOUNTS_ENV = "TRIAGE_ACCOUNTS"
+
+
+def _switch(name: str) -> bool:
+    return os.environ.get(name, "off").strip().lower() in ("on", "1", "true", "yes")
+
+
 def public_from_env() -> bool:
-    return os.environ.get(PUBLIC_ENV, "off").strip().lower() in ("on", "1", "true", "yes")
+    return _switch(PUBLIC_ENV)
+
+
+def accounts_from_env() -> bool:
+    return _switch(ACCOUNTS_ENV)
 
 
 def key_id(key: str) -> str:
