@@ -149,3 +149,117 @@ def test_every_account_endpoint_refuses_a_trk_key():
 def test_accounts_off_means_no_api_key_endpoints():
     http, _ = app(accounts=False)
     assert http.get("/v1/account/api-keys").status_code == 404
+
+
+# ---------- trk_ keys on the rest of the API (until account mode, PR 6) ----------
+
+ASK = {"model": "auto", "messages": [{"role": "user", "content": "What is 2 + 3?"}]}
+TRIAGE_KEY_ENDPOINTS = [("post", "/v1/chat/completions"), ("get", "/v1/models"), ("get", "/v1/stats"),
+                        ("get", "/v1/requests/chatcmpl-x"), ("get", "/v1/routing-config")]
+
+
+@pytest.mark.parametrize("method, path", TRIAGE_KEY_ENDPOINTS)
+def test_a_valid_trk_key_gets_a_clear_403_everywhere_for_now(method, path):
+    http, deps = app()
+    key = create(http, session(http)).json()["key"]
+    r = http.request(method.upper(), path, json=ASK, headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "account_mode_unavailable"
+    assert key not in r.text and deps.fake_models.calls == [] and deps.log.rows() == []
+
+
+@pytest.mark.parametrize("public", [False, True])
+def test_chat_with_a_trk_key_never_half_works(public):
+    engine = db.open_engine("sqlite://")
+    deps = make_deps(engine=engine, log=SQLRequestLog(engine), trusted_proxy_hops=1)
+    http = TestClient(create_app(deps=deps, auth=Auth([API_KEY]), accounts=True, public=public))
+    key = create(http, session(http)).json()["key"]
+    r = http.post("/v1/chat/completions", json=ASK, headers={"Authorization": f"Bearer {key}",
+                                                             "x-groq-key": "sk-test-SECRET123"})
+    assert r.status_code == 403 and deps.fake_models.calls == []
+
+
+def bad_keys(http, auth):
+    revoked = create(http, auth, "revoked").json()
+    http.delete(f"/v1/account/api-keys/{revoked['id']}", headers=auth)
+    real = create(http, auth, "real").json()["key"]
+    return {"revoked": revoked["key"], "unknown": credentials.new_api_key(),
+            "wrong secret": real[:-1] + ("A" if real[-1] != "A" else "B"), "malformed": "trk_short",
+            "bad characters": "trk_" + "!" * 43}
+
+
+@pytest.mark.parametrize("method, path", TRIAGE_KEY_ENDPOINTS)
+def test_revoked_unknown_and_malformed_trk_keys_are_the_usual_401(method, path):
+    http, _ = app()
+    auth = session(http)
+    usual = http.request(method.upper(), path, json=ASK, headers={"Authorization": "Bearer not-a-key"}).json()
+    for kind, key in bad_keys(http, auth).items():
+        r = http.request(method.upper(), path, json=ASK, headers={"Authorization": f"Bearer {key}"})
+        assert r.status_code == 401 and r.json() == usual, kind
+        assert key not in r.text
+
+
+def test_env_keys_still_work_as_before():
+    http, _ = app()
+    assert http.post("/v1/chat/completions", json=ASK, headers={"Authorization": f"Bearer {API_KEY}"}).status_code == 200
+    assert http.get("/v1/routing-config", headers={"Authorization": f"Bearer {ADMIN_KEY}"}).status_code == 200
+    assert http.get("/v1/routing-config", headers={"Authorization": f"Bearer {API_KEY}"}).status_code == 403
+
+
+def test_with_accounts_off_a_trk_key_is_just_an_unknown_key():
+    http, deps = app(accounts=False)
+    key = credentials.new_api_key()
+    r = http.post("/v1/chat/completions", json=ASK, headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == 401 and r.json()["error"]["code"] == "invalid_api_key"
+
+
+def test_using_a_key_records_last_used_at_most_once_a_minute():
+    from datetime import datetime, timedelta, timezone
+    from app.accounts.api_keys import ApiKeyStore
+    now = [datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)]
+    http, deps = app()
+    deps.api_keys = ApiKeyStore(deps.engine, deps.hash_secret, clock=lambda: now[0])
+    auth = session(http)
+    key = create(http, auth).json()["key"]
+    use = lambda: http.get("/v1/models", headers={"Authorization": f"Bearer {key}"})
+    use()
+    assert http.get("/v1/account/api-keys", headers=auth).json()[0]["last_used_at"] == "2026-11-16T12:00:00Z"
+    now[0] += timedelta(seconds=30)
+    use()
+    assert http.get("/v1/account/api-keys", headers=auth).json()[0]["last_used_at"] == "2026-11-16T12:00:00Z"
+    now[0] += timedelta(seconds=31)
+    use()
+    assert http.get("/v1/account/api-keys", headers=auth).json()[0]["last_used_at"] == "2026-11-16T12:01:01Z"
+
+
+def test_the_key_lookup_runs_in_a_worker_thread(monkeypatch):
+    import threading
+    http, deps = app()
+    key = create(http, session(http)).json()["key"]
+    threads = []
+    real = deps.api_keys.lookup
+    monkeypatch.setattr(deps.api_keys, "lookup", lambda k: threads.append(threading.current_thread().name) or real(k))
+    http.get("/v1/models", headers={"Authorization": f"Bearer {key}"})
+    assert threads and all(t.startswith("AnyIO worker thread") for t in threads)
+
+
+# ---------- the full key never leaks ----------
+
+def test_a_created_key_appears_in_no_log_and_not_in_the_database_file(tmp_path, caplog):
+    engine = db.open_engine(db.sqlite_url(tmp_path / "t.sqlite3"))
+    http, deps = app(engine)
+    with caplog.at_level(logging.DEBUG):
+        auth = session(http)
+        created = create(http, auth).json()
+        key = created["key"]
+        texts = [http.get("/v1/account/api-keys", headers=auth).text]
+        for method, path in TRIAGE_KEY_ENDPOINTS:
+            texts.append(http.request(method.upper(), path, json=ASK, headers={"Authorization": f"Bearer {key}"}).text)
+        http.delete(f"/v1/account/api-keys/{created['id']}", headers=auth)
+        texts.append(http.post("/v1/chat/completions", json=ASK, headers={"Authorization": f"Bearer {key}"}).text)
+    for text in texts + [caplog.text]:
+        assert key not in text and key[12:] not in text
+    assert all(key not in str(row.to_dict()) for row in deps.log.rows())
+    engine.dispose()
+    raw = b"".join(p.read_bytes() for p in tmp_path.iterdir() if p.name.startswith("t.sqlite3"))
+    assert key.encode() not in raw and key[12:].encode() not in raw
+    assert created["public_id"].encode() in raw                      # only the public id is stored
