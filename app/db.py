@@ -13,12 +13,13 @@ Tables here are what the code reads and writes (the request log and labels; the 
 migrations/versions/ is what creates them. A test checks that the two match.
 """
 import os
+from contextlib import contextmanager
 from dataclasses import fields
 from pathlib import Path
 from typing import Optional, Union, get_args
 
-from sqlalchemy import (Boolean, Column, Double, Engine, Index, Integer, LargeBinary, MetaData, Table, Text,
-                        create_engine, event, inspect)
+from sqlalchemy import (Boolean, Column, DateTime, Double, Engine, ForeignKey, Index, Integer, LargeBinary,
+                        MetaData, Table, Text, create_engine, event, func, inspect, select)
 from sqlalchemy.engine import make_url
 from sqlalchemy.pool import StaticPool
 
@@ -41,15 +42,19 @@ def _base_type(t):
 _SQL_TYPE = {str: Text, int: Integer, float: Double, bool: Boolean, bytes: LargeBinary, list: Text}   # list: JSON
 
 
-def _columns(dataclass_type, required=()) -> list:
-    return [Column(f.name, _SQL_TYPE[_base_type(f.type)](), nullable=f.name not in required)
+def _columns(dataclass_type, required=(), foreign_keys=None) -> list:
+    foreign_keys = foreign_keys or {}
+    return [Column(f.name, _SQL_TYPE[_base_type(f.type)](), *([foreign_keys[f.name]] if f.name in foreign_keys else []),
+                   nullable=f.name not in required)
             for f in fields(dataclass_type)]
 
 
 def _tables():
     from app.api.request_log import LabelRow, RequestRow        # the dataclasses are the column lists
     requests = Table("requests", metadata, Column("id", Integer, primary_key=True, autoincrement=True),
-                     *_columns(RequestRow, required=("request_id",)))
+                     *_columns(RequestRow, required=("request_id",), foreign_keys={
+                         # deleting a user keeps their request rows, unlinked
+                         "user_id": ForeignKey("users.id", name="fk_requests_user_id_users", ondelete="SET NULL")}))
     Index("idx_requests_request_id", requests.c.request_id, unique=True)
     Index("idx_requests_key_id", requests.c.key_id)
     Index("idx_requests_timestamp", requests.c.timestamp)
@@ -67,6 +72,35 @@ requests_table, labels_table = _tables()
 visitor_day_table = Table("visitor_day", metadata,
                           Column("day", Text, primary_key=True), Column("kind", Text, primary_key=True),
                           Column("visitor", Text, primary_key=True), Column("requests", Integer, nullable=False))
+users_table = Table(
+    "users", metadata,
+    Column("id", Text, primary_key=True),                      # a UUID, as text
+    Column("email", Text, nullable=False),                     # normalized (credentials.normalize_email)
+    Column("password_hash", Text, nullable=False),             # argon2id
+    Column("display_name", Text), Column("preferred_provider", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False))
+Index("idx_users_email", users_table.c.email, unique=True)
+sessions_table = Table(
+    "sessions", metadata,
+    Column("id", Text, primary_key=True),
+    Column("user_id", Text, ForeignKey("users.id", name="fk_sessions_user_id_users", ondelete="CASCADE"),
+           nullable=False),
+    Column("token_hash", Text, nullable=False),                # SHA-256 of the token; the token is never stored
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("last_used_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),  # the absolute expiry
+    Column("revoked_at", DateTime(timezone=True)))
+Index("idx_sessions_token_hash", sessions_table.c.token_hash, unique=True)
+Index("idx_sessions_user_id", sessions_table.c.user_id)
+auth_attempts_table = Table(
+    "auth_attempts", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("kind", Text, nullable=False), Column("subject", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False))
+Index("idx_auth_attempts_lookup", auth_attempts_table.c.kind, auth_attempts_table.c.subject,
+      auth_attempts_table.c.created_at)
+
 demo_day_table = Table("demo_day", metadata,
                        Column("day", Text, primary_key=True), Column("requests", Integer, nullable=False),
                        Column("tokens", Integer, nullable=False), Column("calls", Integer, nullable=False))
@@ -176,3 +210,46 @@ def upgrade(engine: Engine, revision: str = "head") -> None:
     from alembic import command
     with engine.begin() as connection:
         command.upgrade(alembic_config(connection), revision)
+
+
+# ---------- transactions that run alone ----------
+
+@contextmanager
+def exclusive_transaction(engine: Engine, lock_key: int):
+    """A transaction that runs alone among those using the same lock_key, across threads and instances, so a
+    check-then-write inside it can't race. SQLite: BEGIN IMMEDIATE (one writer per file). Postgres: a
+    transaction-level advisory lock on lock_key, released at commit or rollback. Commits on success, rolls
+    back on any exception."""
+    if engine.dialect.name == "sqlite":
+        # The driver would otherwise start the transaction only at the first write, after the reads
+        with engine.connect() as connection:
+            connection = connection.execution_options(isolation_level="AUTOCOMMIT")
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                yield connection
+                connection.exec_driver_sql("COMMIT")
+            except BaseException:
+                connection.exec_driver_sql("ROLLBACK")
+                raise
+        return
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.execute(select(func.pg_advisory_xact_lock(lock_key)))
+        yield connection
+
+
+def upsert(engine: Engine, table):
+    """INSERT for this engine's dialect, which has on_conflict_do_update / on_conflict_do_nothing."""
+    if engine.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    return insert(table)
+
+
+def aware(value):
+    """A datetime read back from the database as an aware UTC datetime (SQLite returns naive ones)."""
+    from datetime import timezone
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)

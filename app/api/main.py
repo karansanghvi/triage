@@ -42,7 +42,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 
 from app.api import core
-from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_env, public_from_env
+from app.api.auth import (ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, accounts_from_env, keys_from_env,
+                          public_from_env)
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
 from app.api.demo import DemoLimitError, client_ip, visitor_id
 from app.api.errors import APIError, bad_request, stream_error_event
@@ -77,6 +78,12 @@ def _ensure_json_handler() -> None:
         request_logger.addHandler(handler)
         request_logger.setLevel(logging.INFO)
         request_logger.propagate = False
+    auth_logger = logging.getLogger("triage.auth")      # sign-in events: event, outcome, visitor hash only
+    if not auth_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        auth_logger.addHandler(handler)
+        auth_logger.setLevel(logging.INFO)
 
 
 class _RecordingPredictor:
@@ -430,12 +437,14 @@ def demo_usage(row: RequestRow, reserved: int) -> tuple:
 # ---------- the app ----------
 
 def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = None,
-               cors_origins: Optional[list] = None) -> FastAPI:
+               cors_origins: Optional[list] = None, accounts: Optional[bool] = None) -> FastAPI:
     """deps / auth given: use them (tests). Otherwise load both at startup from config and the environment,
     refusing to start if there are no keys or the predictor fails its safety checks.
     public: accept chat requests without a Triage key (demo / BYOK); None = TRIAGE_PUBLIC (default off).
     cors_origins: browser origins allowed to call the API; None = TRIAGE_CORS_ORIGINS. Empty (the default): no
-    cross-origin access at all."""
+    cross-origin access at all.
+    accounts: the /v1/auth and /v1/account endpoints (app/api/account_routes.py); None = TRIAGE_ACCOUNTS (default
+    off: those paths don't exist)."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -443,6 +452,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             app.state.auth = Auth(keys_from_env(API_KEYS_ENV), keys_from_env(ADMIN_KEYS_ENV))
         if app.state.public:
             logger.warning("public access is ON (TRIAGE_PUBLIC): chat requests without a Triage key are accepted")
+        if app.state.accounts:
+            logger.warning("accounts are ON (TRIAGE_ACCOUNTS): anyone who can reach the server can sign up")
         if app.state.deps is None:
             from app.api.deps import load_deps
             app.state.deps = load_deps()          # predictor + embedding model, once
@@ -452,11 +463,12 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app = FastAPI(title="Triage", version="0.5", lifespan=lifespan)
     app.state.deps, app.state.auth = deps, auth
     app.state.public = public_from_env() if public is None else public
+    app.state.accounts = accounts_from_env() if accounts is None else accounts
     origins = cors_origins_from_env() if cors_origins is None else list(cors_origins)
     app.add_middleware(InternalErrorMiddleware)       # first, so it sits inside CORSMiddleware
     if origins:
         # No cookies or credentials: the browser sends keys only as the explicit headers listed
-        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "OPTIONS"],
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
                            allow_headers=CORS_REQUEST_HEADERS, expose_headers=CORS_RESPONSE_HEADERS,
                            allow_credentials=False, max_age=600)
 
@@ -737,6 +749,10 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                                  headers=_triage_headers(decision, "bypass") | {"Cache-Control": "no-cache"}
                                  | request.state.triage_headers,
                                  background=BackgroundTask(stream_background))
+
+    if app.state.accounts:
+        from app.api.account_routes import account_router
+        app.include_router(account_router())
 
     # ----- the free demo -----
 
