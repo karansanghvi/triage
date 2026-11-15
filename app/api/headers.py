@@ -1,4 +1,5 @@
-"""Triage request headers: X-Triage-Quality, X-Triage-Task, X-Triage-Verify. Bad values -> 400."""
+"""Triage request headers: X-Triage-Quality, X-Triage-Task, X-Triage-Verify, X-Triage-Prefer-Provider.
+Bad values -> 400."""
 from typing import Optional
 from collections.abc import Mapping
 
@@ -8,6 +9,7 @@ from app.router.quality import QualityError, QualitySettings, resolve_tau
 from app.providers.keys import KeyContext
 
 QUALITY, TASK, VERIFY = "X-Triage-Quality", "X-Triage-Task", "X-Triage-Verify"
+PREFER = "X-Triage-Prefer-Provider"
 VERIFY_MODES = ("off", "sync")
 # Lowercase header name -> provider name used by the registry and adapters.
 KEY_HEADERS = {
@@ -28,6 +30,17 @@ def parse_quality(value: Optional[str], settings: QualitySettings) -> float:
     except QualityError:
         options = " | ".join(settings.presets)
         raise bad_request(f"{QUALITY} must be {options} or a number from 0 to 1, got {value!r}", QUALITY) from None
+
+
+def parse_prefer_provider(value: Optional[str]) -> Optional[str]:
+    """A provider name (lowercase) or None (no header / blank). Checked in every mode; only BYOK requests with
+    a key for that provider and model "auto" apply it (see the chat handler)."""
+    if value is None or not value.strip():
+        return None
+    provider = value.strip().lower()
+    if provider not in PROVIDER_KEY_HEADERS:
+        raise bad_request(f"{PREFER} must be one of {', '.join(PROVIDER_KEY_HEADERS)}, got {value!r}", PREFER)
+    return provider
 
 
 def parse_task(value: Optional[str]) -> Optional[str]:

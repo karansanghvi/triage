@@ -37,10 +37,11 @@ class RouterDeps:
     demo_limiter: Optional[DemoLimiter] = None           # demo and public-BYOK counters (TRIAGE_DEMO_DB)
     trusted_proxy_hops: int = 0                          # TRIAGE_TRUSTED_PROXY_HOPS, for the visitor's IP
 
-    def strong_model(self, providers=None) -> str:
-        """The savings baseline: the first model of the high chain after filtering by provider.
+    def strong_model(self, providers=None, prefer=None) -> str:
+        """The savings baseline: the first model of the high chain after filtering by provider, and reordering
+        for a BYOK request's preferred provider (prefer="anthropic": claude-opus).
         providers=None means routing's server_providers (requests without keys: groq-large)."""
-        chain = self.config.snapshot().routing.chain_for("high", self.registry, providers)
+        chain = self.config.snapshot().routing.chain_for("high", self.registry, providers, prefer)
         if not chain:
             raise LookupError("no model in the high tier is on an allowed provider")
         return chain[0]

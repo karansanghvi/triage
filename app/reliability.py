@@ -91,10 +91,12 @@ class RoutingConfig:
         """The providers one request may use: `providers` if given (a BYOK request's own), else server_providers."""
         return self.server_providers if providers is None else frozenset(providers)
 
-    def chain_for(self, tier: str, registry: dict, providers=None) -> list:
+    def chain_for(self, tier: str, registry: dict, providers=None, prefer: Optional[str] = None) -> list:
         """The tier's chain (model names, in order) with every model on a provider this request may not use
-        removed. Its first entry is the request's primary model; for the high tier, its strong baseline."""
-        return filter_chain(self.chains[tier], registry, self.allowed_providers(providers))
+        removed, then (prefer: a BYOK request's preferred provider) that provider's models moved to the front.
+        Its first entry is the request's primary model; for the high tier, its strong baseline."""
+        return prefer_chain(filter_chain(self.chains[tier], registry, self.allowed_providers(providers)),
+                            registry, prefer)
 
 
 def filter_chain(names, registry: dict, providers: Optional[frozenset]) -> list:
@@ -102,6 +104,16 @@ def filter_chain(names, registry: dict, providers: Optional[frozenset]) -> list:
     if providers is None:
         return list(names)
     return [name for name in names if registry[name].provider in providers]
+
+
+def prefer_chain(names, registry: dict, prefer: Optional[str]) -> list:
+    """`names` with the models on provider `prefer` moved to the front; both groups keep their order.
+    None = unchanged. Only reorders: never adds or removes a model."""
+    names = list(names)
+    if prefer is None:
+        return names
+    return ([n for n in names if registry[n].provider == prefer]
+            + [n for n in names if registry[n].provider != prefer])
 
 
 def is_byok(keys) -> bool:
@@ -484,13 +496,14 @@ class ReliableClient:
         self._rng = rng or random.Random()
 
     def send(self, messages: list, tier: str, stream: bool = False, *, providers=None, keys=None,
-             **settings) -> ReliableResult:
+             prefer: Optional[str] = None, **settings) -> ReliableResult:
         """Try each model in the tier's chain until one answers.
 
         keys: this request's KeyContext. BYOK: only its providers are used, each call gets that provider's key
         from it (never the env key). None or no keys: the server's providers and env keys, as before.
         providers: the providers this request may use; None = routing's server_providers (tests, internal).
         Models on other providers are dropped before anything is tried: no attempt, no fallback event.
+        prefer: a provider whose models go first in the (filtered) chain; the rest keep their order.
         Raises AllModelsFailed if none of them answer.
         """
         providers = _request_providers(keys, providers)
@@ -503,7 +516,7 @@ class ReliableClient:
             raise ValueError(f"{', '.join(sorted(per_model))} is set per model: put it under model_params "
                              "in the routing config, not in send()")
 
-        chain = [self.registry[name] for name in self.routing.chain_for(tier, self.registry, providers)]
+        chain = [self.registry[name] for name in self.routing.chain_for(tier, self.registry, providers, prefer)]
         if not chain:
             raise AllModelsFailed(tier, [])      # this request's providers have no model in the tier
         return self._send_chain(chain, tier, messages, stream, settings, keys)

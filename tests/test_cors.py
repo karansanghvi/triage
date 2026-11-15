@@ -11,7 +11,8 @@ from app.api.main import CORS_RESPONSE_HEADERS, cors_origins_from_env, create_ap
 from tests.api_helpers import API_KEY, ASK, FakePredictor, make_deps
 
 SITE = "https://triage.example.com"
-KEY_HEADERS = "x-openai-key, x-anthropic-key, x-groq-key, x-gemini-key, x-triage-quality, content-type"
+KEY_HEADERS = ("x-openai-key, x-anthropic-key, x-groq-key, x-gemini-key, x-triage-quality, "
+               "x-triage-prefer-provider, content-type")
 
 
 def app(origins):
@@ -40,7 +41,7 @@ def test_preflight_with_key_headers_is_allowed_for_a_listed_origin():
     assert r.headers["access-control-allow-origin"] == SITE
     allowed = r.headers["access-control-allow-headers"].lower()
     for header in ("x-openai-key", "x-anthropic-key", "x-groq-key", "x-gemini-key", "x-triage-quality",
-                   "x-triage-task", "x-triage-verify", "authorization", "content-type"):
+                   "x-triage-task", "x-triage-verify", "x-triage-prefer-provider", "authorization", "content-type"):
         assert header in allowed
     assert "POST" in r.headers["access-control-allow-methods"]
     assert "access-control-allow-credentials" not in r.headers
@@ -62,7 +63,8 @@ def test_responses_expose_the_triage_headers():
     assert r.status_code == 200 and r.headers["access-control-allow-origin"] == SITE
     exposed = {h.strip().lower() for h in r.headers["access-control-expose-headers"].split(",")}
     for header in ("x-triage-mode", "x-triage-demo-remaining", "x-triage-model", "x-triage-cost", "retry-after",
-                   "x-triage-p-low", "x-triage-p-medium", "x-triage-tau", "x-triage-strong-cost"):
+                   "x-triage-p-low", "x-triage-p-medium", "x-triage-tau", "x-triage-strong-cost",
+                   "x-triage-preferred-provider"):
         assert header in exposed
 
 
@@ -83,7 +85,7 @@ def test_every_triage_response_header_is_exposed():
     """A new X-Triage-* response header must be added to CORS_RESPONSE_HEADERS, or the website can't read it."""
     source = Path(main_module.__file__).read_text()
     sent = set(re.findall(r'"(X-Triage-[A-Za-z-]+)"', source)) - {"X-Triage-Quality", "X-Triage-Task",
-                                                                   "X-Triage-Verify"}
+                                                                   "X-Triage-Verify", "X-Triage-Prefer-Provider"}
     assert sent <= set(CORS_RESPONSE_HEADERS), sent - set(CORS_RESPONSE_HEADERS)
 
 

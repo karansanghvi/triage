@@ -67,6 +67,7 @@ class RouteDecision:
     task_type: Optional[str] = None       # the task type the predictor used (given or guessed)
     task_type_guessed: Optional[bool] = None
     attempts: tuple = ()            # app.reliability.Attempt records from before the first token
+    preferred_provider: Optional[str] = None   # the BYOK preferred provider applied to the chains, if any
 
     @property
     def fell_back(self) -> bool:
@@ -122,7 +123,7 @@ async def aiter_in_thread(iterable) -> AsyncIterator:
 
 async def route_and_stream(messages: list, *, tau: Optional[float], task_type: Optional[str], model: str = "auto",
                            stream: bool = True, settings: GenerationSettings, deps, request_id: str,
-                           keys=None) -> RoutedStream:
+                           keys=None, prefer: Optional[str] = None) -> RoutedStream:
     """Decide the route for one chat request, start the chosen model, and return once its answer has begun.
 
     messages    OpenAI-style [{"role": ..., "content": ...}], already validated
@@ -135,6 +136,9 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
     request_id  goes into the RouteDecision unchanged
     keys        this request's KeyContext (app/providers/keys.py), or None. BYOK: only its providers, with its
                 keys. Passed straight to ReliableClient, never stored.
+    prefer      model="auto" only: a provider whose models go first in each tier's chain (already checked by the
+                caller: a BYOK request with a key for it). The tier decision doesn't change. Ignored for
+                pass-through.
 
     model="auto":
       1. prediction = deps.predictor.predict_messages(messages, task_type)
@@ -186,8 +190,10 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
         # 3. Start that tier's model; the client falls back along the chain 
         # and only returns once the first piece of the answer exists 
         result = await anyio.to_thread.run_sync(
-            partial(deps.client.send, messages, tier, stream=stream, keys=keys, **kwargs))
-        
+            partial(deps.client.send, messages, tier, stream=stream, keys=keys, prefer=prefer, **kwargs))
+        if prefer is not None:
+            reason = f"{reason}; preferred provider {prefer}"
+
         used_tau = tau
         p_low, p_medium = prediction.p_low, prediction.p_medium
         used_task, guessed = prediction.task_type, prediction.task_type_guessed 
@@ -197,7 +203,7 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
             partial(deps.client.send_model, messages, model, stream=stream, keys=keys, **kwargs))
         
         tier, reason = deps.registry[model].tier, f"requested model {model}"
-        used_tau = p_low = p_medium = used_task = guessed = None
+        used_tau = p_low = p_medium = used_task = guessed = prefer = None
     
     # 4. The route is now final: record what actually happened 
     decision = RouteDecision(
@@ -213,6 +219,7 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
         task_type=used_task,
         task_type_guessed=guessed,
         attempts=tuple(result.attempts),
+        preferred_provider=prefer,
     )
     
     # 5. Hand back the live answer (stream) or the finished one (non-stream)

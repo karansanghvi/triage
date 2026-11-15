@@ -14,6 +14,7 @@ notice to the user; that is not built.
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -26,10 +27,13 @@ import numpy as np
 
 from app.registry import PROJECT_ROOT
 
+logger = logging.getLogger("triage.request_log")
+
 LOG_DB_ENV, LOG_KIND_ENV, HASH_SECRET_ENV = "TRIAGE_LOG_DB", "TRIAGE_LOG", "TRIAGE_HASH_SECRET"
 DEFAULT_LOG_DB = PROJECT_ROOT / "data" / "logs" / "requests.sqlite3"
 FAKE_LOG_DB = PROJECT_ROOT / "data" / "logs" / "fake_requests.sqlite3"   # TRIAGE_FAKE_MODELS=1 runs log here
-SCHEMA_VERSION = 3        # 2: prompt_sha256 -> prompt_hmac. 3: verification fields and the labels table (Step 7)
+SCHEMA_VERSION = 4        # 2: prompt_sha256 -> prompt_hmac. 3: verification fields and the labels table (Step 7).
+                          # 4: preferred_provider (Phase 5; MIGRATIONS upgrades a version-3 file in place)
 VECTOR_FIELDS = ("features", "embedding")          # skipped by reads that don't need them (stats, lookups)
 
 
@@ -81,6 +85,7 @@ class RequestRow:
     decided_by: Optional[str] = None       # format | ai_checker | ai_checker_error | none (sync only)
     checker_version: Optional[int] = None  # the AI checker's version, when it ran
     mode: Optional[str] = None             # demo | byok | api ("api" for key-authenticated requests)
+    preferred_provider: Optional[str] = None   # X-Triage-Prefer-Provider when applied (BYOK, key sent, "auto")
     escalated_from: Optional[str] = None   # the tier the router picked
     escalated_to: Optional[str] = None     # the tier whose answer was served
     escalation_extra_cost: Optional[float] = None       # price_as cost of the extra answers
@@ -229,6 +234,12 @@ def _column(f) -> str:
     return f"{f.name} {_SQL_TYPE[_base_type(f.type)]}" + (" NOT NULL UNIQUE" if f.name == "request_id" else "")
 
 
+# version -> the statements that upgrade a file from it to version + 1, applied in order up to SCHEMA_VERSION.
+# Only additive changes: a new nullable column is NULL on existing rows. Older versions are still refused.
+MIGRATIONS = {
+    3: ("ALTER TABLE requests ADD COLUMN preferred_provider TEXT",),
+}
+
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -263,12 +274,25 @@ class SQLiteRequestLog:
             found = self._db.execute("SELECT version FROM schema_version").fetchall()
             if not found:
                 self._db.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+            elif found[0][0] in MIGRATIONS and found[0][0] < SCHEMA_VERSION:
+                found = [(self._migrate(found[0][0]),)]
             self._db.execute("COMMIT")
         if found and found[0][0] != SCHEMA_VERSION:
             self._db.close()
             raise RuntimeError(f"{self.path} has request-log schema version {found[0][0]}, this code writes "
                                f"version {SCHEMA_VERSION}; migrate it or point {LOG_DB_ENV} at a new file")
         self._names = [f.name for f in _FIELDS]
+
+    def _migrate(self, version: int) -> int:
+        """Upgrade the file step by step, inside the caller's transaction (all or nothing). Returns the version
+        reached: SCHEMA_VERSION, or an older one with no migration (then refused as before)."""
+        while version in MIGRATIONS and version < SCHEMA_VERSION:
+            for statement in MIGRATIONS[version]:
+                self._db.execute(statement)
+            version += 1
+            self._db.execute("UPDATE schema_version SET version = ?", (version,))
+            logger.info("request log %s migrated to schema version %d", self.path, version)
+        return version
 
     @staticmethod
     def _to_sql(name, value):
