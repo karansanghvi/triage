@@ -102,8 +102,9 @@ class _RecordingPredictor:
 
 
 def _apply_inputs(row: RequestRow, prediction) -> None:
-    """Step 8 storage: only for model="auto" requests that answered, and only "api" requests (never BYOK or demo)."""
-    if prediction is None or row.requested_model != "auto" or row.status != "ok" or row.mode in ("byok", "demo"):
+    """Step 8 storage: only for model="auto" requests that answered, and only "api" requests (an allow-list: never
+    BYOK, demo, account or an unknown mode)."""
+    if prediction is None or row.requested_model != "auto" or row.status != "ok" or row.mode != "api":
         return
     from app.router.embeddings import MODEL_NAME
     from app.router.features import FEATURE_VERSION

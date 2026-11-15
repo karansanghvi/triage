@@ -132,9 +132,10 @@ def is_training_eligible(row: RequestRow) -> bool:
     tier's own first model (no fallback), not escalated by verification (then the served answer isn't from the
     model the classifier predicted for), with the settings the classifier learned from (Phase 2's), and not
     served from the response cache (a cached answer is a repeat: it adds no new information and would
-    over-weight repeated prompts in retraining), and not a BYOK or demo request."""
-    # BYOK and demo requests (Phase 5) never: their prompts are the user's / a public visitor's
-    return (row.mode not in ("byok", "demo") and row.requested_model == "auto" and row.status == "ok" and row.fell_back is False
+    over-weight repeated prompts in retraining), and only from an "api" request (a Triage server key).
+    An allow-list: BYOK, demo, account and any future or unknown mode are never eligible (their prompts are a
+    user's or a public visitor's)."""
+    return (row.mode == "api" and row.requested_model == "auto" and row.status == "ok" and row.fell_back is False
             and not row.escalated and row.settings_match_training is True and not row.cache_hit)
 
 
