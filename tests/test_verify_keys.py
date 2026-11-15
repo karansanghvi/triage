@@ -100,3 +100,11 @@ def test_the_endpoints_are_the_documented_ones():
                          "anthropic": "https://api.anthropic.com/v1/models",
                          "groq": "https://api.groq.com/openai/v1/models",
                          "gemini": "https://generativelanguage.googleapis.com/v1beta/models"}
+
+
+def test_the_verdict_carries_the_providers_status():
+    assert verify_key("gemini", SECRET, client(answer(403))).http_status == 403
+    assert verify_key("gemini", SECRET, client(answer(200))).http_status == 200
+    def slow(request):
+        raise httpx.ReadTimeout("timed out", request=request)
+    assert verify_key("gemini", SECRET, client(slow)).http_status is None

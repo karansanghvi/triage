@@ -50,6 +50,7 @@ class Verdict:
     status: str                    # valid | invalid | unverified
     detail: Optional[str]          # short, redacted; None when valid
     answered: bool                 # the provider gave a definite answer (valid or invalid)
+    http_status: Optional[int] = None   # the provider's status code, when it answered at all
 
 
 def _provider_message(response: httpx.Response, key: str) -> str:
@@ -86,14 +87,14 @@ def verify_key(provider: str, key: str, client: Optional[httpx.Client] = None) -
             client.close()
     status = response.status_code
     if status == 200:
-        return Verdict("valid", None, True)
+        return Verdict("valid", None, True, 200)
     message = _provider_message(response, key)
     detail = _short(f"{name} answered {status}" + (f": {message}" if message else ""), key)
     if status in (401, 403):
-        return Verdict("invalid", detail, True)
+        return Verdict("invalid", detail, True, status)
     if status == 400 and "API_KEY_INVALID" in response.text:
-        return Verdict("invalid", detail, True)
-    return Verdict("unverified", detail, False)
+        return Verdict("invalid", detail, True, status)
+    return Verdict("unverified", detail, False, status)
 
 
 def fake_verify_key(provider: str, key: str) -> Verdict:

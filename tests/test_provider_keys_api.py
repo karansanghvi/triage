@@ -57,7 +57,8 @@ def test_save_then_list_shows_only_the_summary():
     r = put(http, auth, key=f"  {SECRET}\n")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"provider", "last4", "status", "verified_at", "created_at", "updated_at"}
+    assert set(body) == {"provider", "last4", "status", "status_detail", "verified_at", "created_at", "updated_at"}
+    assert body["status_detail"] is None
     assert (body["provider"], body["last4"], body["status"]) == ("openai", "T123", "valid") and body["verified_at"]
     assert http.get("/v1/account/provider-keys", headers=auth).json() == [body]
     assert deps.key_verifier.calls == [("openai", SECRET)]                    # trimmed before checking
@@ -271,3 +272,80 @@ def test_the_key_appears_nowhere_but_as_ciphertext(tmp_path, caplog):
     engine.dispose()
     raw = b"".join(p.read_bytes() for p in tmp_path.iterdir() if p.name.startswith("t.sqlite3"))
     assert SECRET.encode() not in raw and b"SECRET123" not in raw
+
+
+# ---------- status_detail and Gemini's 403 ----------
+
+def test_status_detail_explains_unverified_in_put_list_and_verify():
+    verifier = FakeVerifier(Verdict("unverified", "OpenAI didn't answer within 10 s", False))
+    http, _ = app(verifier)
+    auth = session(http)
+    assert put(http, auth).json()["status_detail"] == "OpenAI didn't answer within 10 s"
+    assert http.get("/v1/account/provider-keys", headers=auth).json()[0]["status_detail"] == \
+        "OpenAI didn't answer within 10 s"
+    verifier.verdict = Verdict("invalid", "OpenAI answered 401: Incorrect API key provided", True, 401)
+    r = http.post("/v1/account/provider-keys/openai/verify", headers=auth).json()
+    assert (r["status"], r["status_detail"]) == ("invalid", "OpenAI answered 401: Incorrect API key provided")
+    verifier.verdict = Verdict("valid", None, True, 200)
+    r = http.post("/v1/account/provider-keys/openai/verify", headers=auth).json()
+    assert (r["status"], r["status_detail"]) == ("valid", None)                 # cleared once accepted
+
+
+def test_status_detail_is_redacted_end_to_end():
+    def provider(request):
+        return httpx.Response(503, json={"error": {"message": f"busy; your key {SECRET} is fine"}})
+    mock = httpx.Client(transport=httpx.MockTransport(provider))
+    http, _ = app(lambda p, k: verify_key(p, k, client=mock))
+    auth = session(http)
+    detail = put(http, auth).json()["status_detail"]
+    assert detail.startswith("OpenAI answered 503: busy; your key [redacted]") and SECRET not in detail
+    assert SECRET not in http.get("/v1/account/provider-keys", headers=auth).text
+
+
+def gemini_answer(status, message, reason=None):
+    body = {"error": {"code": status, "message": message, "status": "PERMISSION_DENIED"}}
+    if reason:
+        body["error"]["details"] = [{"reason": reason}]
+    return httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(status, json=body)))
+
+
+GEMINI_KEY = "AIzaSyTESTKEY-0123456789abcdefghij"
+
+
+@pytest.mark.parametrize("message", [
+    "Your project has been denied access. Please contact support.",
+    "This API method requires billing to be enabled.",
+    f"Permission denied: API key {GEMINI_KEY} was reported as leaked.",
+])
+def test_a_gemini_403_is_refused_as_a_project_billing_or_permission_problem(message):
+    mock = gemini_answer(403, message)
+    http, _ = app(lambda p, k: verify_key(p, k, client=mock))
+    auth = session(http)
+    r = put(http, auth, "gemini", GEMINI_KEY)
+    assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_provider_key"
+    text = r.json()["error"]["message"]
+    assert text.startswith("Google refused this Gemini key for a project, billing or permission reason (HTTP 403)")
+    assert "copied correctly" not in text and "Gemini answered 403" in text
+    assert GEMINI_KEY not in r.text and "TESTKEY" not in r.text
+    assert http.get("/v1/account/provider-keys", headers=auth).json() == []       # still refused
+
+
+@pytest.mark.parametrize("status, body", [
+    (401, {"error": {"code": 401, "message": "API key not valid."}}),
+    (400, {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",
+                     "details": [{"reason": "API_KEY_INVALID"}]}}),
+])
+def test_a_mistyped_gemini_key_keeps_the_plain_message(status, body):
+    mock = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(status, json=body)))
+    http, _ = app(lambda p, k: verify_key(p, k, client=mock))
+    r = put(http, session(http), "gemini", GEMINI_KEY)
+    assert r.status_code == 400
+    assert r.json()["error"]["message"].startswith("Gemini rejected this key, so it wasn't saved. Check that it "
+                                                   "was copied correctly.")
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "groq"])
+def test_other_providers_403_keeps_the_plain_message(provider):
+    http, _ = app(FakeVerifier(Verdict("invalid", "answered 403", True, 403)))
+    r = put(http, session(http), provider)
+    assert "rejected this key" in r.json()["error"]["message"] and "Google" not in r.json()["error"]["message"]

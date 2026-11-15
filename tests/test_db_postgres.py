@@ -326,7 +326,7 @@ def pg_keys_app(migrated_url):
 def test_provider_keys_lifecycle_on_postgres(pg_keys_app):
     http, deps, auth, calls = pg_keys_app
     r = http.put("/v1/account/provider-keys/anthropic", json={"key": SECRET_KEY}, headers=auth)
-    assert r.status_code == 200 and r.json()["last4"] == "T123"
+    assert r.status_code == 200 and r.json()["last4"] == "T123" and r.json()["status_detail"] is None
     with deps.engine.connect() as connection:
         row = connection.execute(text("SELECT ciphertext, nonce, enc_key_id FROM provider_keys")).one()
     assert SECRET_KEY.encode() not in bytes(row.ciphertext) and len(bytes(row.nonce)) == 12 and row.enc_key_id == "k1"
@@ -352,3 +352,17 @@ def test_provider_key_rate_limit_on_postgres(pg_keys_app):
                         headers=auth).status_code == 200
     assert http.put("/v1/account/provider-keys/openai", json={"key": SECRET_KEY}, headers=auth).status_code == 429
     assert len(calls) == 20
+
+
+def test_status_detail_round_trips_on_postgres(migrated_url):
+    engine = db.open_engine(migrated_url)
+    deps = make_deps(engine=engine, log=SQLRequestLog(engine), trusted_proxy_hops=1,
+                     keyring=KeyRing([("k1", _secrets.token_bytes(32))]),
+                     key_verifier=lambda p, k: Verdict("unverified", "Groq answered 503: try later", False, 503))
+    http = TestClient(create_app(deps=deps, auth=Auth([API_KEY]), accounts=True))
+    token = http.post("/v1/auth/signup", json={"email": "ada@example.com", "password": PASSWORD},
+                      headers={"X-Forwarded-For": "203.0.113.9"}).json()["session_token"]
+    http.put("/v1/account/provider-keys/groq", json={"key": "gsk_testkey_ffff"}, headers=bearer(token))
+    (saved,) = http.get("/v1/account/provider-keys", headers=bearer(token)).json()
+    assert (saved["status"], saved["status_detail"]) == ("unverified", "Groq answered 503: try later")
+    engine.dispose()

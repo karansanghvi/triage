@@ -110,6 +110,18 @@ class ProviderKeyBody(_Body):
 MAX_PROVIDER_KEY_CHARS = 512
 
 
+def rejected_message(provider: str, verdict) -> str:
+    """Why a key wasn't saved. Gemini's 403 is a project-level refusal (billing, verification, restrictions, a
+    blocked key), not a typo, so it says so. verdict.detail is already redacted; the key itself is never used."""
+    if provider == "gemini" and verdict.http_status == 403:
+        text = ("Google refused this Gemini key for a project, billing or permission reason (HTTP 403), so it "
+                "wasn't saved. The key itself may be typed correctly: check its Google Cloud project, billing, "
+                "verification and API restrictions in Google AI Studio.")
+    else:
+        text = f"{NAMES[provider]} rejected this key, so it wasn't saved. Check that it was copied correctly."
+    return f"{text} ({verdict.detail})" if verdict.detail else text
+
+
 def account_router() -> APIRouter:
     router = APIRouter()
 
@@ -315,8 +327,7 @@ def account_router() -> APIRouter:
         verdict = await anyio.to_thread.run_sync(request.app.state.deps.key_verifier, provider, key)
         if verdict.status == "invalid":
             _log(f"provider_key_save:{provider}", "rejected", visitor(request))
-            raise APIError(400, f"{NAMES[provider]} rejected this key, so it wasn't saved. ({verdict.detail})",
-                           code="invalid_provider_key", param="key")
+            raise APIError(400, rejected_message(provider, verdict), code="invalid_provider_key", param="key")
         saved = await anyio.to_thread.run_sync(
             lambda: store.save(user.id, provider, key, verdict.status, verdict.detail, verdict.answered))
         key = None                                     # the only plain copy; nothing keeps it

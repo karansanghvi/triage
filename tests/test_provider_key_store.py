@@ -36,7 +36,7 @@ def setup(tmp_path):
 def test_save_list_and_decrypt(setup):
     engine, keys, _, ada, _, _, _ = setup
     saved = keys.save(ada.id, "openai", SECRET, "valid", None, verified=True)
-    assert saved.public() == {"provider": "openai", "last4": "T123", "status": "valid",
+    assert saved.public() == {"provider": "openai", "last4": "T123", "status": "valid", "status_detail": None,
                               "verified_at": "2026-11-16T12:00:00Z", "created_at": "2026-11-16T12:00:00Z",
                               "updated_at": "2026-11-16T12:00:00Z"}
     assert [k.public() for k in keys.list(ada.id)] == [saved.public()]

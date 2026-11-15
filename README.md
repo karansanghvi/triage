@@ -227,7 +227,7 @@ exist. Accounts don't change chat yet: account API keys and chat with saved keys
 
 | Endpoint | Body | Result |
 |---|---|---|
-| `GET /v1/account/provider-keys` | | `[{provider, last4, status, verified_at, created_at, updated_at}]`, never the key |
+| `GET /v1/account/provider-keys` | | `[{provider, last4, status, status_detail, verified_at, created_at, updated_at}]`, never the key |
 | `PUT /v1/account/provider-keys/{provider}` | `key` | the summary; 400 `invalid_provider_key` if the provider rejects it |
 | `POST /v1/account/provider-keys/{provider}/verify` | | the summary after checking the saved key again |
 | `DELETE /v1/account/provider-keys/{provider}` | | 204 |
@@ -237,7 +237,9 @@ exist. Accounts don't change chat yet: account API keys and chat with saved keys
   goes in the `x-goog-api-key` header, never the URL). `valid` means the provider accepted the key, not that it
   has credit or quota. Rejected (401/403, or Gemini's `API_KEY_INVALID` 400): not stored. No clear answer
   (timeout, network error, 429, 5xx, anything else): stored as `unverified`. A re-check that's rejected marks the
-  saved key `invalid`.
+  saved key `invalid`. `status_detail` says why a key is `unverified` or `invalid` (short, redacted; `null` once
+  accepted). A Gemini 403 is refused with a message saying Google refused the key for a project, billing or
+  permission reason, since that key is usually typed correctly.
 - **Rate limit:** 20 saves or re-checks per user per hour (429 with `Retry-After`).
 - **Encrypted at rest** with AES-256-GCM, a fresh nonce each time, bound to the user and provider (a ciphertext
   copied to another row won't decrypt). Only the last 4 characters are kept in plain form. The encryption keys

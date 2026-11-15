@@ -38,6 +38,7 @@ class SavedKey:
 
     def public(self) -> dict:
         return {"provider": self.provider, "last4": self.last4, "status": self.status,
+                "status_detail": self.status_detail,             # short and redacted: why unverified / invalid
                 "verified_at": _iso(self.verified_at), "created_at": _iso(self.created_at),
                 "updated_at": _iso(self.updated_at)}
 
