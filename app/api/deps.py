@@ -39,6 +39,9 @@ class RouterDeps:
     engine: Optional[object] = None                      # the database (app/db.py), shared by everything below
     accounts: Optional[object] = None                    # app.accounts.store.AccountStore
     auth_limiter: Optional[object] = None                # app.accounts.ratelimit.AuthRateLimiter
+    keyring: Optional[object] = field(default=None, repr=False)   # TRIAGE_ENCRYPTION_KEYS (accounts on)
+    provider_keys: Optional[object] = None               # app.accounts.provider_keys.ProviderKeyStore
+    key_verifier: Optional[object] = None                # app.accounts.verify_keys.verify_key (tests: a fake)
 
     def strong_model(self, providers=None, prefer=None) -> str:
         """The savings baseline: the first model of the high chain after filtering by provider, and reordering
@@ -61,7 +64,7 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
                checker_settings: Optional[CheckerSettings] = None,
                judge_settings: Optional[JudgeSettings] = None, demo_settings: Optional[DemoSettings] = None,
                demo_limiter: Optional[DemoLimiter] = None, trusted_proxy_hops: int = 0,
-               engine=None) -> RouterDeps:
+               engine=None, keyring=None, key_verifier=None) -> RouterDeps:
     """engine: the database; None = the demo limiter's if one is given, else a new in-memory one (tests)."""
     registry = registry or load_registry()
     config = config or ActiveConfig.from_file(registry)
@@ -88,6 +91,11 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
     from app.accounts.ratelimit import AuthRateLimiter
     from app.accounts.store import AccountStore
     deps.accounts, deps.auth_limiter = AccountStore(engine), AuthRateLimiter(engine)
+    from app.accounts.provider_keys import ProviderKeyStore
+    from app.accounts.verify_keys import verify_key
+    deps.keyring = keyring
+    deps.provider_keys = ProviderKeyStore(engine, keyring)
+    deps.key_verifier = key_verifier or verify_key
     # refuse to start if background labels could eat more than half of the strong or judge model's daily budget
     check_background_budget(config.snapshot().verification.background, [deps.strong_model(), judge_settings.model_name])
     return deps
