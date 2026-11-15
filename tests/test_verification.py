@@ -400,7 +400,7 @@ def test_the_cap_resets_the_next_utc_day_and_survives_a_restart(tmp_path):
 def test_the_users_response_is_identical_with_and_without_sampling():
     def strip(r):
         body = r.json()
-        body.pop("id"), body.pop("created")
+        body.pop("id"), body.pop("created"), body["triage"].pop("request_id")
         headers = {k: v for k, v in r.headers.items() if k not in ("x-triage-request-id", "date", "content-length")}
         return body, headers
     off, deps_off = bg_app(rate=0.0)

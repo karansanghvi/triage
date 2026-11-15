@@ -1,7 +1,9 @@
 """What a response tells the website about how it was routed (Phase 5, chat page). No network.
 
 Headers: X-Triage-P-Low, -P-Medium and -Tau (model "auto" only, streams too), X-Triage-Strong-Cost (non-streaming).
+Body: a top-level "triage" object on non-streaming responses, the same values as the headers.
 """
+import openai
 import pytest
 from fastapi.testclient import TestClient
 
@@ -90,3 +92,73 @@ def test_no_reachable_strong_model_leaves_strong_cost_and_saved_out():
     assert "x-triage-cost" in r.headers
     (row,) = deps.log.rows()
     assert row.strong_cost is None
+
+
+# ---------- the "triage" object in non-streaming bodies ----------
+
+TRIAGE_FIELDS = {"request_id": "x-triage-request-id", "model": "x-triage-model", "tier": "x-triage-tier",
+                 "p_low": "x-triage-p-low", "p_medium": "x-triage-p-medium", "tau": "x-triage-tau",
+                 "reason": "x-triage-reason", "cost": "x-triage-cost", "strong_cost": "x-triage-strong-cost",
+                 "saved": "x-triage-saved", "cache": "x-triage-cache", "fallback": "x-triage-fallback",
+                 "mode": "x-triage-mode"}
+NUMBERS = {"p_low", "p_medium", "tau", "cost", "strong_cost", "saved"}
+
+
+def matches_headers(triage, headers):
+    assert set(triage) == set(TRIAGE_FIELDS)
+    for field, header in TRIAGE_FIELDS.items():
+        if header not in headers:
+            assert triage[field] is None, field
+        elif field in NUMBERS:
+            assert isinstance(triage[field], float) and triage[field] == float(headers[header]), field
+        else:
+            assert triage[field] == headers[header], field
+
+
+def test_auto_body_has_the_triage_object_matching_the_headers():
+    http, _ = app(FakePredictor(0.4, 0.95123456))
+    r = chat(http)
+    triage = r.json()["triage"]
+    matches_headers(triage, r.headers)
+    assert (triage["tier"], triage["p_low"], triage["p_medium"], triage["tau"]) == ("medium", 0.4, 0.951235, 0.86)
+    assert (triage["cache"], triage["fallback"], triage["mode"]) == ("miss", "none", "api")
+    assert triage["request_id"] == r.json()["id"] and triage["model"] == r.json()["model"]
+    assert triage["saved"] == pytest.approx(triage["strong_cost"] - triage["cost"], abs=1e-8)
+
+
+def test_named_model_body_has_null_probabilities_and_tau():
+    http, _ = app()
+    r = chat(http, {"model": "groq-small", "messages": ASK})
+    triage = r.json()["triage"]
+    matches_headers(triage, r.headers)
+    assert (triage["p_low"], triage["p_medium"], triage["tau"]) == (None, None, None)
+    assert triage["reason"] == "requested model groq-small" and triage["strong_cost"] > 0
+
+
+def test_unknown_strong_cost_and_saved_are_null():
+    raw = routing_raw()
+    raw["fallback_chains"]["high"] = ["groq-large"]
+    http, _ = app(FakePredictor(0.95, 0.95), raw=raw)
+    r = chat(http, headers={"x-gemini-key": "sk-test-SECRET123"})
+    triage = r.json()["triage"]
+    matches_headers(triage, r.headers)
+    assert (triage["strong_cost"], triage["saved"], triage["mode"]) == (None, None, "byok")
+
+
+def test_fallback_and_cache_hit_show_in_the_body(tmp_path):
+    from app.api.fake_models import FakeBehavior
+    from app.cache import ResponseCache
+    http, _ = app(FakePredictor(0.95, 0.95), script={"groq-allam": FakeBehavior(fail_before="server")},
+                  cache=ResponseCache(tmp_path / "cache.sqlite3"))
+    first = chat(http)
+    assert first.json()["triage"]["fallback"].startswith("groq-allam->")
+    matches_headers(first.json()["triage"], first.headers)
+    second = chat(http).json()["triage"]
+    assert second["cache"] == "hit" and second["cost"] == 0.0 and second["saved"] == second["strong_cost"]
+
+
+def test_openai_sdk_still_parses_the_response():
+    http, _ = app()
+    client = openai.OpenAI(base_url="http://testserver/v1", api_key=API_KEY, http_client=http, max_retries=0)
+    completion = client.chat.completions.create(model="auto", messages=ASK)
+    assert completion.choices[0].message.content and completion.model

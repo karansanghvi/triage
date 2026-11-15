@@ -248,6 +248,23 @@ def _verified_reason(d: core.RouteDecision, outcome) -> str:
     return f"{d.reason}; verified: kept {d.tier} ({outcome.decided_by}: {outcome.checker_verdict})"
 
 
+def triage_body(headers: dict) -> dict:
+    """The top-level "triage" object of a non-streaming response: the same values as its X-Triage-* headers (built
+    from them, so the two can't disagree), numbers as JSON numbers. A header that was left out is null.
+    OpenAI clients ignore the unknown field."""
+    def number(name):
+        value = headers.get(name)
+        return None if value is None else float(value)
+
+    return {"request_id": headers["X-Triage-Request-Id"], "model": headers["X-Triage-Model"],
+            "tier": headers["X-Triage-Tier"], "p_low": number("X-Triage-P-Low"),
+            "p_medium": number("X-Triage-P-Medium"), "tau": number("X-Triage-Tau"),
+            "reason": headers["X-Triage-Reason"], "cost": number("X-Triage-Cost"),
+            "strong_cost": number("X-Triage-Strong-Cost"), "saved": number("X-Triage-Saved"),
+            "cache": headers["X-Triage-Cache"], "fallback": headers["X-Triage-Fallback"],
+            "mode": headers.get("X-Triage-Mode")}
+
+
 def _usage(response) -> dict:
     return {"prompt_tokens": response.input_tokens, "completion_tokens": response.output_tokens,
             "total_tokens": response.input_tokens + response.output_tokens}
@@ -613,12 +630,12 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 headers["X-Triage-Strong-Cost"] = _money(row.strong_cost)
             if row.saved is not None:
                 headers["X-Triage-Saved"] = _money(row.saved)
+            headers |= request.state.triage_headers
             completion = {"id": request_id, "object": "chat.completion", "created": created, "model": served_model,
                           "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
                                        "finish_reason": response.finish_reason or "stop"}],
-                          "usage": _usage(response)}
-            return JSONResponse(completion, headers=headers | request.state.triage_headers,
-                                background=background(text))
+                          "usage": _usage(response), "triage": triage_body(headers)}
+            return JSONResponse(completion, headers=headers, background=background(text))
 
         include_usage = bool(body.stream_options and body.stream_options.include_usage)
         streamed = []                                         # the answer, in memory only, for a background label
