@@ -36,7 +36,7 @@ INVALID_CREDENTIALS = "Incorrect email or password."
 NEEDS_SESSION = ("This endpoint needs a session token: log in with POST /v1/auth/login and send the token as "
                  "Authorization: Bearer <token>.")
 SESSION_ENDED = "Your session has expired or was revoked. Log in again."
-_UNSET = object()
+INCORRECT_PASSWORD = "That password isn't right."
 
 
 def _log(event: str, outcome: str, visitor: Optional[str] = None) -> None:
@@ -190,5 +190,61 @@ def account_router() -> APIRouter:
     @router.get("/v1/auth/me")
     async def me(current=Depends(current_session)):
         return current[1].public()
+
+    # ----- account settings -----
+
+    async def check_password(request: Request, user, password: str, event: str) -> None:
+        """403 incorrect_password (not 401: the session is fine, so the website shouldn't log the user out)."""
+        ok = await anyio.to_thread.run_sync(verify_password, user.password_hash, password)
+        if not ok:
+            _log(event, "incorrect_password", visitor(request))
+            raise APIError(403, INCORRECT_PASSWORD, "permission_error", code="incorrect_password")
+
+    @router.patch("/v1/account")
+    async def update_account(body: AccountPatch, request: Request, current=Depends(current_session)):
+        """Only the fields sent change; null clears one. preferred_provider: openai, anthropic, groq or gemini
+        (any case), the default for X-Triage-Prefer-Provider once account requests exist."""
+        _, user = current
+        values = {}
+        if "display_name" in body.model_fields_set:
+            try:
+                values["display_name"] = normalize_display_name(body.display_name)
+            except CredentialError as error:
+                raise _credential_error(error, "display_name") from None
+        if "preferred_provider" in body.model_fields_set:
+            provider = (body.preferred_provider or "").strip().lower() or None
+            if provider is not None and provider not in PROVIDERS:
+                raise bad_request(f"preferred_provider must be one of {', '.join(PROVIDERS)}, or null.",
+                                  "preferred_provider", "invalid_value")
+            values["preferred_provider"] = provider
+        if values:
+            user = await anyio.to_thread.run_sync(lambda: request.app.state.deps.accounts.update_user(user.id,
+                                                                                                    **values))
+        return user.public()
+
+    @router.post("/v1/account/password", status_code=204)
+    async def change_password(body: PasswordChange, request: Request, current=Depends(current_session)):
+        """Every other session of the user is revoked; this one stays logged in."""
+        session, user = current
+        try:
+            check_password_rules(body.new_password)
+        except CredentialError as error:
+            raise _credential_error(error, "new_password") from None
+        await check_password(request, user, body.current_password, "password_change")
+        accounts = request.app.state.deps.accounts
+        new_hash = await anyio.to_thread.run_sync(hash_password, body.new_password)
+        await anyio.to_thread.run_sync(lambda: accounts.update_user(user.id, password_hash=new_hash))
+        await anyio.to_thread.run_sync(accounts.revoke_other_sessions, user.id, session.id)
+        _log("password_change", "ok", visitor(request))
+        return Response(status_code=204)
+
+    @router.delete("/v1/account", status_code=204)
+    async def delete_account(body: AccountDelete, request: Request, current=Depends(current_session)):
+        """The user and all their sessions, in one transaction. Their request log rows stay, with user_id NULL."""
+        _, user = current
+        await check_password(request, user, body.password, "delete_account")
+        await anyio.to_thread.run_sync(request.app.state.deps.accounts.delete_user, user.id)
+        _log("delete_account", "ok", visitor(request))
+        return Response(status_code=204)
 
     return router

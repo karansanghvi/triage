@@ -303,3 +303,112 @@ def test_the_website_can_call_account_endpoints_with_an_authorization_header(met
     token = signup(http).json()["session_token"]
     me = http.get("/v1/auth/me", headers=bearer(token) | {"Origin": SITE})
     assert me.status_code == 200 and me.headers["access-control-allow-origin"] == SITE
+
+
+# ---------- account settings ----------
+
+def patch(http, token, body):
+    return http.patch("/v1/account", json=body, headers=bearer(token))
+
+
+def test_patch_changes_only_the_fields_sent_and_null_clears():
+    http, _ = app()
+    token = signup(http, display_name="Ada").json()["session_token"]
+    r = patch(http, token, {"preferred_provider": " Anthropic "})
+    assert r.status_code == 200 and (r.json()["display_name"], r.json()["preferred_provider"]) == ("Ada", "anthropic")
+    r = patch(http, token, {"display_name": "Countess"})
+    assert (r.json()["display_name"], r.json()["preferred_provider"]) == ("Countess", "anthropic")
+    r = patch(http, token, {"display_name": None, "preferred_provider": None})
+    assert (r.json()["display_name"], r.json()["preferred_provider"]) == (None, None)
+    assert patch(http, token, {}).json() == http.get("/v1/auth/me", headers=bearer(token)).json()
+    assert patch(http, token, {"display_name": "   "}).json()["display_name"] is None
+
+
+@pytest.mark.parametrize("body, param", [({"preferred_provider": "ollama"}, "preferred_provider"),
+                                         ({"preferred_provider": "openai,groq"}, "preferred_provider"),
+                                         ({"display_name": "x" * 81}, "display_name")])
+def test_patch_refuses_bad_values(body, param):
+    http, _ = app()
+    token = signup(http).json()["session_token"]
+    r = patch(http, token, body)
+    assert r.status_code == 400 and r.json()["error"]["param"] == param
+
+
+@pytest.mark.parametrize("body", [{"email": "new@example.com"}, {"password_hash": "x"}, {"id": "other"}])
+def test_patch_cant_change_anything_else(body):
+    http, _ = app()
+    token = signup(http).json()["session_token"]
+    assert patch(http, token, body).status_code == 400
+    assert http.get("/v1/auth/me", headers=bearer(token)).json()["email"] == "ada.lovelace+triage@example.com"
+
+
+def test_changing_the_password_revokes_every_other_session():
+    http, _ = app()
+    current = signup(http).json()["session_token"]
+    others = [login(http, headers=ip(n)).json()["session_token"] for n in (2, 3)]
+    r = http.post("/v1/account/password", json={"current_password": PASSWORD, "new_password": "a brand new secret"},
+                  headers=bearer(current))
+    assert r.status_code == 204
+    assert http.get("/v1/auth/me", headers=bearer(current)).status_code == 200
+    assert all(http.get("/v1/auth/me", headers=bearer(t)).status_code == 401 for t in others)
+    assert login(http).status_code == 401
+    assert login(http, password="a brand new secret").status_code == 200
+
+
+def test_a_wrong_current_password_is_403_and_changes_nothing():
+    http, _ = app()
+    token = signup(http).json()["session_token"]
+    other = login(http).json()["session_token"]
+    r = http.post("/v1/account/password", json={"current_password": "not my password", "new_password": "a brand new secret"},
+                  headers=bearer(token))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "incorrect_password"
+    assert "not my password" not in r.text
+    assert http.get("/v1/auth/me", headers=bearer(other)).status_code == 200 and login(http).status_code == 200
+
+
+def test_a_too_short_new_password_is_400():
+    http, _ = app()
+    token = signup(http).json()["session_token"]
+    r = http.post("/v1/account/password", json={"current_password": PASSWORD, "new_password": "short"},
+                  headers=bearer(token))
+    assert r.status_code == 400 and r.json()["error"]["param"] == "new_password" and "short" not in r.text
+
+
+def delete_account(http, token, password=PASSWORD):
+    return http.request("DELETE", "/v1/account", json={"password": password}, headers=bearer(token))
+
+
+def test_deleting_the_account_keeps_request_rows_without_the_user():
+    from app import db
+    from app.api.request_log import RequestRow, SQLRequestLog
+    engine = db.open_engine("sqlite://")
+    log = SQLRequestLog(engine)
+    http, deps = app(engine=engine, log=log)
+    token = signup(http).json()["session_token"]
+    other = login(http).json()["session_token"]
+    user_id = http.get("/v1/auth/me", headers=bearer(token)).json()["id"]
+    bob = signup(http, email="bob@example.com", headers=ip(2)).json()
+    for i, owner in enumerate((user_id, user_id, bob["user"]["id"])):
+        log.write(RequestRow(request_id=f"r{i}", timestamp="t", key_id="k", requested_model="auto", stream=False,
+                             user_id=owner))
+    assert delete_account(http, token, "wrong password!!").status_code == 403
+    assert delete_account(http, token).status_code == 204
+    assert [(r.request_id, r.user_id) for r in log.rows()] == [("r0", None), ("r1", None), ("r2", bob["user"]["id"])]
+    assert deps.accounts.user_by_id(user_id) is None
+    for t in (token, other):
+        assert http.get("/v1/auth/me", headers=bearer(t)).status_code == 401
+    assert login(http).status_code == 401
+    assert signup(http, headers=ip(3)).status_code == 201                       # the email is free again
+    assert http.get("/v1/auth/me", headers=bearer(bob["session_token"])).status_code == 200
+
+
+@pytest.mark.parametrize("method, path, body", [
+    ("patch", "/v1/account", {"display_name": "x"}),
+    ("post", "/v1/account/password", {"current_password": PASSWORD, "new_password": "a brand new secret"}),
+    ("delete", "/v1/account", {"password": PASSWORD}),
+])
+def test_account_settings_need_a_session_token(method, path, body):
+    http, _ = app()
+    signup(http)
+    r = http.request(method.upper(), path, json=body, headers={"Authorization": f"Bearer {API_KEY}"})
+    assert r.status_code == 401 and r.json()["error"]["code"] == "invalid_session"
