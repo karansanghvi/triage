@@ -9,6 +9,7 @@ import { TriageError } from "@/lib/errors"
 import type { AssistantMessage, ChatError, Message, UserMessage } from "@/types/chat"
 import RoutingPanel from "@/components/chat/RoutingPanel";
 import { DEFAULT_QUALITY } from "@/lib/quality";
+import { useDemoStatus } from "@/context/DemoStatusContext"
 
 export default function ChatPage() {
   const { name } = useVisitorName()
@@ -17,6 +18,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
+  const demoStatus = useDemoStatus()
 
   const isEmpty = messages.length === 0
   const selectedMessage = messages.find((m) => m.id === selectedId)
@@ -38,6 +40,7 @@ export default function ChatPage() {
 
     try {
       const result = await sendChat(history, quality)
+      if (result.demo) demoStatus.update(result.demo)
       setMessages((prev) =>
         prev.map((m) =>
           m.id === pendingId && m.role === "assistant"
@@ -47,6 +50,8 @@ export default function ChatPage() {
       )
       setSelectedId(pendingId)
     } catch (err) {
+      demoStatus.refresh()
+      
       const error: ChatError =
         err instanceof TriageError
           ? { code: err.code, message: err.message, retryAfter: err.retryAfter }

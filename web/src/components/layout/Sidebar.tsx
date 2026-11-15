@@ -2,6 +2,7 @@ import { Link, NavLink } from "react-router-dom"
 import { LayoutDashboard, MessageSquare, Settings, Split, KeyRound, type LucideIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useVisitorName } from "@/hooks/useVisitorName"
+import { useDemoStatus } from "@/context/DemoStatusContext"
 
 type NavItem = {
   to: string
@@ -15,18 +16,13 @@ const navItems: NavItem[] = [
   { to: "/settings", label: "Settings", icon: Settings },
 ]
 
-// Fake values for now; later these come from GET /v1/demo/status
-const demo = { used: 3, limit: 10 }
-
 export default function Sidebar() {
   const { name } = useVisitorName()
-  const remaining = demo.limit - demo.used
-  const percentUsed = (demo.used / demo.limit) * 100
 
   return (
-    <aside className="flex w-64 flex-col border-r border-border bg-card p-4">
+    <aside className="flex h-full w-64 flex-col overflow-y-auto border-r border-border bg-card p-4">
       {/* Logo */}
-      <div className="mb-10 flex items-center gap-3 px-2">
+      <div className="mb-8 flex items-center gap-3 px-2">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
           <Split className="h-5 w-5 text-primary-foreground" />
         </div>
@@ -54,29 +50,8 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="mt-auto flex flex-col gap-3">
-        {/* Demo status card */}
-        <div className="rounded-xl border border-border bg-background p-4">
-          <p className="text-sm font-medium">Free demo</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {remaining} of {demo.limit} requests left today
-          </p>
-
-          <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-primary transition-all"
-              style={{ width: `${percentUsed}%` }}
-            />
-          </div>
-
-          <Link
-            to="/settings"
-            className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            <KeyRound className="h-4 w-4" />
-            Add your keys
-          </Link>
-        </div>
+      <div className="mt-auto flex flex-col gap-3 pt-6">
+        <DemoCard />
 
         {/* Profile row: click to change the name in Settings */}
         <Link
@@ -90,5 +65,58 @@ export default function Sidebar() {
         </Link>
       </div>
     </aside>
+  )
+}
+
+function formatResetTime(resetsAt: string): string | null {
+  if (!resetsAt) return null
+  const date = new Date(resetsAt)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+}
+
+function DemoCard() {
+  const { status, loading } = useDemoStatus()
+
+  // Demo is off or Triage is unreachable: don't show a card with made-up numbers
+  if (!loading && !status) return null
+
+  const limit = status?.limit ?? 10
+  const remaining = status?.remaining ?? limit
+  const percentUsed = ((limit - remaining) / limit) * 100
+  const resetTime = status ? formatResetTime(status.resetsAt) : null
+  const exhausted = remaining === 0 || status?.paused
+
+  let line: string
+  if (loading) line = "Checking your free requests…"
+  else if (status?.paused) line = "The free demo is paused for today"
+  else if (remaining === 0) line = "No free requests left today"
+  else line = `${remaining} of ${limit} requests left today`
+
+  return (
+    <div className="rounded-xl border border-border bg-background p-4">
+      <p className="text-sm font-medium">Free demo</p>
+      <p className="mt-1 text-xs text-muted-foreground">{line}</p>
+
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all duration-500",
+            exhausted ? "bg-warning" : "bg-primary"
+          )}
+          style={{ width: `${loading ? 0 : percentUsed}%` }}
+        />
+      </div>
+
+      {resetTime && exhausted && <p className="mt-2 text-xs text-muted-foreground">Resets at {resetTime}</p>}
+
+      <Link
+        to="/settings"
+        className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+      >
+        <KeyRound className="h-4 w-4" />
+        Add your keys
+      </Link>
+    </div>
   )
 }
