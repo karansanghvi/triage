@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import time
+import traceback
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -319,6 +320,43 @@ def _error_response(error: APIError, headers: Optional[dict] = None) -> JSONResp
     return JSONResponse(error.body(), status_code=error.status, headers={**error.headers, **(headers or {})})
 
 
+INTERNAL_ERROR = APIError(500, "Triage hit an internal error. Try again; if it keeps happening, please report it.",
+                          "server_error", code="internal_error")
+
+
+class InternalErrorMiddleware:
+    """Unhandled exceptions as an OpenAI-style JSON 500. Added inside CORSMiddleware, so a browser can read the
+    error: Starlette's own 500 is sent from outside every middleware, without CORS headers, and a browser reports
+    it as a network error. Carries the headers this request already decided on (X-Triage-Mode, -Request-Id).
+    Never puts the exception's text in the response; the log gets its type and a redacted, shortened message.
+    A response that has already started (a stream) can't be replaced: the error is re-raised as before."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        started = False
+
+        async def tracking_send(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except Exception as error:
+            if started:
+                raise
+            logger.error("unhandled %s on %s %s: %s\n%s", type(error).__name__, scope.get("method"),
+                         scope.get("path"), redact(str(error))[:MAX_ATTEMPT_MESSAGE_CHARS],
+                         "".join(traceback.format_tb(error.__traceback__)))
+            headers = (scope.get("state") or {}).get("triage_headers")
+            await _error_response(INTERNAL_ERROR, headers)(scope, receive, send)
+
+
 CORS_ORIGINS_ENV = "TRIAGE_CORS_ORIGINS"      # comma-separated, e.g. https://triage.example.com
 # Request headers a browser page may send, and response headers its JavaScript may read
 CORS_REQUEST_HEADERS = ["Authorization", "Content-Type", *PROVIDER_KEY_HEADERS.values(), "X-Triage-Quality",
@@ -410,6 +448,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app.state.deps, app.state.auth = deps, auth
     app.state.public = public_from_env() if public is None else public
     origins = cors_origins_from_env() if cors_origins is None else list(cors_origins)
+    app.add_middleware(InternalErrorMiddleware)       # first, so it sits inside CORSMiddleware
     if origins:
         # No cookies or credentials: the browser sends keys only as the explicit headers listed
         app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "OPTIONS"],
