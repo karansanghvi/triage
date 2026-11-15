@@ -132,9 +132,10 @@ def is_training_eligible(row: RequestRow) -> bool:
     tier's own first model (no fallback), not escalated by verification (then the served answer isn't from the
     model the classifier predicted for), with the settings the classifier learned from (Phase 2's), and not
     served from the response cache (a cached answer is a repeat: it adds no new information and would
-    over-weight repeated prompts in retraining), and not a BYOK or demo request."""
-    # BYOK and demo requests (Phase 5) never: their prompts are the user's / a public visitor's
-    return (row.mode not in ("byok", "demo") and row.requested_model == "auto" and row.status == "ok" and row.fell_back is False
+    over-weight repeated prompts in retraining), and only from an "api" request (a Triage server key).
+    An allow-list: BYOK, demo, account and any future or unknown mode are never eligible (their prompts are a
+    user's or a public visitor's)."""
+    return (row.mode == "api" and row.requested_model == "auto" and row.status == "ok" and row.fell_back is False
             and not row.escalated and row.settings_match_training is True and not row.cache_hit)
 
 
@@ -160,8 +161,9 @@ class LabelRow:
 
 class RequestLog(Protocol):
     def write(self, row: RequestRow) -> None: ...
-    # oldest first; key_id = only that key's; include_vectors=False leaves features and embedding None
-    def rows(self, key_id: Optional[str] = None, include_vectors: bool = True) -> list: ...
+    # oldest first; key_id / user_id = only that key's / account's; include_vectors=False leaves the vectors None
+    def rows(self, key_id: Optional[str] = None, include_vectors: bool = True,
+             user_id: Optional[str] = None) -> list: ...
     def get(self, request_id: str, include_vectors: bool = True) -> Optional[RequestRow]: ...
     def write_label(self, label: LabelRow) -> None: ...
     def labels(self, request_id: Optional[str] = None) -> list: ...
@@ -195,9 +197,11 @@ class InMemoryRequestLog:
     def _view(r: RequestRow, include_vectors: bool) -> RequestRow:
         return r if include_vectors else replace(r, features=None, embedding=None)
 
-    def rows(self, key_id: Optional[str] = None, include_vectors: bool = True) -> list:
+    def rows(self, key_id: Optional[str] = None, include_vectors: bool = True,
+             user_id: Optional[str] = None) -> list:
         with self._lock:
-            return [self._view(r, include_vectors) for r in self._rows if key_id is None or r.key_id == key_id]
+            return [self._view(r, include_vectors) for r in self._rows
+                    if (key_id is None or r.key_id == key_id) and (user_id is None or r.user_id == user_id)]
 
     def get(self, request_id: str, include_vectors: bool = True) -> Optional[RequestRow]:
         with self._lock:
@@ -260,9 +264,13 @@ class SQLRequestLog:
             rows.append(RequestRow(**data))
         return rows
 
-    def rows(self, key_id: Optional[str] = None, include_vectors: bool = True) -> list:
-        where = None if key_id is None else self._requests.c.key_id == key_id
-        return self._select(where, include_vectors)
+    def rows(self, key_id: Optional[str] = None, include_vectors: bool = True,
+             user_id: Optional[str] = None) -> list:
+        from sqlalchemy import and_
+        c = self._requests.c
+        conditions = [cond for cond in (None if key_id is None else c.key_id == key_id,
+                                        None if user_id is None else c.user_id == user_id) if cond is not None]
+        return self._select(and_(*conditions) if conditions else None, include_vectors)
 
     def get(self, request_id: str, include_vectors: bool = True) -> Optional[RequestRow]:
         found = self._select(self._requests.c.request_id == request_id, include_vectors)

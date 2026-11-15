@@ -290,7 +290,7 @@ def test_training_eligible(tmp_path, case, expected):
 
 
 def test_training_eligible_rule():
-    ok = row(status="ok", fell_back=False, settings_match_training=True)
+    ok = row(status="ok", fell_back=False, settings_match_training=True, mode="api")
     assert is_training_eligible(ok)
     for change in ({"requested_model": "groq-small"}, {"status": "error"}, {"fell_back": True},
                    {"fell_back": None}, {"settings_match_training": False}, {"settings_match_training": None},
@@ -516,3 +516,24 @@ def test_every_log_call_from_the_api_runs_in_a_worker_thread():
     assert {"write", "rows", "get", "write_label", "label_usage_since"} <= calls
     on_loop = [(name, thread) for name, thread in log.threads if not thread.startswith("AnyIO worker thread")]
     assert on_loop == []
+
+
+
+# ---------- only "api" requests are ever training data (an allow-list) ----------
+
+@pytest.mark.parametrize("mode", ["byok", "demo", "account", None, "", "API", "something-new"])
+def test_any_mode_but_api_is_never_training_data_or_labeled_or_stored(mode):
+    from app.api.background import eligible as background_eligible
+    from app.api.main import _apply_inputs
+    from app.router.predictor import Prediction
+    base = dict(status="ok", fell_back=False, settings_match_training=True, cache_hit=False, tier="low",
+                verified="off", escalated=False)
+    assert is_training_eligible(row(**base, mode="api")) and background_eligible(row(**base, mode="api"))
+    other = row(**base, mode=mode)
+    assert not is_training_eligible(other) and not background_eligible(other)
+    prediction = Prediction(0.9, 0.9, 0.9, "qa", False, features=tuple([0.0] * 14), embedding=np.zeros(384, "float32"))
+    _apply_inputs(other, prediction)
+    assert (other.features, other.embedding) == (None, None)
+    api_row = row(**base, mode="api")
+    _apply_inputs(api_row, prediction)
+    assert api_row.features is not None and api_row.embedding is not None

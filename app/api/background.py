@@ -44,9 +44,9 @@ def _now() -> datetime:
 def eligible(row) -> bool:
     """Requests whose answer the classifier's labels would describe, and which aren't already strong. Cache hits
     are skipped: the answer is a repeat of one already served (and possibly already labeled)."""
-    # BYOK and demo requests never: a background job must never get a user's key, and demo labels would spend the
-    # free quota on strangers' prompts
-    return (row.mode not in ("byok", "demo") and row.requested_model == "auto" and row.status == "ok" and row.verified == "off"
+    # Only "api" requests (an allow-list): a background job must never get a user's key (BYOK, account), demo
+    # labels would spend the free quota on strangers' prompts, and an unknown mode is never assumed safe
+    return (row.mode == "api" and row.requested_model == "auto" and row.status == "ok" and row.verified == "off"
             and row.tier in ("low", "medium") and row.fell_back is False and not row.escalated
             and not row.cache_hit)
 

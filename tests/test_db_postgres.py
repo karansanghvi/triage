@@ -382,8 +382,8 @@ def test_api_key_lifecycle_on_postgres(pg_app):
     with deps.engine.connect() as connection:
         row = connection.execute(text("SELECT public_id, secret_hash FROM api_keys")).one()
     assert row.public_id == key[:12] and key not in row.secret_hash
-    r = http.get("/v1/models", headers=bearer(key))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "account_mode_unavailable"
+    assert http.get("/v1/models", headers=bearer(key)).status_code == 200          # an account caller now
+    assert http.get("/v1/routing-config", headers=bearer(key)).status_code == 403   # never an admin
     assert http.get("/v1/account/api-keys", headers=auth).json()[0]["last_used_at"] is not None
     assert http.delete(f"/v1/account/api-keys/{created['id']}", headers=auth).status_code == 204
     assert http.get("/v1/models", headers=bearer(key)).status_code == 401
@@ -408,4 +408,75 @@ def test_the_active_key_cap_holds_across_instances_on_postgres(migrated_url):
     assert results.count("made") == 20 and results.count("refused") == 6
     for store in stores:
         store.engine.dispose()
+    engine.dispose()
+
+
+# ---------- account mode on Postgres ----------
+
+from app.accounts.limits import AccountLimiter, AccountLimitError, AccountLimits   # noqa: E402
+from app.api.fake_models import FakeBehavior                                       # noqa: E402
+from tests.api_helpers import FakePredictor                                        # noqa: E402
+
+ASK_PG = {"model": "auto", "messages": [{"role": "user", "content": "What is 2 + 3?"}]}
+
+
+@pytest.fixture
+def pg_account_app(migrated_url):
+    engine = db.open_engine(migrated_url)
+    deps = make_deps({"claude-haiku": FakeBehavior(fail_before="auth")}, engine=engine, log=SQLRequestLog(engine),
+                     predictor=FakePredictor(0.95, 0.95), trusted_proxy_hops=1,
+                     keyring=KeyRing([("k1", _secrets.token_bytes(32))]),
+                     key_verifier=lambda p, k: Verdict("valid", None, True, 200))
+    http = TestClient(create_app(deps=deps, auth=Auth([API_KEY]), accounts=True))
+    yield http, deps
+    engine.dispose()
+
+
+def pg_user(http, email, n):
+    r = http.post("/v1/auth/signup", json={"email": email, "password": PASSWORD},
+                  headers={"X-Forwarded-For": f"203.0.113.{n}"}).json()
+    return bearer(r["session_token"]), r["user"]["id"]
+
+
+def test_account_chat_isolation_and_rejected_saved_keys_on_postgres(pg_account_app):
+    http, deps = pg_account_app
+    ada, ada_id = pg_user(http, "ada@example.com", 1)
+    bob, _ = pg_user(http, "bob@example.com", 2)
+    for auth in (ada, bob):
+        http.put("/v1/account/provider-keys/groq", json={"key": "gsk_saved_SECRET_1111"}, headers=auth)
+    http.put("/v1/account/provider-keys/anthropic", json={"key": "sk-ant-saved-SECRET-2222"}, headers=ada)
+    key = http.post("/v1/account/api-keys", json={"name": "x"}, headers=ada).json()["key"]
+    r = http.post("/v1/chat/completions", json=ASK_PG, headers=bearer(key))
+    assert r.status_code == 200 and r.headers["x-triage-mode"] == "account" and deps.fake_models.last_api_key.startswith("gsk_saved")
+    ada_request = r.headers["x-triage-request-id"]
+    bob_request = http.post("/v1/chat/completions", json=ASK_PG, headers=bob).headers["x-triage-request-id"]
+    assert http.get(f"/v1/requests/{ada_request}", headers=ada).json()["user_id"] == ada_id
+    assert http.get(f"/v1/requests/{bob_request}", headers=bearer(key)).status_code == 404
+    assert http.get("/v1/stats", headers=ada).json()["requests"] == 1
+    r = http.post("/v1/chat/completions", json=ASK_PG | {"model": "claude-haiku"}, headers=ada)
+    assert r.status_code == 401 and r.json()["error"]["code"] == "invalid_provider_key"
+    statuses = {k["provider"]: k["status"] for k in http.get("/v1/account/provider-keys", headers=ada).json()}
+    assert statuses == {"anthropic": "invalid", "groq": "valid"}
+    rows = {row.request_id: row for row in deps.log.rows()}
+    assert rows[ada_request].mode == "account" and rows[ada_request].training_eligible is False
+    assert all("SECRET" not in str(row.to_dict()) for row in rows.values())
+
+
+def test_the_daily_account_limit_holds_across_instances_on_postgres(migrated_url):
+    engine = db.open_engine(migrated_url)
+    user = AccountStore(engine).create_user("ada@example.com", "$argon2id$fake", None)
+    limiters = [AccountLimiter(AccountLimits(requests_per_minute=1_000, requests_per_day=10),
+                               db.open_engine(migrated_url)) for _ in range(3)]
+
+    def admit(limiter):
+        try:
+            limiter.admit(user.id)
+            return "admitted"
+        except AccountLimitError:
+            return "refused"
+
+    results, _ = run_together([lambda l=limiters[i % 3]: admit(l) for i in range(25)])
+    assert results.count("admitted") == 10 and results.count("refused") == 15
+    for limiter in limiters:
+        limiter.engine.dispose()
     engine.dispose()

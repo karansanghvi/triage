@@ -99,6 +99,24 @@ class ProviderKeyStore:
         return self._ring().decrypt(Sealed(bytes(row.ciphertext), bytes(row.nonce), row.enc_key_id),
                                     user_id, provider)
 
+    def usable_keys(self, user_id: str) -> dict:
+        """{provider: the plain key} for every saved key with status valid or unverified, for ONE request: the
+        caller builds its KeyContext from it and drops it. A key that can't be decrypted (its encryption key was
+        removed) is skipped, as is any key marked invalid."""
+        from app.accounts.encryption import DecryptionError
+        t = self._table
+        with self.engine.connect() as connection:
+            rows = connection.execute(select(t.c.provider, t.c.ciphertext, t.c.nonce, t.c.enc_key_id).where(
+                and_(t.c.user_id == user_id, t.c.status.in_(("valid", "unverified"))))).fetchall()
+        usable = {}
+        for row in rows:
+            try:
+                usable[row.provider] = self._ring().decrypt(
+                    Sealed(bytes(row.ciphertext), bytes(row.nonce), row.enc_key_id), user_id, row.provider)
+            except DecryptionError:
+                continue
+        return usable
+
     def set_status(self, user_id: str, provider: str, status: str, status_detail: Optional[str],
                    verified: bool) -> Optional[SavedKey]:
         if status not in STATUSES:

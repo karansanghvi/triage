@@ -192,12 +192,13 @@ def test_account_endpoints_need_a_session_token(authorization):
         assert r.status_code == 401 and r.json()["error"]["code"] == "invalid_session", (authorization, path)
 
 
-def test_a_session_token_is_not_a_triage_api_key():
+def test_a_session_token_on_chat_is_an_account_caller():
     http, _ = app()
     token = signup(http).json()["session_token"]
     r = http.post("/v1/chat/completions", json={"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
                   headers=bearer(token))
-    assert r.status_code == 401 and r.json()["error"]["code"] == "invalid_api_key"   # chat is unchanged
+    assert r.status_code == 400 and r.json()["error"]["code"] == "no_provider_keys"    # account mode, no keys yet
+    assert r.headers["x-triage-mode"] == "account"
 
 
 # ---------- rate limits ----------

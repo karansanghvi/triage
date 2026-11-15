@@ -42,8 +42,13 @@ def keys_from_env(name: str) -> tuple:
 
 @dataclass(frozen=True)
 class Caller:
+    """Who made a request. env: a TRIAGE_API_KEYS / TRIAGE_ADMIN_KEYS key. account: a user's "trk_" API key
+    (key_id = its public id) or a "trs_" session token (key_id = "session", website chat)."""
     key_id: str
     admin: bool
+    kind: str = "env"
+    user_id: Optional[str] = None
+    preferred_provider: Optional[str] = None     # the account's saved default for X-Triage-Prefer-Provider
 
 
 class Auth:

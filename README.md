@@ -196,7 +196,7 @@ Demo and BYOK requests are never used for retraining and get no background label
 ## Accounts (Phase 5, in progress)
 
 With `TRIAGE_ACCOUNTS=on`, people can sign up with an email and password. Off (the default), these paths don't
-exist. Accounts don't change chat yet: chat with account keys and saved provider keys comes in a later PR.
+exist. Account holders chat with their own saved provider keys (see "Account mode" below).
 
 | Endpoint | Body | Result |
 |---|---|---|
@@ -270,9 +270,26 @@ exist. Accounts don't change chat yet: chat with account keys and saved provider
   again: revoke it and create another. Changing `TRIAGE_HASH_SECRET` invalidates every account key.
 - Names: 1 to 60 characters. At most 20 active keys per user (409 `too_many_api_keys`) and 10 new keys per user
   per hour (429 with `Retry-After`).
-- **Not usable for chat yet.** A valid `trk_` key gets 403 `account_mode_unavailable` on chat and every other
-  Triage-key endpoint until account mode arrives; a revoked or unknown one gets the usual 401. Using a key
-  records `last_used_at` (at most once a minute). `TRIAGE_API_KEYS` / `TRIAGE_ADMIN_KEYS` work as before.
+- A revoked or unknown key gets the usual 401. Using a key records `last_used_at` (at most once a minute).
+  `TRIAGE_API_KEYS` / `TRIAGE_ADMIN_KEYS` work as before.
+
+**Account mode.** A `trk_` key (from your own apps) or a session token (website chat) on `/v1/chat/completions`
+runs in `account` mode:
+
+- **Your saved provider keys** with status `valid` or `unverified` are decrypted for that one request (never
+  kept, cached or given to a background job); the usual BYOK rules apply. An `X-*-Key` header replaces the saved
+  key for its provider, still in account mode. No usable key: 400 `no_provider_keys`.
+- **A saved key the provider rejects** (401/403) is marked `invalid`, with the reason in `status_detail`, even
+  if a fallback model then answered, so later requests skip it. If nothing answered, you get 401
+  `invalid_provider_key` saying which saved key to update.
+- **Preferred provider:** your saved `preferred_provider` is the default; `X-Triage-Prefer-Provider` overrides it
+  per request (only for a provider you have a key for, only for `model: "auto"`).
+- **Limits** (`config/accounts.yaml`): 60 requests a minute (per server instance) and 10,000 a day per account;
+  over either, 429 `account_rate_limited` with `Retry-After`. No demo or public-BYOK limits.
+- **Other endpoints:** `GET /v1/models` works; `/v1/stats` and `/v1/requests/{id}` show only your account's own
+  requests, whichever of your keys made them; admin endpoints are 403.
+- **The request log** marks these rows `mode: account` with your `user_id`, and `key_id` = the API key's public
+  id (or `session`). They're never training data and never get features, embeddings or background labels.
 
 ## Retraining the classifier (Phase 4)
 
