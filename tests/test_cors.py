@@ -61,7 +61,8 @@ def test_responses_expose_the_triage_headers():
     r = http.post("/v1/chat/completions", json={"model": "auto", "messages": ASK}, headers={"Origin": SITE})
     assert r.status_code == 200 and r.headers["access-control-allow-origin"] == SITE
     exposed = {h.strip().lower() for h in r.headers["access-control-expose-headers"].split(",")}
-    for header in ("x-triage-mode", "x-triage-demo-remaining", "x-triage-model", "x-triage-cost", "retry-after"):
+    for header in ("x-triage-mode", "x-triage-demo-remaining", "x-triage-model", "x-triage-cost", "retry-after",
+                   "x-triage-p-low", "x-triage-p-medium", "x-triage-tau", "x-triage-strong-cost"):
         assert header in exposed
 
 
@@ -84,3 +85,33 @@ def test_every_triage_response_header_is_exposed():
     sent = set(re.findall(r'"(X-Triage-[A-Za-z-]+)"', source)) - {"X-Triage-Quality", "X-Triage-Task",
                                                                    "X-Triage-Verify"}
     assert sent <= set(CORS_RESPONSE_HEADERS), sent - set(CORS_RESPONSE_HEADERS)
+
+
+# ---------- unhandled errors: a JSON 500 the browser can read ----------
+
+SECRET = "sk-test-SECRET123"
+
+
+@pytest.fixture
+def broken_router(monkeypatch):
+    async def boom(*args, **kwargs):
+        raise RuntimeError(f"something broke near {SECRET}")
+    monkeypatch.setattr(main_module.core, "route_and_stream", boom)
+
+
+def test_an_unhandled_error_is_a_json_500_with_cors_headers(broken_router, caplog):
+    http = app([SITE])
+    r = http.post("/v1/chat/completions", json={"model": "auto", "messages": ASK},
+                  headers={"Origin": SITE, "Authorization": f"Bearer {API_KEY}"})
+    assert r.status_code == 500 and r.headers["access-control-allow-origin"] == SITE
+    assert r.json()["error"]["code"] == "internal_error" and r.json()["error"]["type"] == "server_error"
+    assert r.headers["x-triage-mode"] == "api" and r.headers["x-triage-request-id"].startswith("chatcmpl-triage-")
+    assert "broke" not in r.text and SECRET not in r.text                 # the exception's text stays out
+    assert "RuntimeError" in caplog.text and SECRET not in caplog.text    # logged, redacted
+
+
+def test_the_json_500_works_without_cors_too(broken_router):
+    r = app([]).post("/v1/chat/completions", json={"model": "auto", "messages": ASK},
+                     headers={"Authorization": f"Bearer {API_KEY}"})
+    assert r.status_code == 500 and r.json()["error"]["code"] == "internal_error"
+    assert "access-control-allow-origin" not in r.headers

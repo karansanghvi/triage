@@ -15,8 +15,10 @@ Endpoints
     PUT  /v1/routing-config       update quality presets/default and backup models live (admin; not persisted)
 
 Response headers: X-Triage-Request-Id, -Model, -Tier, -Reason, -Fallback, -Cache, -Verified, -Escalated,
--Check, and on non-streaming responses -Cost and -Saved (including any checks and escalation). A stream's headers are sent once its first token exists, so
-model, tier and fallback are real; its cost isn't known yet, so -Cost and -Saved are left out (never faked).
+-Check, -P-Low, -P-Medium and -Tau (model "auto" only, 6 decimals), and on non-streaming responses -Cost,
+-Strong-Cost and -Saved (including any checks and escalation). A stream's headers are sent once its first token
+exists, so model, tier and fallback are real; its cost isn't known yet, so -Cost, -Strong-Cost and -Saved are left
+out (never faked).
 The real figures are in GET /v1/requests/{id} once the stream ends, and in /v1/stats.
 """
 import dataclasses
@@ -25,6 +27,7 @@ import json
 import logging
 import os
 import time
+import traceback
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -203,7 +206,19 @@ def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] =
             "X-Triage-Reason": _header_safe(reason or d.reason),
             "X-Triage-Fallback": f"{d.primary_model}->{d.model}" if d.fell_back else "none",
             "X-Triage-Cache": cache, "X-Triage-Verified": verified,
-            "X-Triage-Escalated": "true" if escalated else "false", "X-Triage-Check": check}
+            "X-Triage-Escalated": "true" if escalated else "false", "X-Triage-Check": check,
+            **_probability_headers(d)}
+
+
+def _six(x: float) -> str:
+    return f"{x:.6f}"
+
+
+def _probability_headers(d: core.RouteDecision) -> dict:
+    """The routing numbers as plain numbers (6 decimals). model="auto" only: a named model has no prediction and
+    no tau, so these are left out, not faked. With sync verification they stay the first decision's."""
+    values = {"X-Triage-P-Low": d.p_low, "X-Triage-P-Medium": d.p_medium, "X-Triage-Tau": d.tau}
+    return {name: _six(v) for name, v in values.items() if v is not None}
 
 
 def _apply_verification(row: RequestRow, first, outcome, deps, providers=None) -> None:
@@ -232,6 +247,23 @@ def _verified_reason(d: core.RouteDecision, outcome) -> str:
     if outcome.decided_by.startswith("skipped_"):
         return f"{d.reason}; verified: kept {d.tier} (AI check {outcome.decided_by})"
     return f"{d.reason}; verified: kept {d.tier} ({outcome.decided_by}: {outcome.checker_verdict})"
+
+
+def triage_body(headers: dict) -> dict:
+    """The top-level "triage" object of a non-streaming response: the same values as its X-Triage-* headers (built
+    from them, so the two can't disagree), numbers as JSON numbers. A header that was left out is null.
+    OpenAI clients ignore the unknown field."""
+    def number(name):
+        value = headers.get(name)
+        return None if value is None else float(value)
+
+    return {"request_id": headers["X-Triage-Request-Id"], "model": headers["X-Triage-Model"],
+            "tier": headers["X-Triage-Tier"], "p_low": number("X-Triage-P-Low"),
+            "p_medium": number("X-Triage-P-Medium"), "tau": number("X-Triage-Tau"),
+            "reason": headers["X-Triage-Reason"], "cost": number("X-Triage-Cost"),
+            "strong_cost": number("X-Triage-Strong-Cost"), "saved": number("X-Triage-Saved"),
+            "cache": headers["X-Triage-Cache"], "fallback": headers["X-Triage-Fallback"],
+            "mode": headers.get("X-Triage-Mode")}
 
 
 def _usage(response) -> dict:
@@ -288,13 +320,51 @@ def _error_response(error: APIError, headers: Optional[dict] = None) -> JSONResp
     return JSONResponse(error.body(), status_code=error.status, headers={**error.headers, **(headers or {})})
 
 
+INTERNAL_ERROR = APIError(500, "Triage hit an internal error. Try again; if it keeps happening, please report it.",
+                          "server_error", code="internal_error")
+
+
+class InternalErrorMiddleware:
+    """Unhandled exceptions as an OpenAI-style JSON 500. Added inside CORSMiddleware, so a browser can read the
+    error: Starlette's own 500 is sent from outside every middleware, without CORS headers, and a browser reports
+    it as a network error. Carries the headers this request already decided on (X-Triage-Mode, -Request-Id).
+    Never puts the exception's text in the response; the log gets its type and a redacted, shortened message.
+    A response that has already started (a stream) can't be replaced: the error is re-raised as before."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        started = False
+
+        async def tracking_send(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except Exception as error:
+            if started:
+                raise
+            logger.error("unhandled %s on %s %s: %s\n%s", type(error).__name__, scope.get("method"),
+                         scope.get("path"), redact(str(error))[:MAX_ATTEMPT_MESSAGE_CHARS],
+                         "".join(traceback.format_tb(error.__traceback__)))
+            headers = (scope.get("state") or {}).get("triage_headers")
+            await _error_response(INTERNAL_ERROR, headers)(scope, receive, send)
+
+
 CORS_ORIGINS_ENV = "TRIAGE_CORS_ORIGINS"      # comma-separated, e.g. https://triage.example.com
 # Request headers a browser page may send, and response headers its JavaScript may read
 CORS_REQUEST_HEADERS = ["Authorization", "Content-Type", *PROVIDER_KEY_HEADERS.values(), "X-Triage-Quality",
                         "X-Triage-Task", "X-Triage-Verify"]
 CORS_RESPONSE_HEADERS = ["X-Triage-Request-Id", "X-Triage-Model", "X-Triage-Tier", "X-Triage-Reason",
                          "X-Triage-Fallback", "X-Triage-Cache", "X-Triage-Verified", "X-Triage-Escalated",
-                         "X-Triage-Check", "X-Triage-Cost", "X-Triage-Saved", "X-Triage-Mode",
+                         "X-Triage-Check", "X-Triage-P-Low", "X-Triage-P-Medium", "X-Triage-Tau",
+                         "X-Triage-Cost", "X-Triage-Strong-Cost", "X-Triage-Saved", "X-Triage-Mode",
                          "X-Triage-Demo-Remaining", "X-Triage-Demo-Limit", "X-Triage-Demo-Resets",
                          "X-Triage-Max-Tokens", "Retry-After"]
 
@@ -378,6 +448,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app.state.deps, app.state.auth = deps, auth
     app.state.public = public_from_env() if public is None else public
     origins = cors_origins_from_env() if cors_origins is None else list(cors_origins)
+    app.add_middleware(InternalErrorMiddleware)       # first, so it sits inside CORSMiddleware
     if origins:
         # No cookies or credentials: the browser sends keys only as the explicit headers listed
         app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "OPTIONS"],
@@ -468,6 +539,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         max_tokens = settings.max_tokens or snapshot.routing.generation.get("max_tokens", DEFAULT_MAX_TOKENS)
         training = snapshot.routing.generation
         request_id = f"chatcmpl-triage-{uuid.uuid4().hex}"
+        # From here on every outcome is logged under this id, so errors carry it too (GET /v1/requests/{id})
+        request.state.triage_headers["X-Triage-Request-Id"] = request_id
         row = RequestRow(request_id=request_id, timestamp=_now(), key_id=key_id, requested_model=body.model,
                          stream=body.stream, quality=x_triage_quality, tau=tau if auto else None,
                          task_type=task, classifier=deps.classifier if auto else None,
@@ -594,14 +667,16 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             headers = _triage_headers(decision, cache, model=served_model, tier=served_tier, reason=reason,
                                       verified=verify, escalated=escalated, check=check) | {
                 "X-Triage-Cost": _money(row.price_as_cost)}
-            if row.saved is not None:          # unknown when no baseline model is reachable: left out, not faked
+            if row.strong_cost is not None:    # unknown when no baseline model is reachable: left out, not faked
+                headers["X-Triage-Strong-Cost"] = _money(row.strong_cost)
+            if row.saved is not None:
                 headers["X-Triage-Saved"] = _money(row.saved)
+            headers |= request.state.triage_headers
             completion = {"id": request_id, "object": "chat.completion", "created": created, "model": served_model,
                           "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
                                        "finish_reason": response.finish_reason or "stop"}],
-                          "usage": _usage(response)}
-            return JSONResponse(completion, headers=headers | request.state.triage_headers,
-                                background=background(text))
+                          "usage": _usage(response), "triage": triage_body(headers)}
+            return JSONResponse(completion, headers=headers, background=background(text))
 
         include_usage = bool(body.stream_options and body.stream_options.include_usage)
         streamed = []                                         # the answer, in memory only, for a background label
