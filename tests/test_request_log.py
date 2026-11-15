@@ -442,3 +442,55 @@ def test_reads_without_vectors_still_return_everything_else(tmp_path):
         assert (light.features, light.embedding) == (None, None)
         assert light.price_as_cost == 0.5 and light.feature_version == "3"
         assert log.rows(include_vectors=False)[0] == light and log.get("r0") == full   # nothing was lost
+
+
+# ---------- schema 3 -> 4 (preferred_provider) ----------
+
+def _version_3_file(path):
+    """A request log exactly as schema version 3 wrote it: no preferred_provider column, one row."""
+    from app.api.request_log import _FIELDS, _column
+    v3 = [f for f in _FIELDS if f.name != "preferred_provider"]
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    db.execute("INSERT INTO schema_version (version) VALUES (3)")
+    db.execute("CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+               + ", ".join(_column(f) for f in v3) + ")")
+    db.execute("INSERT INTO requests (request_id, timestamp, key_id, requested_model, stream, mode) "
+               "VALUES ('old-1', '2026-11-01T00:00:00+00:00', 'k1', 'auto', 0, 'byok')")
+    db.commit()
+    db.close()
+
+
+def test_a_version_3_log_is_migrated_in_place(tmp_path):
+    path = tmp_path / "r.sqlite3"
+    _version_3_file(path)
+    log = SQLiteRequestLog(path)
+    db = sqlite3.connect(path)
+    assert db.execute("SELECT version FROM schema_version").fetchall() == [(SCHEMA_VERSION,)] == [(4,)]
+    assert "preferred_provider" in [c[1] for c in db.execute("PRAGMA table_info(requests)")]
+    (old,) = log.rows()
+    assert (old.request_id, old.mode, old.preferred_provider) == ("old-1", "byok", None)
+    log.write(row(request_id="new-1", preferred_provider="anthropic"))
+    assert log.get("new-1").preferred_provider == "anthropic"
+    log.close()
+    reopened = SQLiteRequestLog(path)                    # already version 4: nothing more to do
+    assert [r.request_id for r in reopened.rows()] == ["old-1", "new-1"]
+    reopened.close()
+
+
+def test_versions_without_a_migration_are_still_refused(tmp_path):
+    SQLiteRequestLog(tmp_path / "r.sqlite3").close()
+    db = sqlite3.connect(tmp_path / "r.sqlite3")
+    db.execute("UPDATE schema_version SET version = 2")
+    db.commit()
+    with pytest.raises(RuntimeError, match="schema version 2"):
+        SQLiteRequestLog(tmp_path / "r.sqlite3")
+
+
+def test_preferred_provider_round_trips_and_is_in_public_dict(tmp_path):
+    log = SQLiteRequestLog(tmp_path / "r.sqlite3")
+    log.write(row(request_id="a", preferred_provider="gemini"))
+    log.write(row(request_id="b"))
+    assert [r.preferred_provider for r in log.rows()] == ["gemini", None]
+    assert log.get("a").public_dict()["preferred_provider"] == "gemini"
+    log.close()

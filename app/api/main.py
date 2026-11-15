@@ -602,6 +602,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 finish("error", 429, error.code)
                 raise demo_limit_error(error, demo) from None
 
+        row.preferred_provider = prefer    # applied to the chains from here on, whatever the outcome
         try:
             routed = await core.route_and_stream(messages, tau=tau if auto else None, task_type=task,
                                                  model=body.model, stream=body.stream, settings=settings,

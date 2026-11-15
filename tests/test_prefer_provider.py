@@ -267,3 +267,25 @@ def test_escalation_without_a_preference_is_unchanged():
                                                      "groq-small": FakeBehavior(text=GOOD)})
     r = chat(http, {"x-anthropic-key": SECRET, "x-groq-key": SECRET} | SYNC)
     assert r.headers["x-triage-escalated"] == "true" and r.json()["model"] == "groq-small"
+
+
+# ---------- the request log ----------
+
+def test_the_log_column_holds_the_applied_provider_only():
+    http, deps = app()
+    chat(http, ALL_KEYS | {"X-Triage-Prefer-Provider": "OpenAI"})                 # applied
+    chat(http, {"x-groq-key": SECRET, "X-Triage-Prefer-Provider": "openai"})       # no openai key: ignored
+    chat(http, BEARER | {"X-Triage-Prefer-Provider": "openai"})                    # api: ignored
+    chat(http, {"X-Triage-Prefer-Provider": "openai"})                             # demo: ignored
+    chat(http, ALL_KEYS | {"X-Triage-Prefer-Provider": "openai"}, {"model": "groq-small", "messages": ASK})
+    chat(http, ALL_KEYS)
+    assert [r.preferred_provider for r in deps.log.rows()] == ["openai", None, None, None, None, None]
+
+
+def test_a_failed_request_still_logs_the_applied_preference():
+    names = list(REGISTRY)
+    http, deps = app(script={n: FakeBehavior(fail_before="server") for n in names})
+    r = chat(http, {"x-anthropic-key": SECRET, "X-Triage-Prefer-Provider": "anthropic"})
+    assert r.status_code == 503
+    (row,) = deps.log.rows()
+    assert row.preferred_provider == "anthropic" and row.status == "error"
