@@ -77,3 +77,125 @@ def test_send_falls_back_along_the_reordered_chain():
 def test_send_without_a_preference_is_unchanged():
     deps = make_deps()
     assert deps.client.send(ASK, "high", keys=byok("groq", "anthropic")).model.name == "groq-large"
+
+
+# ---------- the X-Triage-Prefer-Provider header ----------
+
+from fastapi.testclient import TestClient                          # noqa: E402
+
+from app.api.auth import Auth                                       # noqa: E402
+from app.api.main import create_app                                 # noqa: E402
+from tests.api_helpers import API_KEY, FakePredictor, routing_raw   # noqa: E402
+
+BEARER = {"Authorization": f"Bearer {API_KEY}"}
+ALL_KEYS = {"x-openai-key": SECRET, "x-anthropic-key": SECRET, "x-groq-key": SECRET, "x-gemini-key": SECRET}
+LOW_FIRST = {"openai": "openai-luna", "anthropic": "claude-haiku", "groq": "groq-allam",
+             "gemini": "gemini-flash-lite"}
+
+
+def app(predictor=None, public=True, **kw):
+    deps = make_deps(predictor=predictor or FakePredictor(0.95, 0.95), **kw)
+    return TestClient(create_app(deps=deps, auth=Auth([API_KEY]), public=public)), deps
+
+
+def chat(http, headers=None, body=None):
+    return http.post("/v1/chat/completions", json=body or {"model": "auto", "messages": ASK}, headers=headers or {})
+
+
+def not_applied(r, served):
+    assert r.status_code == 200 and r.headers["x-triage-preferred-provider"] == "none"
+    assert r.json()["triage"]["preferred_provider"] is None
+    assert "preferred provider" not in r.headers["x-triage-reason"]
+    assert r.json()["model"] == served
+
+
+@pytest.mark.parametrize("prefer", ALL_FOUR)
+def test_byok_serves_the_preferred_providers_model_in_the_same_tier(prefer):
+    http, _ = app()
+    baseline = chat(http, ALL_KEYS)
+    r = chat(http, ALL_KEYS | {"X-Triage-Prefer-Provider": prefer})
+    assert r.status_code == 200 and r.headers["x-triage-tier"] == baseline.headers["x-triage-tier"] == "low"
+    assert r.json()["model"] == LOW_FIRST[prefer]
+    assert r.headers["x-triage-preferred-provider"] == prefer and r.json()["triage"]["preferred_provider"] == prefer
+    assert r.headers["x-triage-reason"].endswith(f"; preferred provider {prefer}")
+    assert r.headers["x-triage-fallback"] == "none"
+
+
+def test_the_value_is_case_insensitive():
+    http, _ = app()
+    r = chat(http, ALL_KEYS | {"X-Triage-Prefer-Provider": " Anthropic "})
+    assert r.headers["x-triage-preferred-provider"] == "anthropic" and r.json()["model"] == "claude-haiku"
+
+
+def test_the_tier_decision_does_not_change():
+    http, _ = app(FakePredictor(0.4, 0.95))
+    r = chat(http, ALL_KEYS | {"X-Triage-Prefer-Provider": "openai"})
+    assert (r.headers["x-triage-tier"], r.json()["model"]) == ("medium", "openai-terra")
+
+
+def test_fallback_walks_the_reordered_chain():
+    http, deps = app(script={"claude-haiku": FakeBehavior(fail_before="server")})
+    r = chat(http, {"x-anthropic-key": SECRET, "x-groq-key": SECRET, "X-Triage-Prefer-Provider": "anthropic"})
+    assert r.json()["model"] == "groq-allam" and r.headers["x-triage-fallback"] == "claude-haiku->groq-allam"
+    assert r.headers["x-triage-preferred-provider"] == "anthropic"
+
+
+def test_tier_fallback_works_on_the_reordered_chains():
+    raw = routing_raw()
+    raw["fallback_chains"]["medium"] = ["groq-small"]                  # no anthropic model in medium
+    http, _ = app(FakePredictor(0.4, 0.95), raw=raw)
+    r = chat(http, {"x-anthropic-key": SECRET, "X-Triage-Prefer-Provider": "anthropic"})
+    assert (r.headers["x-triage-tier"], r.json()["model"]) == ("high", "claude-opus")
+    assert r.headers["x-triage-reason"].endswith(
+        "; no model for your keys in medium: used high; preferred provider anthropic")
+
+
+def test_ignored_without_a_key_for_that_provider():
+    http, _ = app()
+    not_applied(chat(http, {"x-groq-key": SECRET, "X-Triage-Prefer-Provider": "anthropic"}), "groq-allam")
+
+
+def test_ignored_in_api_mode():
+    http, deps = app()
+    r = chat(http, BEARER | {"X-Triage-Prefer-Provider": "gemini"})
+    not_applied(r, "groq-allam")
+    assert r.headers["x-triage-mode"] == "api"
+
+
+def test_ignored_in_demo_mode_and_routed_exactly_as_without_it():
+    http, _ = app()
+    without = chat(http)
+    r = chat(http, {"X-Triage-Prefer-Provider": "gemini"})
+    not_applied(r, without.json()["model"])
+    assert r.headers["x-triage-mode"] == "demo" and r.headers["x-triage-reason"] == without.headers["x-triage-reason"]
+
+
+def test_ignored_for_a_named_model():
+    http, _ = app()
+    r = chat(http, ALL_KEYS | {"X-Triage-Prefer-Provider": "anthropic"}, {"model": "groq-small", "messages": ASK})
+    not_applied(r, "groq-small")
+
+
+@pytest.mark.parametrize("headers", [ALL_KEYS, BEARER, {}])
+@pytest.mark.parametrize("value", ["ollama", "claude", "openai,anthropic"])
+def test_an_unknown_provider_is_a_400_in_every_mode(headers, value):
+    http, deps = app()
+    r = chat(http, headers | {"X-Triage-Prefer-Provider": value})
+    assert r.status_code == 400
+    error = r.json()["error"]
+    assert (error["code"], error["param"], error["type"]) == ("invalid_value", "X-Triage-Prefer-Provider",
+                                                              "invalid_request_error")
+    assert deps.fake_models.calls == [] and deps.log.rows() == []
+
+
+def test_a_blank_value_is_no_preference():
+    http, _ = app()
+    not_applied(chat(http, ALL_KEYS | {"X-Triage-Prefer-Provider": " "}), "groq-allam")
+
+
+def test_streams_report_it_too():
+    http, _ = app()
+    with http.stream("POST", "/v1/chat/completions", headers=ALL_KEYS | {"X-Triage-Prefer-Provider": "openai"},
+                     json={"model": "auto", "messages": ASK, "stream": True}) as r:
+        "".join(r.iter_text())
+        assert r.headers["x-triage-preferred-provider"] == "openai" and r.headers["x-triage-model"] == "openai-luna"

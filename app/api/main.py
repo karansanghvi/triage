@@ -45,8 +45,8 @@ from app.api.auth import ADMIN_KEYS_ENV, API_KEYS_ENV, Auth, Caller, keys_from_e
 from app.api.config_state import NOT_PERSISTED_NOTE, ConfigUpdateError
 from app.api.demo import DemoLimitError, client_ip, visitor_id
 from app.api.errors import APIError, bad_request, stream_error_event
-from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_quality, parse_task, parse_verify,
-                             resolve_keys)
+from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_prefer_provider, parse_quality,
+                             parse_task, parse_verify, resolve_keys)
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
@@ -207,7 +207,7 @@ def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] =
             "X-Triage-Fallback": f"{d.primary_model}->{d.model}" if d.fell_back else "none",
             "X-Triage-Cache": cache, "X-Triage-Verified": verified,
             "X-Triage-Escalated": "true" if escalated else "false", "X-Triage-Check": check,
-            **_probability_headers(d)}
+            "X-Triage-Preferred-Provider": d.preferred_provider or "none", **_probability_headers(d)}
 
 
 def _six(x: float) -> str:
@@ -257,13 +257,16 @@ def triage_body(headers: dict) -> dict:
         value = headers.get(name)
         return None if value is None else float(value)
 
+    preferred = headers.get("X-Triage-Preferred-Provider")
+
     return {"request_id": headers["X-Triage-Request-Id"], "model": headers["X-Triage-Model"],
             "tier": headers["X-Triage-Tier"], "p_low": number("X-Triage-P-Low"),
             "p_medium": number("X-Triage-P-Medium"), "tau": number("X-Triage-Tau"),
             "reason": headers["X-Triage-Reason"], "cost": number("X-Triage-Cost"),
             "strong_cost": number("X-Triage-Strong-Cost"), "saved": number("X-Triage-Saved"),
             "cache": headers["X-Triage-Cache"], "fallback": headers["X-Triage-Fallback"],
-            "mode": headers.get("X-Triage-Mode")}
+            "mode": headers.get("X-Triage-Mode"),
+            "preferred_provider": None if preferred in (None, "none") else preferred}
 
 
 def _usage(response) -> dict:
@@ -360,10 +363,10 @@ class InternalErrorMiddleware:
 CORS_ORIGINS_ENV = "TRIAGE_CORS_ORIGINS"      # comma-separated, e.g. https://triage.example.com
 # Request headers a browser page may send, and response headers its JavaScript may read
 CORS_REQUEST_HEADERS = ["Authorization", "Content-Type", *PROVIDER_KEY_HEADERS.values(), "X-Triage-Quality",
-                        "X-Triage-Task", "X-Triage-Verify"]
+                        "X-Triage-Task", "X-Triage-Verify", "X-Triage-Prefer-Provider"]
 CORS_RESPONSE_HEADERS = ["X-Triage-Request-Id", "X-Triage-Model", "X-Triage-Tier", "X-Triage-Reason",
                          "X-Triage-Fallback", "X-Triage-Cache", "X-Triage-Verified", "X-Triage-Escalated",
-                         "X-Triage-Check", "X-Triage-P-Low", "X-Triage-P-Medium", "X-Triage-Tau",
+                         "X-Triage-Check", "X-Triage-Preferred-Provider", "X-Triage-P-Low", "X-Triage-P-Medium", "X-Triage-Tau",
                          "X-Triage-Cost", "X-Triage-Strong-Cost", "X-Triage-Saved", "X-Triage-Mode",
                          "X-Triage-Demo-Remaining", "X-Triage-Demo-Limit", "X-Triage-Demo-Resets",
                          "X-Triage-Max-Tokens", "Retry-After"]
@@ -487,7 +490,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     async def chat_completions(body: ChatRequest, request: Request, who: Optional[Caller] = Depends(chat_caller),
                                x_triage_quality: Optional[str] = Header(None),
                                x_triage_task: Optional[str] = Header(None),
-                               x_triage_verify: Optional[str] = Header(None)):
+                               x_triage_verify: Optional[str] = Header(None),
+                               x_triage_prefer_provider: Optional[str] = Header(None)):
         deps = app.state.deps
         started = time.perf_counter()
         # This request's provider keys (X-OpenAI-Key, ...). Passed down the call path only: never stored on deps,
@@ -510,6 +514,11 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         verify = parse_verify(x_triage_verify, body.stream)
         check_verify_model(verify, body.model)
         auto = body.model == "auto"
+        # Checked in every mode, applied only to BYOK "auto" requests with a key for that provider (else ignored,
+        # so api and demo requests route exactly as before)
+        prefer = parse_prefer_provider(x_triage_prefer_provider)
+        if not (byok and auto and prefer in keys.providers):
+            prefer = None
         requested_max_tokens = body.max_tokens or body.max_completion_tokens
 
         # Requests without a Triage key: a visitor (client IP, only ever as a keyed hash) with daily limits
@@ -595,7 +604,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         try:
             routed = await core.route_and_stream(messages, tau=tau if auto else None, task_type=task,
                                                  model=body.model, stream=body.stream, settings=settings,
-                                                 deps=request_deps, request_id=request_id, keys=keys)
+                                                 deps=request_deps, request_id=request_id, keys=keys,
+                                                 prefer=prefer)
         except core.UnknownModel as error:
             finish("error", 404, "model_not_found")
             raise APIError(404, str(error), param="model", code="model_not_found") from None

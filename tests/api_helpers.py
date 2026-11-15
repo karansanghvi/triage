@@ -62,14 +62,15 @@ def make_deps(script=None, *, predictor=None, first_token=None, cache=None, mode
 
 
 async def reference_route_and_stream(messages, *, tau, task_type, model="auto", stream=True, settings, deps,
-                                     request_id, keys=None):
+                                     request_id, keys=None, prefer=None):
     kwargs = settings.as_kwargs()
     if model == "auto":
         p = deps.predictor.predict_messages(messages, task_type)
         rd = route(p.p_low, p.p_medium, tau)
         result = await anyio.to_thread.run_sync(lambda: deps.client.send(messages, rd.tier, stream=stream, keys=keys,
-                                                                         **kwargs))
-        extra = dict(reason=rd.reason, tau=tau, p_low=p.p_low, p_medium=p.p_medium, task_type=p.task_type,
+                                                                         prefer=prefer, **kwargs))
+        reason = rd.reason if prefer is None else f"{rd.reason}; preferred provider {prefer}"
+        extra = dict(reason=reason, tau=tau, preferred_provider=prefer, p_low=p.p_low, p_medium=p.p_medium, task_type=p.task_type,
                      task_type_guessed=p.task_type_guessed)
     elif model in deps.registry:
         result = await anyio.to_thread.run_sync(lambda: deps.client.send_model(messages, model, stream=stream,

@@ -100,14 +100,14 @@ TRIAGE_FIELDS = {"request_id": "x-triage-request-id", "model": "x-triage-model",
                  "p_low": "x-triage-p-low", "p_medium": "x-triage-p-medium", "tau": "x-triage-tau",
                  "reason": "x-triage-reason", "cost": "x-triage-cost", "strong_cost": "x-triage-strong-cost",
                  "saved": "x-triage-saved", "cache": "x-triage-cache", "fallback": "x-triage-fallback",
-                 "mode": "x-triage-mode"}
+                 "mode": "x-triage-mode", "preferred_provider": "x-triage-preferred-provider"}
 NUMBERS = {"p_low", "p_medium", "tau", "cost", "strong_cost", "saved"}
 
 
 def matches_headers(triage, headers):
     assert set(triage) == set(TRIAGE_FIELDS)
     for field, header in TRIAGE_FIELDS.items():
-        if header not in headers:
+        if header not in headers or (field == "preferred_provider" and headers[header] == "none"):
             assert triage[field] is None, field
         elif field in NUMBERS:
             assert isinstance(triage[field], float) and triage[field] == float(headers[header]), field
