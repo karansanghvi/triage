@@ -4,7 +4,7 @@ import SuggestionChips from "@/components/chat/SuggestionChips"
 import ChatInput from "@/components/chat/ChatInput"
 import MessageList from "@/components/chat/MessageList"
 import { useVisitorName } from "@/hooks/useVisitorName"
-import { sendFakeChat } from "@/lib/fakeTriage"
+import { sendChat } from "@/lib/api"
 import { TriageError } from "@/lib/errors"
 import type { AssistantMessage, ChatError, Message, UserMessage } from "@/types/chat"
 import RoutingPanel from "@/components/chat/RoutingPanel";
@@ -37,7 +37,7 @@ export default function ChatPage() {
     setSending(true)
 
     try {
-      const result = await sendFakeChat(history, quality)
+      const result = await sendChat(history, quality)
       setMessages((prev) =>
         prev.map((m) =>
           m.id === pendingId && m.role === "assistant"

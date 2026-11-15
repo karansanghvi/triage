@@ -244,7 +244,7 @@ function SessionTotals({ messages }: { messages: Message[] }) {
               <p className="text-sm font-semibold">Cost {formatCost(totalCost)}</p>
               <p className="text-xs text-muted-foreground">instead of {formatCost(totalStrong)}</p>
             </div>
-            {share !== null && share > 0 && (
+            {share !== null && share >= 0.01 && (
               <p className="text-lg font-semibold text-success">{formatPercent(share)} saved</p>
             )}
           </div>
