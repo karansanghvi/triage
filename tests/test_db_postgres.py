@@ -285,3 +285,15 @@ def test_concurrent_login_attempts_never_overshoot_the_ip_limit(migrated_url):
     assert len(allowed) == 10 and len(refused) == 15
     for limiter in limiters:
         limiter.engine.dispose()
+
+
+def test_wrong_current_passwords_hit_the_per_email_limit_on_postgres(pg_app):
+    http, _, _ = pg_app
+    token = http.post("/v1/auth/signup", json={"email": "ada@example.com", "password": PASSWORD},
+                      headers={"X-Forwarded-For": "203.0.113.5"}).json()["session_token"]
+    for _ in range(5):
+        assert http.post("/v1/account/password", json={"current_password": "wrong password here",
+                                                        "new_password": "a brand new secret"},
+                         headers=bearer(token)).status_code == 403
+    r = http.request("DELETE", "/v1/account", json={"password": PASSWORD}, headers=bearer(token))
+    assert r.status_code == 429 and int(r.headers["retry-after"]) > 0

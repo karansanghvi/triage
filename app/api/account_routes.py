@@ -194,9 +194,20 @@ def account_router() -> APIRouter:
     # ----- account settings -----
 
     async def check_password(request: Request, user, password: str, event: str) -> None:
-        """403 incorrect_password (not 401: the session is fine, so the website shouldn't log the user out)."""
+        """The current password, guarded by the same per-email failure limit as login (5 per 15 minutes,
+        counted together with failed logins, so switching endpoints buys no extra guesses). Over the limit:
+        429 with Retry-After, before any check. Wrong: 403 incorrect_password (not 401: the session is fine,
+        so the website shouldn't log the user out), and the failure is counted."""
+        deps = request.app.state.deps
+        subject = email_subject(user.email, deps.hash_secret)
+        try:
+            await anyio.to_thread.run_sync(deps.auth_limiter.check, "login_failure_email", subject)
+        except RateLimited as error:
+            _log(event, "rate_limited", visitor(request))
+            raise _too_many(error, "password") from None
         ok = await anyio.to_thread.run_sync(verify_password, user.password_hash, password)
         if not ok:
+            await anyio.to_thread.run_sync(deps.auth_limiter.record, "login_failure_email", subject)
             _log(event, "incorrect_password", visitor(request))
             raise APIError(403, INCORRECT_PASSWORD, "permission_error", code="incorrect_password")
 

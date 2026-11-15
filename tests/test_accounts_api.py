@@ -420,3 +420,74 @@ def test_auth_events_are_printed_by_the_server():
     auth_logger = logging.getLogger("triage.auth")
     assert auth_logger.isEnabledFor(logging.INFO)
     assert any(isinstance(h, logging.StreamHandler) for h in auth_logger.handlers)
+
+
+# ---------- current-password checks share the per-email failure limit ----------
+
+def wrong_password_change(http, token):
+    return http.post("/v1/account/password", json={"current_password": "wrong password here",
+                                                    "new_password": "a brand new secret"}, headers=bearer(token))
+
+
+@pytest.mark.parametrize("endpoint", ["password", "delete"])
+def test_five_wrong_current_passwords_then_429_with_retry_after(endpoint):
+    clock = Clock()
+    http, deps = app(clock=clock)
+    token = signup(http).json()["session_token"]
+
+    def attempt(password):
+        if endpoint == "password":
+            return http.post("/v1/account/password", json={"current_password": password,
+                                                            "new_password": "a brand new secret"},
+                             headers=bearer(token))
+        return delete_account(http, token, password)
+
+    for _ in range(5):
+        assert attempt("wrong password here").status_code == 403
+    r = attempt(PASSWORD)                                          # even the right one: no more checks for now
+    assert r.status_code == 429 and r.json()["error"]["code"] == "too_many_attempts"
+    assert 0 < int(r.headers["retry-after"]) <= 900 and PASSWORD not in r.text
+    assert http.get("/v1/auth/me", headers=bearer(token)).status_code == 200      # still logged in
+    clock.advance(minutes=15)
+    assert attempt(PASSWORD).status_code == 204
+
+
+def test_an_over_the_limit_attempt_runs_no_password_check(monkeypatch):
+    http, _ = app()
+    token = signup(http).json()["session_token"]
+    for _ in range(5):
+        wrong_password_change(http, token)
+    calls = []
+    monkeypatch.setattr("app.api.account_routes.verify_password", lambda h, p: calls.append(1) or True)
+    assert wrong_password_change(http, token).status_code == 429 and calls == []
+
+
+def test_settings_failures_and_login_failures_share_one_count():
+    http, _ = app()
+    token = signup(http).json()["session_token"]
+    for n in range(3):
+        assert login(http, password="wrong password here", headers=ip(10 + n)).status_code == 401
+    for _ in range(2):
+        assert wrong_password_change(http, token).status_code == 403
+    assert wrong_password_change(http, token).status_code == 429             # 3 + 2 = 5: full
+    assert login(http, headers=ip(20)).status_code == 401                    # login is locked too (same 401)
+
+
+def test_correct_current_passwords_dont_count():
+    http, _ = app()
+    token = signup(http).json()["session_token"]
+    for i in range(6):
+        new = f"new long secret {i}"
+        old = PASSWORD if i == 0 else f"new long secret {i - 1}"
+        assert http.post("/v1/account/password", json={"current_password": old, "new_password": new},
+                         headers=bearer(token)).status_code == 204
+
+
+def test_another_users_failures_dont_lock_this_account():
+    http, _ = app()
+    ada = signup(http).json()["session_token"]
+    bob = signup(http, email="bob@example.com", headers=ip(2)).json()["session_token"]
+    for _ in range(5):
+        wrong_password_change(http, bob)
+    assert http.post("/v1/account/password", json={"current_password": PASSWORD, "new_password": "a brand new secret"},
+                     headers=bearer(ada)).status_code == 204

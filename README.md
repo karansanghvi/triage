@@ -217,8 +217,10 @@ exist. Accounts don't change chat yet: saved provider keys, account API keys and
 - **Emails** are trimmed, NFKC-normalized and lowercased; dots and `+tags` are kept. There's no email
   verification or password reset yet.
 - **Rate limits** (in the database, shared by every instance): 5 signups per IP per hour and 10 logins per IP per
-  15 minutes (429 with `Retry-After`), and 5 failed logins per email per 15 minutes (the same 401 as a wrong
-  password, so it reveals nothing). Attempts are stored under keyed hashes, never IPs or emails.
+  15 minutes (429 with `Retry-After`), and 5 wrong passwords per email per 15 minutes. That count covers failed
+  logins and wrong current passwords on `POST /v1/account/password` and `DELETE /v1/account` together. Over it,
+  login gives the same 401 as a wrong password (so it reveals nothing) and those two endpoints give 429 with
+  `Retry-After`. Attempts are stored under keyed hashes, never IPs or emails.
 - **Logs** carry the event, the outcome and the visitor's hash; never an email, password or token.
 
 ## Retraining the classifier (Phase 4)
