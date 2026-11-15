@@ -9,6 +9,7 @@ import hashlib
 import pytest
 from fastapi.testclient import TestClient
 
+from app import db as db_module
 from app.api import demo as demo_module
 from app.api import deps as deps_module
 from app.api import request_log
@@ -29,11 +30,11 @@ def paths(tmp_path, monkeypatch):
          "real_demo": tmp_path / "demo" / "usage.sqlite3", "fake_demo": tmp_path / "demo" / "fake_usage.sqlite3"}
     monkeypatch.setattr(deps_module, "DEFAULT_CACHE_PATH", p["real_cache"])
     monkeypatch.setattr(deps_module, "FAKE_CACHE_PATH", p["fake_cache"])
-    monkeypatch.setattr(request_log, "DEFAULT_LOG_DB", p["real_log"])
-    monkeypatch.setattr(request_log, "FAKE_LOG_DB", p["fake_log"])
+    monkeypatch.setattr(db_module, "DEFAULT_DB", p["real_log"])
+    monkeypatch.setattr(db_module, "FAKE_DB", p["fake_log"])
     monkeypatch.setattr(demo_module, "DEFAULT_DEMO_DB", p["real_demo"])      # never the real data/demo either
     monkeypatch.setattr(demo_module, "FAKE_DEMO_DB", p["fake_demo"])
-    for name in ("TRIAGE_CACHE", "TRIAGE_CACHE_PATH", "TRIAGE_LOG_DB", "TRIAGE_LOG", "TRIAGE_FAKE_MODELS",
+    for name in ("TRIAGE_CACHE", "TRIAGE_CACHE_PATH", "DATABASE_URL", "TRIAGE_FAKE_DB", "TRIAGE_LOG", "TRIAGE_FAKE_MODELS",
                  "TRIAGE_DEMO_DB", "TRIAGE_SERVER_PROVIDERS", "TRIAGE_TRUSTED_PROXY_HOPS"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TRIAGE_HASH_SECRET", "isolation-test-secret")
@@ -85,16 +86,17 @@ def test_the_real_cache_and_log_are_untouched_by_a_fake_mode_request(paths, monk
     ask(fake)
     assert (digest(paths["real_cache"]), digest(paths["real_log"])) == before
     assert fake.cached_sender.cache.path == paths["fake_cache"] and paths["fake_cache"].exists()
-    assert fake.log.path == paths["fake_log"] and len(fake.log.rows()) == 1
+    assert fake.log.engine.url.database == str(paths["fake_log"]) and len(fake.log.rows()) == 1
 
 
 @pytest.mark.parametrize("fake, env, target", [
-    (True, "TRIAGE_CACHE_PATH", "real_cache"), (True, "TRIAGE_LOG_DB", "real_log"),
-    (False, "TRIAGE_CACHE_PATH", "fake_cache"), (False, "TRIAGE_LOG_DB", "fake_log")])
+    (True, "TRIAGE_CACHE_PATH", "real_cache"), (False, "TRIAGE_CACHE_PATH", "fake_cache"),
+    (False, "DATABASE_URL", "fake_log")])
 def test_each_mode_refuses_the_other_modes_files_even_when_named_explicitly(paths, monkeypatch, fake, env, target):
     if fake:
         monkeypatch.setenv("TRIAGE_FAKE_MODELS", "1")
-    monkeypatch.setenv(env, str(paths[target]))
+    value = db_module.sqlite_url(paths[target]) if env == "DATABASE_URL" else str(paths[target])
+    monkeypatch.setenv(env, value)
     with pytest.raises(RuntimeError, match="refusing to start"):
         deps_module.load_deps()
     assert not paths[target].exists()
@@ -112,3 +114,13 @@ def test_fake_mode_keeps_its_own_demo_counters(paths, monkeypatch):
     monkeypatch.delenv("TRIAGE_FAKE_MODELS")
     deps_module.load_deps()
     assert paths["fake_demo"].exists() and paths["real_demo"].exists()
+
+
+def test_fake_mode_ignores_database_url(paths, monkeypatch):
+    """.env may set DATABASE_URL (the real database): fake mode still logs only to its own file."""
+    monkeypatch.setenv("DATABASE_URL", db_module.sqlite_url(paths["real_log"]))
+    monkeypatch.setenv("TRIAGE_FAKE_MODELS", "1")
+    fake = deps_module.load_deps()
+    ask(fake)
+    assert fake.log.engine.url.database == str(paths["fake_log"]) and len(fake.log.rows()) == 1
+    assert not paths["real_log"].exists()

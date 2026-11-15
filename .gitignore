@@ -50,6 +50,9 @@ models/*.joblib
 
 # Request logs from the API (SQLite; no keys or text, but per-request data)
 data/logs/
+# The local database (app/db.py): request log, later accounts. SQLite plus its -wal/-shm files
+data/triage.sqlite3*
+data/fake.sqlite3*
 
 # Calibration run locks (temporary; not committed)
 data/checker_calibration/*.pid

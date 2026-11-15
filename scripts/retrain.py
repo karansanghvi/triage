@@ -47,8 +47,8 @@ import numpy as np
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
-from app.api.request_log import (DEFAULT_LOG_DB, HASH_SECRET_ENV, LOG_DB_ENV, SQLiteRequestLog,
-                                 embedding_from_bytes, prompt_hmac)
+from app.api.request_log import (HASH_SECRET_ENV, SQLiteRequestLog, SQLRequestLog, embedding_from_bytes,
+                                 prompt_hmac)
 from app.registry import PROJECT_ROOT
 from app.router.embeddings import MODEL_NAME as EMBEDDING_MODEL
 from app.router.features import FEATURE_NAMES, FEATURE_VERSION
@@ -143,9 +143,16 @@ def load_new_labels(log, forbidden: dict) -> tuple:
 
 
 def open_log(path: Optional[Path]):
-    """The request log, or None if there is no database yet (never creates one)."""
-    path = Path(path or os.environ.get(LOG_DB_ENV) or DEFAULT_LOG_DB)
-    return SQLiteRequestLog(path) if path.exists() else None
+    """The request log, or None if there is no database yet (never creates one). `path`: a SQLite file of its
+    own; None: the app's database (DATABASE_URL, default data/triage.sqlite3)."""
+    from sqlalchemy.engine import make_url
+    from app import db
+    if path is not None:
+        return SQLiteRequestLog(path) if Path(path).exists() else None
+    url = make_url(db.database_url())
+    if url.get_backend_name() == "sqlite" and not Path(url.database or "").exists():
+        return None
+    return SQLRequestLog(db.open_engine(url.render_as_string(hide_password=False)), owns_engine=True)
 
 
 def data_counts(original: dict, new: dict, excluded: dict) -> dict:
@@ -350,8 +357,8 @@ def run(*, dry_run: bool = False, log_db: Optional[Path] = None, models_dir: Pat
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Retrain the live classifier with background labels, safely.")
     parser.add_argument("--dry-run", action="store_true", help="train and evaluate; write only the candidate files")
-    parser.add_argument("--log-db", type=Path, default=None, help=f"request log (default: ${LOG_DB_ENV} or "
-                        f"{DEFAULT_LOG_DB.relative_to(PROJECT_ROOT)})")
+    parser.add_argument("--log-db", type=Path, default=None, help="a request log in a SQLite file of its own "
+                        "(default: the app's database, $DATABASE_URL or data/triage.sqlite3)")
     args = parser.parse_args(argv)
     entry = run(dry_run=args.dry_run, log_db=args.log_db)
     print(json.dumps({k: entry[k] for k in ("decision", "reason", "data")}, indent=2))

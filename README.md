@@ -95,8 +95,8 @@ pip install -r requirements.txt
 TRIAGE_API_KEYS=dev-key TRIAGE_ADMIN_KEYS=admin-key TRIAGE_HASH_SECRET="$(openssl rand -hex 32)" \
   uvicorn app.api.main:app --port 8000
 # TRIAGE_FAKE_MODELS=1 answers with fake models (no provider keys, no API calls); TRIAGE_CACHE=off disables the cache
-# Fake mode keeps its own cache and request log (data/cache/fake_responses.sqlite3, data/logs/fake_requests.sqlite3)
-# and refuses to start if pointed at the real ones, so a fake answer can never be served or logged as real
+# Fake mode keeps its own cache and database (data/cache/fake_responses.sqlite3, data/fake.sqlite3), never uses
+# DATABASE_URL, and refuses the real cache, so a fake answer can never be served or logged as real
 ```
 
 Python:
@@ -205,10 +205,29 @@ changes nothing except the candidate's model files.
 retraining points `config/routing.yaml` at a new version, restart the server (for example, stop and rerun
 `uvicorn app.api.main:app`) to start routing with it. Until then, the running server keeps the old model.
 
+## Database
+
+Triage keeps its request log (and, later, accounts and demo counters) in one database through SQLAlchemy Core,
+with the schema managed by Alembic (`migrations/`).
+
+- **Local and tests:** SQLite. Without `DATABASE_URL` the server uses `data/triage.sqlite3`, creating it and
+  applying migrations when it opens. Tests never need a network.
+- **Production:** set `DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST/DB?sslmode=require`. Postgres is never
+  migrated by the server itself: run `venv/bin/alembic upgrade head` (with `DATABASE_URL` set) as a deploy step.
+  The server refuses to start if the database isn't at the latest revision.
+- **Fake mode** (`TRIAGE_FAKE_MODELS=1`) always uses its own `data/fake.sqlite3` (`TRIAGE_FAKE_DB`) and ignores
+  `DATABASE_URL`, so fake requests never reach the real log.
+- **Old request logs** from before the database layer (`data/logs/requests.sqlite3`) aren't opened any more. Copy
+  their rows in with `venv/bin/python scripts/import_sqlite_log.py data/logs/requests.sqlite3`; the old file is
+  only read.
+- **Postgres tests** run only when `TRIAGE_TEST_DATABASE_URL` is set (`venv/bin/python -m pytest -m postgres`),
+  each in a throwaway schema. With Neon, use the direct connection string, not the pooled one.
+
 ## Privacy: what the request log keeps
 
-Every API request writes one row to a SQLite file (`TRIAGE_LOG_DB`, default `data/logs/requests.sqlite3`,
-not committed) and one JSON line to the server log.
+Every API request writes one row to the database and one JSON line to the server log. The database is
+`DATABASE_URL` (Postgres in production, e.g. Neon) or, by default, the local SQLite file `data/triage.sqlite3`
+(not committed). See "Database" below.
 
 **Stored:**
 - Routing and cost data: the tier and model used, predicted pass probabilities, fallbacks, tokens, costs,
@@ -216,7 +235,7 @@ not committed) and one JSON line to the server log.
 - `key_id`: the first 8 hex characters of the API key's SHA-256, so requests can be grouped by key.
 - `prompt_hmac`: an HMAC-SHA256 of the conversation, keyed with `TRIAGE_HASH_SECRET`. It shows when the same
   prompt comes back. Without the secret, nobody can test a guessed prompt against it, as they could with a
-  plain hash. The server refuses to start with the SQLite log if the secret isn't set. Keep the secret out of
+  plain hash. The server refuses to start with the database log if the secret isn't set. Keep the secret out of
   the database and out of version control. Changing it means new rows can't be matched with old ones.
 - For `model="auto"` requests that answered: the classifier's inputs, which are the 14 handcrafted features
   (`FEATURE_VERSION`) and the 384-number sentence embedding (`all-MiniLM-L6-v2`). Step 8 retrains on rows
