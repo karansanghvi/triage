@@ -33,6 +33,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
+import anyio
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -566,7 +567,14 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         recorder = _RecordingPredictor(deps.predictor)
         request_deps = dataclasses.replace(deps, predictor=recorder)    # same client, registry and log
 
-        def finish(status="ok", http_status=200, error_kind=None):
+        def persist():
+            deps.log.write(row)
+            request_logger.info(json_log_line(row))
+            if admitted:                   # replace the token reservation with what it really used
+                tokens, calls = demo_usage(row, admitted[0].reserved_tokens)
+                deps.demo_limiter.settle(admitted[0], tokens=tokens, calls=calls)
+
+        async def finish(status="ok", http_status=200, error_kind=None):
             if logged:
                 return
             logged.append(True)
@@ -575,14 +583,11 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             row.latency_ms = round((time.perf_counter() - started) * 1000, 1)
             _apply_inputs(row, recorder.prediction)
             row.training_eligible = is_training_eligible(row)
-            deps.log.write(row)
-            request_logger.info(json_log_line(row))
-            if admitted:                   # replace the token reservation with what it really used
-                tokens, calls = demo_usage(row, admitted[0].reserved_tokens)
-                deps.demo_limiter.settle(admitted[0], tokens=tokens, calls=calls)
+            # A worker thread: a database round trip (Postgres over the network) must not stall the event loop
+            await anyio.to_thread.run_sync(persist)
 
         if not auto and body.model not in deps.registry:              # logged, then an OpenAI-style 404
-            finish("error", 404, "model_not_found")
+            await finish("error", 404, "model_not_found")
             raise APIError(404, str(core.UnknownModel(body.model)), param="model", code="model_not_found")
 
         if mode == "demo":                 # counted only now, after every check that costs nothing
@@ -592,14 +597,14 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             except DemoLimitError as error:
                 status = deps.demo_limiter.status(visitor)
                 request.state.triage_headers.update(demo_headers(status.remaining, status.limit, status.resets_at))
-                finish("error", 429, error.code)
+                await finish("error", 429, error.code)
                 raise demo_limit_error(error, demo) from None
             request.state.triage_headers["X-Triage-Demo-Remaining"] = str(admitted[0].remaining)
         elif mode == "byok" and public:   # BYOK without a Triage key: a generous per-visitor cap (the user pays)
             try:
                 admitted.append(deps.demo_limiter.admit_public_byok(visitor))
             except DemoLimitError as error:
-                finish("error", 429, error.code)
+                await finish("error", 429, error.code)
                 raise demo_limit_error(error, demo) from None
 
         row.preferred_provider = prefer    # applied to the chains from here on, whatever the outcome
@@ -609,14 +614,14 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                                                  deps=request_deps, request_id=request_id, keys=keys,
                                                  prefer=prefer)
         except core.UnknownModel as error:
-            finish("error", 404, "model_not_found")
+            await finish("error", 404, "model_not_found")
             raise APIError(404, str(error), param="model", code="model_not_found") from None
         except ModelNotAllowed as error:                   # e.g. a claude-* model, and this request has no key
-            finish("error", 403, "model_not_allowed")
+            await finish("error", 403, "model_not_allowed")
             raise APIError(403, _not_allowed_message(error), "permission_error", param="model",
                            code="model_not_allowed") from None
         except core.NoUsableModel:
-            finish("error", 400, "no_usable_model")
+            await finish("error", 400, "no_usable_model")
             raise APIError(400, NO_USABLE_MODEL_MESSAGE, code="no_usable_model") from None
         except AllModelsFailed as error:
             # Every attempt is logged (model, outcome, error_kind, redacted message), even though none answered
@@ -627,16 +632,16 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 row.primary_model = error.attempts[0].model_name if error.attempts else None
             last = error.attempts[-1] if error.attempts else None
             if not auto and last is not None and last.error_kind == "truncated":     # a named model: no chain
-                finish("error", 400, "truncated")
+                await finish("error", 400, "truncated")
                 used = last.response.output_tokens if last.response is not None else "all its"
                 raise APIError(400, f"`{body.model}` used {used} output tokens thinking and wrote no answer. "
                                "Send a higher max_tokens: thinking counts toward it.", param="max_tokens",
                                code="max_tokens_too_low") from None
             rejected = rejected_key_providers(error.attempts) if byok else []
             if rejected:                                    # the user's own key(s) were refused: say so, as a 401
-                finish("error", 401, "invalid_provider_key")
+                await finish("error", 401, "invalid_provider_key")
                 raise APIError(401, invalid_key_message(rejected), code="invalid_provider_key") from None
-            finish("error", 503, "all_models_failed")
+            await finish("error", 503, "all_models_failed")
             raise APIError(503, f"No model could answer: {error}", "server_error", code="all_models_failed") from None
         decision = routed.decision
         _apply_decision(row, decision)
@@ -656,7 +661,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             try:
                 text = "".join([piece async for piece in routed.pieces])
             except ProviderError as error:
-                finish("error", 502, error.kind)
+                await finish("error", 502, error.kind)
                 raise APIError(502, f"The model failed while answering: {error.kind}", "server_error",
                                code="model_error") from None
             response = routed.response
@@ -674,7 +679,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             else:
                 _apply_costs(row, response, deps, baseline_providers, prefer)
             _add_truncated_costs(row, decision.attempts)
-            finish()
+            await finish()
             cache = "hit" if response.cached else ("miss" if is_cacheable(temperature, False) else "bypass")
             headers = _triage_headers(decision, cache, model=served_model, tier=served_tier, reason=reason,
                                       verified=verify, escalated=escalated, check=check) | {
@@ -698,7 +703,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 async for event in stream_events():
                     yield event
             finally:
-                finish("error", 499, "client_disconnected")    # no-op if the row was already written
+                with anyio.CancelScope(shield=True):           # a disconnect cancels the stream; still log it
+                    await finish("error", 499, "client_disconnected")    # no-op if the row was already written
 
         async def stream_events():
             yield _chunk(request_id, created, decision.model, {"role": "assistant", "content": ""})
@@ -708,7 +714,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                     yield _chunk(request_id, created, decision.model, {"content": piece})
             except Exception as error:                           # after the first token: no fallback
                 kind = getattr(error, "kind", type(error).__name__)
-                finish("error", 200, f"stream_interrupted:{kind}")
+                await finish("error", 200, f"stream_interrupted:{kind}")
                 logger.warning("stream %s interrupted after the first token: %s", request_id, kind)
                 yield stream_error_event(f"The model failed part-way through the answer ({kind}). "
                                          "Triage can't switch models once text has been sent.")
@@ -716,7 +722,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             response = routed.response
             _apply_costs(row, response, deps, baseline_providers, prefer)
             _add_truncated_costs(row, decision.attempts)
-            finish()
+            await finish()
             yield _chunk(request_id, created, decision.model, {}, finish=(response and response.finish_reason) or "stop")
             if include_usage and response is not None:
                 yield _chunk(request_id, created, decision.model, None, usage=_usage(response), choices=False)
@@ -772,12 +778,13 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     @app.get("/v1/stats")
     async def stats(who: Caller = Depends(caller)):
         # read from the log (survives restarts), without the feature and embedding columns
-        mine = app.state.deps.log.rows(None if who.admin else who.key_id, include_vectors=False)
+        mine = await anyio.to_thread.run_sync(lambda: app.state.deps.log.rows(None if who.admin else who.key_id,
+                                                                             include_vectors=False))
         return {"scope": "all keys" if who.admin else "your key", **summarize(mine)}
 
     @app.get("/v1/requests/{request_id}")
     async def get_request(request_id: str, who: Caller = Depends(caller)):
-        row = app.state.deps.log.get(request_id, include_vectors=False)
+        row = await anyio.to_thread.run_sync(lambda: app.state.deps.log.get(request_id, include_vectors=False))
         if row is None or row.key_id != who.key_id:          # someone else's request looks like a missing one
             raise APIError(404, f"No request {request_id!r} for this key.", param="request_id", code="not_found")
         return row.public_dict()

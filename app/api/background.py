@@ -133,9 +133,9 @@ class BackgroundLabeler:
             return
         label = LabelRow(request_id=row.request_id, created_at=self.clock().isoformat(), status="skipped",
                          served_model=row.served_model, served_tier=row.tier)
-        if not self._reserve(deps.log, policy):
+        if not await anyio.to_thread.run_sync(self._reserve, deps.log, policy):    # may read the labels table
             label.skip_reason = "daily_cap"
-            self._write(deps, label)
+            await anyio.to_thread.run_sync(self._write, deps, label)
             return
         send = JudgeSend(deps.client)
         calls = tokens = 0
@@ -166,7 +166,7 @@ class BackgroundLabeler:
         finally:
             self._settle(2, calls, tokens)
         label.calls, label.tokens = calls, tokens
-        self._write(deps, label)
+        await anyio.to_thread.run_sync(self._write, deps, label)
 
     @staticmethod
     def _write(deps, label: LabelRow) -> None:

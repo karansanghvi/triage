@@ -460,3 +460,54 @@ def test_user_id_round_trips(tmp_path):
     log.write(row(request_id="b"))
     assert [r.user_id for r in log.rows()] == ["u-123", None]
     log.close()
+
+
+# ---------- database calls stay off the event loop ----------
+
+class ThreadRecordingLog(InMemoryRequestLog):
+    """Records which thread each call ran on. With Postgres every call is a network round trip, so none may run
+    on the event loop's thread (it would stall every other request)."""
+
+    def __init__(self):
+        super().__init__()
+        self.threads = []
+
+    def _record(self, name):
+        self.threads.append((name, threading.current_thread().name))
+
+    def write(self, row):
+        self._record("write")
+        super().write(row)
+
+    def rows(self, *args, **kwargs):
+        self._record("rows")
+        return super().rows(*args, **kwargs)
+
+    def get(self, *args, **kwargs):
+        self._record("get")
+        return super().get(*args, **kwargs)
+
+    def write_label(self, label):
+        self._record("write_label")
+        super().write_label(label)
+
+    def label_usage_since(self, created_at):
+        self._record("label_usage_since")
+        return super().label_usage_since(created_at)
+
+
+def test_every_log_call_from_the_api_runs_in_a_worker_thread():
+    log = ThreadRecordingLog()
+    deps = make_deps(predictor=VectorPredictor(), log=log, sample_rate=1.0)
+    http = TestClient(create_app(deps=deps, auth=AUTH))
+    rid = post(http).headers["x-triage-request-id"]                                  # write (+ a background label)
+    with http.stream("POST", "/v1/chat/completions", headers=auth(),
+                     json={"model": "auto", "messages": ASK, "stream": True}) as r:
+        "".join(r.iter_text())                                                      # a stream's write
+    post(http, {"model": "no-such-model", "messages": ASK})                          # an error's write
+    http.get("/v1/stats", headers=auth())                                           # rows
+    http.get(f"/v1/requests/{rid}", headers=auth())                                 # get
+    calls = {name for name, _ in log.threads}
+    assert {"write", "rows", "get", "write_label", "label_usage_since"} <= calls
+    on_loop = [(name, thread) for name, thread in log.threads if not thread.startswith("AnyIO worker thread")]
+    assert on_loop == []
