@@ -28,9 +28,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Literal, Optional
 from collections import deque
-from contextlib import contextmanager
 
-from sqlalchemy import delete, func, select, union, update
+from sqlalchemy import delete, select, union, update
 
 from app.registry import PROJECT_ROOT
 
@@ -234,33 +233,14 @@ class DemoLimiter:
         self._visitors, self._days = db.visitor_day_table, db.demo_day_table
         self.cleanup()
 
-    @contextmanager
     def _transaction(self):
-        """One atomic unit that runs alone: everything inside commits together or not at all."""
-        if self.engine.dialect.name == "sqlite":
-            # The driver would otherwise start the transaction only at the first write, after our reads
-            with self.engine.connect() as connection:
-                connection = connection.execution_options(isolation_level="AUTOCOMMIT")
-                connection.exec_driver_sql("BEGIN IMMEDIATE")
-                try:
-                    yield connection
-                    connection.exec_driver_sql("COMMIT")
-                except BaseException:
-                    connection.exec_driver_sql("ROLLBACK")
-                    raise
-            return
-        with self.engine.begin() as connection:
-            if self.engine.dialect.name == "postgresql":     # held until this transaction ends
-                connection.execute(select(func.pg_advisory_xact_lock(DEMO_LOCK_KEY)))
-            yield connection
+        """One atomic unit that runs alone (app.db.exclusive_transaction)."""
+        from app import db
+        return db.exclusive_transaction(self.engine, DEMO_LOCK_KEY)
 
     def _insert(self, table):
-        """INSERT for this database's dialect, which has on_conflict_do_update."""
-        if self.engine.dialect.name == "postgresql":
-            from sqlalchemy.dialects.postgresql import insert
-        else:
-            from sqlalchemy.dialects.sqlite import insert
-        return insert(table)
+        from app import db
+        return db.upsert(self.engine, table)
 
     def _count_visitor(self, db, day: str, kind: str, visitor: str) -> None:
         v = self._visitors

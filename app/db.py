@@ -13,12 +13,13 @@ Tables here are what the code reads and writes (the request log and labels; the 
 migrations/versions/ is what creates them. A test checks that the two match.
 """
 import os
+from contextlib import contextmanager
 from dataclasses import fields
 from pathlib import Path
 from typing import Optional, Union, get_args
 
 from sqlalchemy import (Boolean, Column, DateTime, Double, Engine, ForeignKey, Index, Integer, LargeBinary,
-                        MetaData, Table, Text, create_engine, event, inspect)
+                        MetaData, Table, Text, create_engine, event, func, inspect, select)
 from sqlalchemy.engine import make_url
 from sqlalchemy.pool import StaticPool
 
@@ -209,3 +210,46 @@ def upgrade(engine: Engine, revision: str = "head") -> None:
     from alembic import command
     with engine.begin() as connection:
         command.upgrade(alembic_config(connection), revision)
+
+
+# ---------- transactions that run alone ----------
+
+@contextmanager
+def exclusive_transaction(engine: Engine, lock_key: int):
+    """A transaction that runs alone among those using the same lock_key, across threads and instances, so a
+    check-then-write inside it can't race. SQLite: BEGIN IMMEDIATE (one writer per file). Postgres: a
+    transaction-level advisory lock on lock_key, released at commit or rollback. Commits on success, rolls
+    back on any exception."""
+    if engine.dialect.name == "sqlite":
+        # The driver would otherwise start the transaction only at the first write, after the reads
+        with engine.connect() as connection:
+            connection = connection.execution_options(isolation_level="AUTOCOMMIT")
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                yield connection
+                connection.exec_driver_sql("COMMIT")
+            except BaseException:
+                connection.exec_driver_sql("ROLLBACK")
+                raise
+        return
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.execute(select(func.pg_advisory_xact_lock(lock_key)))
+        yield connection
+
+
+def upsert(engine: Engine, table):
+    """INSERT for this engine's dialect, which has on_conflict_do_update / on_conflict_do_nothing."""
+    if engine.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    return insert(table)
+
+
+def aware(value):
+    """A datetime read back from the database as an aware UTC datetime (SQLite returns naive ones)."""
+    from datetime import timezone
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
