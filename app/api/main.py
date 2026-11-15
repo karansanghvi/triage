@@ -145,9 +145,10 @@ def _header_safe(text: str) -> str:
     return text.encode("latin-1", "replace").decode("latin-1")
 
 
-def _apply_costs(row: RequestRow, response, deps, providers=None) -> None:
-    """providers: a BYOK request's own; the savings baseline is then the strong model among them
-    (deps.strong_model(providers)). None = the server's baseline, as before."""
+def _apply_costs(row: RequestRow, response, deps, providers=None, prefer=None) -> None:
+    """providers: a BYOK request's own; the savings baseline is then the strong model among them, after its
+    preferred provider (prefer) is moved first (deps.strong_model(providers, prefer)). None = the server's
+    baseline, as before."""
     if response is None:
         return
     row.cache_hit = bool(response.cached)
@@ -155,7 +156,7 @@ def _apply_costs(row: RequestRow, response, deps, providers=None) -> None:
     row.reasoning_tokens, row.tokens_estimated = response.reasoning_tokens, response.tokens_estimated
     row.cost, row.price_as_cost = response.cost, response.reported_cost
     try:
-        strong = deps.registry[deps.strong_model(providers)]
+        strong = deps.registry[deps.strong_model(providers, prefer)]
     except LookupError:                # no high-tier model on these providers: savings unknown, not faked
         row.strong_cost = row.saved = None
         return
@@ -221,10 +222,10 @@ def _probability_headers(d: core.RouteDecision) -> dict:
     return {name: _six(v) for name, v in values.items() if v is not None}
 
 
-def _apply_verification(row: RequestRow, first, outcome, deps, providers=None) -> None:
+def _apply_verification(row: RequestRow, first, outcome, deps, providers=None, prefer=None) -> None:
     """Costs and log fields after sync verification: the served answer's tokens, every call's cost."""
     final = outcome.final.response
-    _apply_costs(row, final, deps, providers)          # tokens, cache and strong_cost from the served answer
+    _apply_costs(row, final, deps, providers, prefer)  # tokens, cache and strong_cost from the served answer
     row.price_as_cost = first.reported_cost + outcome.check_cost + outcome.escalation_cost
     row.cost = first.cost + outcome.check_actual_cost + outcome.escalation_actual_cost
     row.saved = None if row.strong_cost is None else row.strong_cost - row.price_as_cost
@@ -663,14 +664,14 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 outcome = await verify_sync(messages, Served(decision.tier, decision.model, response, text),
                                             snapshot.verification.sync, deps, settings,
                                             probabilities={"low": decision.p_low, "medium": decision.p_medium},
-                                            keys=keys)
-                _apply_verification(row, response, outcome, deps, baseline_providers)
+                                            keys=keys, prefer=prefer)
+                _apply_verification(row, response, outcome, deps, baseline_providers, prefer)
                 response, text = outcome.final.response, outcome.final.text
                 served_model, served_tier, check, escalated = (outcome.final.model, outcome.final.tier,
                                                                outcome.decided_by, outcome.escalated)
                 reason = _verified_reason(decision, outcome)
             else:
-                _apply_costs(row, response, deps, baseline_providers)
+                _apply_costs(row, response, deps, baseline_providers, prefer)
             _add_truncated_costs(row, decision.attempts)
             finish()
             cache = "hit" if response.cached else ("miss" if is_cacheable(temperature, False) else "bypass")
@@ -712,7 +713,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                                          "Triage can't switch models once text has been sent.")
                 return
             response = routed.response
-            _apply_costs(row, response, deps, baseline_providers)
+            _apply_costs(row, response, deps, baseline_providers, prefer)
             _add_truncated_costs(row, decision.attempts)
             finish()
             yield _chunk(request_id, created, decision.model, {}, finish=(response and response.finish_reason) or "stop")

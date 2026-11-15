@@ -199,3 +199,71 @@ def test_streams_report_it_too():
                      json={"model": "auto", "messages": ASK, "stream": True}) as r:
         "".join(r.iter_text())
         assert r.headers["x-triage-preferred-provider"] == "openai" and r.headers["x-triage-model"] == "openai-luna"
+
+
+# ---------- the savings baseline and verification follow the preference ----------
+
+def strong_cost_of(deps, name, row):
+    return deps.registry[name].reported_cost(row.input_tokens, row.output_tokens)
+
+
+def test_strong_model_uses_the_reordered_high_chain():
+    deps = make_deps()
+    assert deps.strong_model(("groq", "anthropic"), "anthropic") == "claude-opus"
+    assert deps.strong_model(("groq", "anthropic"), "openai") == "groq-large"      # no key: nothing to move
+    assert deps.strong_model(("groq", "anthropic")) == "groq-large"
+    assert deps.strong_model() == "groq-large"                                     # server baseline unchanged
+
+
+def test_the_baseline_follows_the_preference():
+    http, deps = app()
+    keys = {"x-anthropic-key": SECRET, "x-groq-key": SECRET}
+    r = chat(http, keys | {"X-Triage-Prefer-Provider": "anthropic"})
+    plain = chat(http, keys)
+    preferred_row, plain_row = deps.log.rows()
+    assert preferred_row.strong_cost == pytest.approx(strong_cost_of(deps, "claude-opus", preferred_row))
+    assert plain_row.strong_cost == pytest.approx(strong_cost_of(deps, "groq-large", plain_row))
+    assert float(r.headers["x-triage-strong-cost"]) == pytest.approx(preferred_row.strong_cost, abs=1e-8)
+    assert r.json()["triage"]["saved"] == pytest.approx(preferred_row.strong_cost - preferred_row.price_as_cost,
+                                                        abs=1e-8)
+    assert float(plain.headers["x-triage-strong-cost"]) == pytest.approx(plain_row.strong_cost, abs=1e-8)
+
+
+def test_a_streams_baseline_follows_the_preference_too():
+    http, deps = app()
+    with http.stream("POST", "/v1/chat/completions",
+                     headers={"x-anthropic-key": SECRET, "x-groq-key": SECRET, "X-Triage-Prefer-Provider": "anthropic"},
+                     json={"model": "auto", "messages": ASK, "stream": True}) as r:
+        "".join(r.iter_text())
+    (row,) = deps.log.rows()
+    assert row.strong_cost == pytest.approx(strong_cost_of(deps, "claude-opus", row))
+
+
+def test_an_ignored_preference_keeps_the_usual_baseline():
+    http, deps = app()
+    chat(http, BEARER | {"X-Triage-Prefer-Provider": "anthropic"})               # api mode: ignored
+    (row,) = deps.log.rows()
+    assert row.strong_cost == pytest.approx(strong_cost_of(deps, "groq-large", row))
+
+
+GOOD = "2 + 3 = 5.\nAnswer: 5"           # passes the free format check for ASK
+SYNC = {"X-Triage-Verify": "sync", "X-Triage-Quality": "0.1"}
+
+
+def test_escalation_follows_the_preference():
+    http, deps = app(FakePredictor(0.95, 0.85), script={"claude-haiku": FakeBehavior(text="five"),
+                                                        "claude-sonnet": FakeBehavior(text=GOOD)})
+    keys = {"x-anthropic-key": SECRET, "x-groq-key": SECRET}
+    r = chat(http, keys | SYNC | {"X-Triage-Prefer-Provider": "anthropic"})
+    assert r.status_code == 200 and r.headers["x-triage-escalated"] == "true"
+    assert r.json()["model"] == "claude-sonnet" and r.headers["x-triage-preferred-provider"] == "anthropic"
+    (row,) = deps.log.rows()
+    assert (row.escalated_from, row.escalated_to) == ("low", "medium")
+    assert row.strong_cost == pytest.approx(strong_cost_of(deps, "claude-opus", row))
+
+
+def test_escalation_without_a_preference_is_unchanged():
+    http, _ = app(FakePredictor(0.95, 0.85), script={"groq-allam": FakeBehavior(text="five"),
+                                                     "groq-small": FakeBehavior(text=GOOD)})
+    r = chat(http, {"x-anthropic-key": SECRET, "x-groq-key": SECRET} | SYNC)
+    assert r.headers["x-triage-escalated"] == "true" and r.json()["model"] == "groq-small"

@@ -278,12 +278,13 @@ def check_skip(tier_policy: TierPolicy, p_pass: Optional[float], response) -> Op
 
 
 async def verify_sync(messages: list, first: Served, policy: SyncPolicy, deps, settings,
-                      probabilities: Optional[dict] = None, keys=None) -> SyncOutcome:
+                      probabilities: Optional[dict] = None, keys=None, prefer: Optional[str] = None) -> SyncOutcome:
     """Check `first` (the routed answer) by its tier's policy; escalate while a check says bad.
     probabilities {tier: the classifier's pass probability}, for skip_check_above.
     keys: the request's KeyContext. BYOK: the AI checker and escalations use only the user's providers and keys;
     if the checker's provider has no key, the AI check is skipped ("skipped_no_key"; the free format check and
-    escalation still run), and an escalation goes to the nearest higher tier the keys can reach."""
+    escalation still run), and an escalation goes to the nearest higher tier the keys can reach.
+    prefer: the request's applied preferred provider; an escalation's chain puts its models first too."""
     checker_provider = deps.registry[deps.checker_settings.model_name].provider if deps.checker_settings else None
     probabilities = probabilities or {}
     out = SyncOutcome(final=first)
@@ -329,7 +330,7 @@ async def verify_sync(messages: list, first: Served, policy: SyncPolicy, deps, s
         started = time.perf_counter()
         try:
             result = await anyio.to_thread.run_sync(partial(deps.client.send, messages, target, stream=False,
-                                                            keys=keys, **settings.as_kwargs()))
+                                                            keys=keys, prefer=prefer, **settings.as_kwargs()))
         except AllModelsFailed as error:
             out.escalation_latency_ms += (time.perf_counter() - started) * 1000
             out.escalation_error = f"all_models_failed:{target}"
