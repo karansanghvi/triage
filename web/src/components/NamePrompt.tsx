@@ -2,19 +2,25 @@ import { useState } from "react"
 import { ArrowRight, Split, User } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useVisitorName } from "@/hooks/useVisitorName"
+import { useAuth } from "@/context/AuthContext"
 import { cn } from "@/lib/utils"
 
 export default function NamePrompt() {
   const { asked, setName } = useVisitorName()
+  const { user, loading } = useAuth()
   const [draft, setDraft] = useState("")
   const canSave = draft.trim().length > 0
+
+  // Only demo visitors are asked: logged-in users already have a name on their account,
+  // and while a saved session is still being checked we don't know yet
+  const open = !asked && !loading && !user
 
   function handleSave() {
     if (canSave) setName(draft)
   }
 
   return (
-    <Dialog open={!asked}>
+    <Dialog open={open}>
       <DialogContent
         showCloseButton={false}
         aria-describedby={undefined}
@@ -44,6 +50,7 @@ export default function NamePrompt() {
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSave()}
               placeholder="Enter your name"
+              aria-label="Your name"
               className="h-12 w-full rounded-xl border border-input bg-background pl-11 pr-4 text-sm outline-none transition-all placeholder:text-muted-foreground focus:border-primary focus:ring-4 focus:ring-primary/15"
             />
           </div>
