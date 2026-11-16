@@ -1,14 +1,38 @@
-openai
-anthropic
-python-dotenv
-pyyaml
-pytest
-google-genai
+# Exact versions: production installs what the test suite ran against. To upgrade, change a pin, reinstall,
+# run `venv/bin/python -m pytest` (and `-m postgres`), then commit. These are the packages Triage imports
+# directly; their own dependencies are resolved by pip.
+
+# API server
+fastapi==0.162.2
+starlette==1.10.0
+uvicorn==0.54.0
+pydantic==2.13.5
+anyio==4.15.1
+httpx==0.28.1
+python-dotenv==1.2.3
+PyYAML==6.0.3
+
+# Model providers
+openai==3.22.1
+anthropic==1.9.0
+google-genai==2.29.0
+
+# Router: the classifier and its embeddings
+numpy==2.5.4
+scikit-learn==1.9.1
+joblib==1.6.0
+sentence-transformers==6.2.0
+
+# Database and accounts
+SQLAlchemy==2.1.8
+alembic==1.20.1
+psycopg[binary]==3.3.9
+cryptography==50.0.2
+argon2-cffi==25.1.0
+
+# Data collection and evaluation
 datasets==5.1.0
-fastapi
-uvicorn
-sqlalchemy
-alembic
-psycopg[binary]
-cryptography
-argon2-cffi
+
+# Tests
+pytest==9.1.1
+httpx2==2.13.1

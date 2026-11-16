@@ -134,7 +134,8 @@ Anything else is a 400 that names the header.
 `X-Triage-Reason`, `X-Triage-Fallback` (`primary->backup`, or `none`), `X-Triage-Cache` (`hit`, `miss`,
 `bypass`), `X-Triage-Verified`, `X-Triage-Escalated`, `X-Triage-Check` (the check that decided: `format`,
 `ai_checker`, `ai_checker_error` or `none`), and on non-streaming responses `X-Triage-Cost` and
-`X-Triage-Saved` (US dollars at paid prices). On a stream, the headers go out once the first token exists,
+`X-Triage-Saved` (US dollars at paid prices). The full list, including the routing probabilities, is in
+"Accounts: a guide for developers" below. On a stream, the headers go out once the first token exists,
 so model, tier and fallback are real, but cost isn't known yet. Those two headers are left out rather than
 guessed. Fetch the real figures with `GET /v1/requests/<request id>` once the stream ends. `Saved` assumes the
 strong model would have used the same number of tokens, so it's an estimate.
@@ -193,103 +194,180 @@ Demo and BYOK requests are never used for retraining and get no background label
   on every redeploy. The old `data/demo/usage.sqlite3` and `TRIAGE_DEMO_DB` are no longer used; the counters
   weren't copied (they're per day and kept 7 days).
 
-## Accounts (Phase 5, in progress)
+## Accounts: a guide for developers
 
-With `TRIAGE_ACCOUNTS=on`, people can sign up with an email and password. Off (the default), these paths don't
-exist. Account holders chat with their own saved provider keys (see "Account mode" below).
+With accounts on (`TRIAGE_ACCOUNTS=on`; see "Operating Triage"), you can sign up on the Triage website or API,
+save your own provider keys, create Triage API keys, and call Triage from your apps with only a Triage key.
+Triage routes each request to the cheapest model it expects to answer well, using **your** provider keys, so
+you pay your providers directly.
+
+### Quick start
+
+```bash
+B=https://your-triage-server; CT="Content-Type: application/json"
+
+# 1. Sign up (or log in with POST /v1/auth/login). The session token is shown only here.
+curl -s -X POST $B/v1/auth/signup -H "$CT" -d '{"email":"you@example.com","password":"a long password"}'
+S="Authorization: Bearer trs_..."             # the session_token from the response
+
+# 2. Save at least one provider key (checked with the provider first; never shown again)
+curl -s -X PUT $B/v1/account/provider-keys/groq -H "$S" -H "$CT" -d '{"key":"gsk_..."}'
+
+# 3. Create a Triage API key for your app. Copy "key" now: it's shown only once.
+curl -s -X POST $B/v1/account/api-keys -H "$S" -H "$CT" -d '{"name":"my app"}'
+
+# 4. Call Triage with it, like the OpenAI API
+curl -s $B/v1/chat/completions -H "Authorization: Bearer trk_..." -H "$CT" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"What is 2 + 3?"}]}'
+```
+
+Python (`pip install openai`):
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://your-triage-server/v1", api_key="trk_...")
+reply = client.chat.completions.create(
+    model="auto",                                     # or a model name from GET /v1/models
+    messages=[{"role": "user", "content": "What is 2 + 3?"}],
+    extra_headers={"X-Triage-Quality": "balanced"},   # optional; see the headers below
+)
+print(reply.choices[0].message.content)
+```
+
+Node (`npm install openai`):
+
+```js
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://your-triage-server/v1", apiKey: "trk_..." });
+const reply = await client.chat.completions.create(
+  { model: "auto", messages: [{ role: "user", content: "What is 2 + 3?" }] },
+  { headers: { "X-Triage-Prefer-Provider": "groq" } },   // optional
+);
+console.log(reply.choices[0].message.content);
+```
+
+Streaming (`stream: true`) works the same way.
+
+### Which keys a request uses
+
+- **Your saved provider keys** with status `valid` or `unverified`, decrypted for that one request and then
+  dropped. Triage never keeps them in memory, a cache or a background job.
+- **An `X-OpenAI-Key`, `X-Anthropic-Key`, `X-Groq-Key` or `X-Gemini-Key` header** replaces the saved key for
+  that provider on that request.
+- Triage only routes to providers you have a key for. With none, the request is 400 `no_provider_keys`.
+- If a provider rejects a saved key (401/403), Triage marks it `invalid` (the reason is in `status_detail`) and
+  stops using it, even if another provider then answered. If nothing answered, you get 401
+  `invalid_provider_key` saying which saved key to update. Save it again or re-check it with
+  `POST /v1/account/provider-keys/{provider}/verify`.
+- A saved key's status `valid` means the provider **accepted** it (one free list-models call); it doesn't prove
+  credit or quota.
+
+### Preferred provider
+
+Set a default with `PATCH /v1/account {"preferred_provider": "anthropic"}` (`null` clears it), or per request with
+`X-Triage-Prefer-Provider`, which overrides it. It applies only to `model: "auto"` and only to a provider you
+have a key for (otherwise it's ignored). The tier decision doesn't change: within each tier, that provider's
+models are tried first. Savings are then measured against that provider's strongest model.
+
+### Headers
+
+**Request** (all optional):
+
+| Header | Values | Effect |
+|---|---|---|
+| `X-Triage-Quality` | `cheap`, `balanced`, `high`, or a number from 0 to 1 | The quality bar (tau). Higher means stronger, pricier models. Default `balanced` |
+| `X-Triage-Task` | `qa`, `coding`, `reasoning`, `extraction`, `summarization`, `classification`, `creative`, `open_ended` | Skips the task-type guess |
+| `X-Triage-Verify` | `off`, `sync` | `sync` checks the answer before sending it and escalates a bad one (`model: "auto"`, non-streaming only) |
+| `X-Triage-Prefer-Provider` | `openai`, `anthropic`, `groq`, `gemini` | Try that provider's models first (see above) |
+| `X-OpenAI-Key`, `X-Anthropic-Key`, `X-Groq-Key`, `X-Gemini-Key` | a provider key | Use it instead of your saved key for that provider |
+
+**Response** (also exposed to browsers through CORS):
+
+| Header | Meaning |
+|---|---|
+| `X-Triage-Request-Id` | Look the request up later with `GET /v1/requests/{id}` |
+| `X-Triage-Mode` | `account` for your requests (`api`, `byok`, `demo` otherwise) |
+| `X-Triage-Model`, `X-Triage-Tier` | The model that answered and its tier (`low`, `medium`, `high`) |
+| `X-Triage-Reason` | Why, in words, e.g. `cheap 0.400 < tau 0.860; medium 0.950 >= tau` |
+| `X-Triage-P-Low`, `X-Triage-P-Medium`, `X-Triage-Tau` | The predicted pass chances and the bar used (6 decimals; `model: "auto"` only) |
+| `X-Triage-Preferred-Provider` | The preferred provider applied, or `none` |
+| `X-Triage-Fallback` | `primary->backup` when a backup answered, else `none` |
+| `X-Triage-Cache` | `hit`, `miss` or `bypass` (only `temperature: 0`, non-streaming answers are cached) |
+| `X-Triage-Verified`, `X-Triage-Check`, `X-Triage-Escalated` | Sync verification: on or off, which check decided, whether a stronger model was used |
+| `X-Triage-Cost`, `X-Triage-Strong-Cost`, `X-Triage-Saved` | US dollars at list prices: this answer, the strong model at the same tokens, and the difference (non-streaming only; left out when unknown) |
+
+Non-streaming responses also carry the same facts as a `triage` object in the body.
+
+### Limits
+
+| What | Limit | Over it |
+|---|---|---|
+| Chat | 60 requests a minute and 10,000 a day per account (`config/accounts.yaml`) | 429 `account_rate_limited` with `Retry-After` |
+| Saving or re-checking provider keys | 20 per account per hour | 429 `too_many_attempts` with `Retry-After` |
+| Triage API keys | 20 active per account; 10 new per hour | 409 `too_many_api_keys`; 429 `too_many_attempts` |
+| Sign-up | 5 per IP per hour | 429 `too_many_attempts` |
+| Log-in | 10 per IP per 15 minutes; 5 wrong passwords per account per 15 minutes | 429; for wrong passwords, the same 401 as a wrong password |
+
+### Error codes
+
+Errors use OpenAI's shape, `{"error": {"message", "type", "param", "code"}}`.
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `invalid_request`, `invalid_value`, `unsupported_parameter`, `unsupported_combination` | A malformed body or header; `param` names it. Errors never echo what was sent |
+| 400 | `no_provider_keys` | Account chat with no usable saved key and no key header |
+| 400 | `no_usable_model` | Your keys reach no model |
+| 400 | `max_tokens_too_low` | A named reasoning model spent every token thinking; send a higher `max_tokens` |
+| 400 | `invalid_provider_key` | Saving a key the provider rejected (nothing is stored) |
+| 401 | `invalid_api_key` | A missing, unknown or revoked Triage key or session |
+| 401 | `invalid_provider_key` | A provider rejected your key during chat |
+| 401 | `invalid_credentials` | Log-in failed (always the same message) |
+| 401 | `invalid_session` | Account endpoints need a session token: log in again |
+| 403 | `incorrect_password` | The current password was wrong (password change, account deletion) |
+| 403 | `model_not_allowed` | A named model on a provider you have no key for |
+| 403 | `admin_key_required` | Admin endpoints (`/v1/routing-config`) |
+| 404 | `model_not_found`, `not_found` | Unknown model; a request, key or provider key that isn't yours or doesn't exist |
+| 409 | `email_taken`, `too_many_api_keys`, `key_unreadable` | Sign-up with a used email; the key cap; a saved key that can no longer be decrypted (save it again) |
+| 429 | `account_rate_limited`, `too_many_attempts` | See "Limits"; wait `Retry-After` seconds |
+| 500 | `internal_error` | A bug on our side; the response never contains internal details |
+| 502 | `model_error` | The model failed while answering |
+| 503 | `all_models_failed` | No model could answer; try again |
+| (in a stream) | `stream_interrupted` | The model failed after text was sent |
+
+### Reference: account endpoints
+
+All of these except sign-up and log-in need a **session token** (`Authorization: Bearer trs_...`) and accept
+nothing else, not even a Triage API key.
 
 | Endpoint | Body | Result |
 |---|---|---|
-| `POST /v1/auth/signup` | `email`, `password`, `display_name?` | 201 `{user, session_token, expires_at}`; 409 `email_taken` |
-| `POST /v1/auth/login` | `email`, `password` | 200, same shape; any failure is 401 `invalid_credentials` |
-| `POST /v1/auth/logout` | | 204, revokes this session |
+| `POST /v1/auth/signup` | `email`, `password`, `display_name?` | 201 `{user, session_token, expires_at}` |
+| `POST /v1/auth/login` | `email`, `password` | 200, same shape |
+| `POST /v1/auth/logout` | | 204, ends this session |
 | `GET /v1/auth/me` | | `{id, email, display_name, preferred_provider, created_at}` |
-| `PATCH /v1/account` | `display_name?`, `preferred_provider?` | the user; `null` clears a field |
-| `POST /v1/account/password` | `current_password`, `new_password` | 204; every other session is revoked |
-| `DELETE /v1/account` | `password` | 204; request log rows are kept, unlinked |
-
-- **Sessions** are bearer tokens (`Authorization: Bearer trs_...`), not cookies, because the website and the API
-  are on different domains. A token is shown once; only its SHA-256 is stored. It ends at logout, 30 days after
-  login, or after 7 days unused. Every endpoint except signup and login needs one, and accepts nothing else (not
-  a Triage API key). A wrong password on the last two endpoints is 403 `incorrect_password`, so 401 always means
-  "log in again".
-- **Passwords**: 10 to 128 characters, hashed with argon2id (19 MiB, t=2, p=1). Never stored, logged or echoed.
-- **Emails** are trimmed, NFKC-normalized and lowercased; dots and `+tags` are kept. There's no email
-  verification or password reset yet.
-- **Rate limits** (in the database, shared by every instance): 5 signups per IP per hour and 10 logins per IP per
-  15 minutes (429 with `Retry-After`), and 5 wrong passwords per email per 15 minutes. That count covers failed
-  logins and wrong current passwords on `POST /v1/account/password` and `DELETE /v1/account` together. Over it,
-  login gives the same 401 as a wrong password (so it reveals nothing) and those two endpoints give 429 with
-  `Retry-After`. Attempts are stored under keyed hashes, never IPs or emails.
-- **Logs** carry the event, the outcome and the visitor's hash; never an email, password or token.
-
-**Saved provider keys** (session token only):
-
-| Endpoint | Body | Result |
-|---|---|---|
-| `GET /v1/account/provider-keys` | | `[{provider, last4, status, status_detail, verified_at, created_at, updated_at}]`, never the key |
-| `PUT /v1/account/provider-keys/{provider}` | `key` | the summary; 400 `invalid_provider_key` if the provider rejects it |
-| `POST /v1/account/provider-keys/{provider}/verify` | | the summary after checking the saved key again |
+| `PATCH /v1/account` | `display_name?`, `preferred_provider?` | the user; only the fields sent change, `null` clears one |
+| `POST /v1/account/password` | `current_password`, `new_password` | 204; every other session is ended |
+| `DELETE /v1/account` | `password` | 204; deletes the user, sessions, saved keys and API keys (request rows stay, unlinked) |
+| `GET /v1/account/provider-keys` | | `[{provider, last4, status, status_detail, verified_at, created_at, updated_at}]` |
+| `PUT /v1/account/provider-keys/{provider}` | `key` | the summary (checked with the provider; replaces any saved key) |
+| `POST /v1/account/provider-keys/{provider}/verify` | | the summary after checking again |
 | `DELETE /v1/account/provider-keys/{provider}` | | 204 |
-
-- `provider` is `openai`, `anthropic`, `groq` or `gemini`; one key per provider, and saving again replaces it.
-- **Checked before saving** with one free call to the provider's list-models endpoint (10 s timeout; Gemini's key
-  goes in the `x-goog-api-key` header, never the URL). `valid` means the provider accepted the key, not that it
-  has credit or quota. Rejected (401/403, or Gemini's `API_KEY_INVALID` 400): not stored. No clear answer
-  (timeout, network error, 429, 5xx, anything else): stored as `unverified`. A re-check that's rejected marks the
-  saved key `invalid`. `status_detail` says why a key is `unverified` or `invalid` (short, redacted; `null` once
-  accepted). A Gemini 403 is refused with a message saying Google refused the key for a project, billing or
-  permission reason, since that key is usually typed correctly.
-- **Rate limit:** 20 saves or re-checks per user per hour (429 with `Retry-After`).
-- **Encrypted at rest** with AES-256-GCM, a fresh nonce each time, bound to the user and provider (a ciphertext
-  copied to another row won't decrypt). Only the last 4 characters are kept in plain form. The encryption keys
-  live only in `TRIAGE_ENCRYPTION_KEYS`, never in the database or the repo, and with `TRIAGE_ACCOUNTS=on` the server
-  refuses to start without valid ones:
-
-  ```bash
-  python3 -c "import base64, secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())"
-  TRIAGE_ENCRYPTION_KEYS="k1:<that output>"
-  ```
-
-  To rotate: put a new key first (`k2:<new>,k1:<old>`) and deploy. New saves use `k2` and old rows still decrypt
-  with `k1`; drop `k1` only once nothing uses it (a re-encryption script comes later). Losing every key makes
-  saved keys unreadable (409 `key_unreadable`), and users must save them again.
-- A key is never returned, logged or put in an error, a status detail or the request log; provider messages
-  are redacted with the key as a secret.
-
-**Account API keys** (session token only), for calling Triage from your own apps:
-
-| Endpoint | Body | Result |
-|---|---|---|
 | `GET /v1/account/api-keys` | | `[{id, name, public_id, created_at, last_used_at, revoked_at}]`, newest first |
-| `POST /v1/account/api-keys` | `name` | 201 `{id, name, public_id, created_at, key, note}`: the only time the key is shown |
-| `DELETE /v1/account/api-keys/{id}` | | 204, revokes it (an unknown id or someone else's key: 404) |
+| `POST /v1/account/api-keys` | `name` | 201 `{id, name, public_id, created_at, key, note}`: the only time `key` is shown |
+| `DELETE /v1/account/api-keys/{id}` | | 204, revokes it |
 
-- Keys look like `trk_` + 43 characters. Triage stores only the public id (`trk_` + the next 8 characters,
-  shown in lists) and an HMAC-SHA256 of the full key with `TRIAGE_HASH_SECRET`, so a lost key can't be shown
-  again: revoke it and create another. Changing `TRIAGE_HASH_SECRET` invalidates every account key.
-- Names: 1 to 60 characters. At most 20 active keys per user (409 `too_many_api_keys`) and 10 new keys per user
-  per hour (429 with `Retry-After`).
-- A revoked or unknown key gets the usual 401. Using a key records `last_used_at` (at most once a minute).
-  `TRIAGE_API_KEYS` / `TRIAGE_ADMIN_KEYS` work as before.
+With an account key or session, `GET /v1/models` works, and `GET /v1/stats` and `GET /v1/requests/{id}` show only
+your own account's requests, whichever of your keys made them.
 
-**Account mode.** A `trk_` key (from your own apps) or a session token (website chat) on `/v1/chat/completions`
-runs in `account` mode:
-
-- **Your saved provider keys** with status `valid` or `unverified` are decrypted for that one request (never
-  kept, cached or given to a background job); the usual BYOK rules apply. An `X-*-Key` header replaces the saved
-  key for its provider, still in account mode. No usable key: 400 `no_provider_keys`.
-- **A saved key the provider rejects** (401/403) is marked `invalid`, with the reason in `status_detail`, even
-  if a fallback model then answered, so later requests skip it. If nothing answered, you get 401
-  `invalid_provider_key` saying which saved key to update.
-- **Preferred provider:** your saved `preferred_provider` is the default; `X-Triage-Prefer-Provider` overrides it
-  per request (only for a provider you have a key for, only for `model: "auto"`).
-- **Limits** (`config/accounts.yaml`): 60 requests a minute (per server instance) and 10,000 a day per account;
-  over either, 429 `account_rate_limited` with `Retry-After`. No demo or public-BYOK limits.
-- **Other endpoints:** `GET /v1/models` works; `/v1/stats` and `/v1/requests/{id}` show only your account's own
-  requests, whichever of your keys made them; admin endpoints are 403.
-- **The request log** marks these rows `mode: account` with your `user_id`, and `key_id` = the API key's public
-  id (or `session`). They're never training data and never get features, embeddings or background labels.
+**How your data is kept:**
+- **Passwords:** 10 to 128 characters, hashed with argon2id.
+- **Sessions:** last 30 days from log-in, or 7 days unused.
+- **Provider keys:** encrypted with AES-256-GCM; only their last 4 characters are visible.
+- **Triage API keys:** only a keyed hash is stored, so a lost key can't be shown again. Revoke it and create a new one.
+- **Never stored:** your prompts and answers (only an HMAC of the prompt). Account requests are never used to
+  train the router.
 
 ## Retraining the classifier (Phase 4)
 
@@ -307,28 +385,123 @@ retraining points `config/routing.yaml` at a new version, restart the server (fo
 
 ## Database
 
-Triage keeps its request log, the demo counters and accounts in one database through SQLAlchemy
-Core, with the schema managed by Alembic (`migrations/`). Demo admissions are atomic across instances: SQLite runs
-each check-and-count in a `BEGIN IMMEDIATE` transaction, Postgres under a transaction-level advisory lock.
+Triage keeps its request log, the demo counters and accounts in one database through SQLAlchemy Core, with the
+schema managed by Alembic (`migrations/`): SQLite locally and in tests (no network needed), Postgres in
+production (see "Operating Triage"). Check-and-count limits (demo, sign-in, account and API-key caps) are atomic
+across instances: SQLite runs each in a `BEGIN IMMEDIATE` transaction, Postgres under a transaction-level advisory
+lock. Fake mode (`TRIAGE_FAKE_MODELS=1`) always uses its own `data/fake.sqlite3` and ignores `DATABASE_URL`, so
+fake requests never reach the real log.
 
-- **Local and tests:** SQLite. Without `DATABASE_URL` the server uses `data/triage.sqlite3`, creating it and
-  applying migrations when it opens. Tests never need a network.
-- **Production:** set `DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST/DB?sslmode=require`. Postgres is never
-  migrated by the server itself: run `venv/bin/alembic upgrade head` (with `DATABASE_URL` set) as a deploy step.
-  The server refuses to start if the database isn't at the latest revision.
-- **Fake mode** (`TRIAGE_FAKE_MODELS=1`) always uses its own `data/fake.sqlite3` (`TRIAGE_FAKE_DB`) and ignores
-  `DATABASE_URL`, so fake requests never reach the real log.
-- **Old request logs** from before the database layer (`data/logs/requests.sqlite3`) aren't opened any more. Copy
-  their rows in with `venv/bin/python scripts/import_sqlite_log.py data/logs/requests.sqlite3`; the old file is
-  only read.
-- **Postgres tests** run only when `TRIAGE_TEST_DATABASE_URL` is set (`venv/bin/python -m pytest -m postgres`),
-  each in a throwaway schema. With Neon, use the direct connection string, not the pooled one.
+## Operating Triage
+
+### Environment variables
+
+`.env.example` lists every variable with a comment; copy it to `.env` (never commit `.env`). Secrets are empty
+there on purpose: the server refuses to start rather than run with a guessable value.
+
+| Variable | Needed | Default | What it does |
+|---|---|---|---|
+| `TRIAGE_API_KEYS` | yes (or admin keys) | none | Server API keys for your own apps, comma-separated |
+| `TRIAGE_ADMIN_KEYS` | for `/v1/routing-config` | none | Keys that may also read and change the live routing config |
+| `TRIAGE_HASH_SECRET` | yes, with the database log | none | Keys every HMAC Triage stores (see "Rotating secrets") |
+| `DATABASE_URL` | production | `data/triage.sqlite3` | The database: Postgres in production |
+| `GROQ_API_KEY`, `GEMINI_API_KEY` | for server-key and demo traffic | none | The server's own provider keys (only providers in `server_providers`) |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | no | none | Benchmarks only; live traffic uses users' own keys for these |
+| `OPENROUTER_API_KEY` | no | none | Data-collection scripts only |
+| `OLLAMA_BASE_URL` | for `ollama-llama` | `http://localhost:11434/v1` | A local Ollama server |
+| `TRIAGE_PUBLIC` | no | `off` | `on`: the free demo and BYOK without a Triage key |
+| `TRIAGE_ACCOUNTS` | no | `off` | `on`: user accounts and account chat |
+| `TRIAGE_ENCRYPTION_KEYS` | with accounts | none | Encrypts saved provider keys: `k2:<base64>,k1:<base64>` |
+| `TRIAGE_CORS_ORIGINS` | for a website | none | Browser origins allowed to call the API |
+| `TRIAGE_TRUSTED_PROXY_HOPS` | behind a proxy | `0` | Proxies that append to `X-Forwarded-For` (visitor IPs) |
+| `TRIAGE_SERVER_PROVIDERS` | no | `routing.yaml`'s | e.g. `groq,gemini` on a host without Ollama |
+| `TRIAGE_FAKE_MODELS` | no | `0` | `1`: fake models, no API calls (development) |
+| `TRIAGE_FAKE_DB` | no | `data/fake.sqlite3` | Fake mode's own database (it never uses `DATABASE_URL`) |
+| `TRIAGE_CACHE`, `TRIAGE_CACHE_PATH` | no | `on`, `data/cache/responses.sqlite3` | The response cache (local to each instance) |
+| `TRIAGE_LOG` | no | `sql` | `memory`: keep the request log in memory |
+| `TRIAGE_TEST_DATABASE_URL` | tests only | none | A throwaway Postgres for `pytest -m postgres` |
+| `HF_HUB_OFFLINE` | no | `1` (set by the server) | The embedding model must already be in the local Hugging Face cache |
+
+Limits live in `config/demo.yaml` and `config/accounts.yaml`; routing in `config/routing.yaml`.
+
+### Generating secrets
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"            # a TRIAGE_API_KEYS / TRIAGE_ADMIN_KEYS key
+python3 -c "import secrets; print(secrets.token_hex(32))"                # TRIAGE_HASH_SECRET
+python3 -c "import base64, secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())"   # an encryption key
+```
+
+Keep them in your host's secret settings (e.g. Render's environment), never in the database or the repo.
+
+### Deploying
+
+1. Install exactly the tested versions: `pip install -r requirements.txt`. Every dependency is pinned; to upgrade
+   one, change its pin, run the tests (including `pytest -m postgres`), then commit.
+2. **Migrate before the new code starts:** `DATABASE_URL=... venv/bin/alembic upgrade head`, as your host's
+   pre-deploy step if it has one, or at the front of the start command (`alembic upgrade head && uvicorn ...`).
+   The server never migrates Postgres itself, and refuses to start if the database isn't at the latest
+   migration. A local SQLite file is migrated automatically when opened.
+3. Start: `uvicorn app.api.main:app --host 0.0.0.0 --port $PORT`. With `TRIAGE_ACCOUNTS=on` it refuses to start
+   without valid `TRIAGE_ENCRYPTION_KEYS`.
+
+Request logs from before the database layer (`data/logs/requests.sqlite3`) aren't opened any more; copy them in
+with `venv/bin/python scripts/import_sqlite_log.py <file>` (safe to re-run; the file is only read).
+
+### Neon
+
+- **Production:** use Neon's **pooled** connection string (its host contains `-pooler`) in `DATABASE_URL`, as
+  `postgresql+psycopg://USER:PASSWORD@HOST/DB?sslmode=require`. Neon suspends idle databases: the first query
+  after a pause is slower, and the server re-checks pooled connections before using them.
+- **Migrations:** run `alembic upgrade head` with the **direct** connection string (the same host without
+  `-pooler`); schema changes are safest without the pooler in between.
+- **Tests:** point `TRIAGE_TEST_DATABASE_URL` at a separate **test branch**, never production, and run
+  `venv/bin/python -m pytest -m postgres`. Each test works in its own throwaway schema. The tests switch a pooled
+  host to its direct host automatically, because the pooler rejects the `search_path` option they use. A plain
+  `pytest` never connects to it.
+
+### Rotating the encryption key (saved provider keys)
+
+1. Generate a new key and put it **first**: `TRIAGE_ENCRYPTION_KEYS="k2:<new>,k1:<old>"`. Deploy. New saves use
+   `k2`; old rows still decrypt with `k1`.
+2. Re-encrypt every saved key with `k2` (same environment):
+   `venv/bin/python scripts/rotate_provider_keys.py --dry-run`, then without `--dry-run`. It first checks that
+   every row decrypts; if any doesn't, it changes nothing and exits with an error. It works in batches (one
+   transaction each), is safe to re-run, and prints only counts.
+3. When it reports every row on `k2` (`by_key_after`), remove `k1`: `TRIAGE_ENCRYPTION_KEYS="k2:<new>"`. Deploy.
+
+If every key that encrypted a row is lost, that row can't be decrypted: the user sees 409 `key_unreadable` and
+must save the key again.
+
+### Rotating TRIAGE_HASH_SECRET
+
+Only rotate it if it leaked: it keys several HMACs at once, and changing it invalidates them all.
+
+| Affected | Effect |
+|---|---|
+| Account API keys (`trk_`) | **All stop working** (401). Users must create new keys |
+| Prompt HMACs in the request log | New rows don't match old ones. **Retraining:** run `scripts/retrain.py` with the secret the rows were logged under, or a validation or test prompt sent before the change won't be recognized and could leak into training |
+| Response cache entries for BYOK and account requests | Become misses (they're fingerprinted per key) |
+| Demo visitor ids and sign-in rate-limit counters | Start over |
+
+Sessions (`trs_`), passwords and saved provider keys don't use it and keep working.
+
+## Known limitations
+
+- **Keys rejected during a sync-verify escalation aren't marked invalid yet.** Only rejections while routing a
+  request mark a saved key `invalid`; the escalation's rejected attempts just fall back.
+- No email verification or password reset.
+- Session tokens are bearer tokens the website keeps in the browser, so the website must avoid third-party
+  scripts (a strict Content-Security-Policy).
+- The per-minute limits (demo and account) are kept in memory by each server instance.
+- Streams don't report their cost in the response; fetch it with `GET /v1/requests/{id}` once the stream ends.
+- `PUT /v1/routing-config` changes are kept in memory only, not persisted.
 
 ## Privacy: what the request log keeps
 
 Every API request writes one row to the database and one JSON line to the server log. The database is
 `DATABASE_URL` (Postgres in production, e.g. Neon) or, by default, the local SQLite file `data/triage.sqlite3`
-(not committed). See "Database" below.
+(not committed). See "Database" above.
 
 **Stored:**
 - Routing and cost data: the tier and model used, predicted pass probabilities, fallbacks, tokens, costs,
