@@ -5,6 +5,8 @@
 @import "@fontsource/poppins/500.css";   /* labels, nav */
 @import "@fontsource/poppins/600.css";   /* headings */
 @import "@fontsource/poppins/700.css";   /* big stat numbers */
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
 @plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:is(.dark *));
@@ -12,6 +14,7 @@
 /* Makes each color usable as a Tailwind class, e.g. bg-card, text-primary, text-success */
 @theme inline {
     --font-sans: 'Poppins', sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
     --font-heading: var(--font-sans);
 
     --color-background: var(--background);
@@ -98,4 +101,34 @@
     html {
         @apply font-sans;
     }
+}
+
+/* Landing page animations */
+@keyframes triage-flow {
+  to { stroke-dashoffset: -24; }
+}
+@keyframes triage-drift {
+  to { stroke-dashoffset: -34; }
+}
+@keyframes triage-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.triage-flow {
+  stroke-dasharray: 6 6;
+  animation: triage-flow 0.7s linear infinite;
+}
+.triage-drift {
+  stroke-dasharray: 3 14;
+  animation: triage-drift 2.6s linear infinite;
+}
+.triage-pulse {
+  animation: triage-pulse 2.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .triage-flow,
+  .triage-drift,
+  .triage-pulse {
+    animation: none;
+  }
 }
