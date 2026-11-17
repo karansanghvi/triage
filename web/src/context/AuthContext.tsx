@@ -12,6 +12,7 @@ type AuthContextValue = {
   loading: boolean // true while checking a saved session on page load
   signup: (email: string, password: string, displayName?: string) => Promise<void>
   login: (email: string, password: string) => Promise<void>
+  resetPassword: (resetToken: string, newPassword: string) => Promise<void>
   logout: () => Promise<void>
 }
 
@@ -73,6 +74,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [saveSession]
   )
 
+  const resetPassword = useCallback(
+    async (resetToken: string, newPassword: string) => {
+        const res = await authApi.completePasswordReset(resetToken, newPassword)
+        saveSession(res.session_token, res.user)
+    },
+    [saveSession]
+  )
+
   const logout = useCallback(async () => {
     const current = token
     localStorage.removeItem(TOKEN_KEY)
@@ -88,7 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [token])
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, signup, login, logout }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ user, token, loading, signup, login, logout, resetPassword }}>{children}</AuthContext.Provider>
   )
 }
 
