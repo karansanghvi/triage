@@ -86,6 +86,15 @@ class ResetStore:
                                                 expires_at=now + TOKEN_TTL, used_at=None))
         return token, now + TOKEN_TTL
 
+    def token_is_live(self, token: str) -> bool:
+        """A cheap read before the (slow) password hash, so junk tokens can't make the server run argon2.
+        complete() checks again; this decides nothing on its own."""
+        t, wanted = self._tokens, token_hash(token)
+        with self.engine.connect() as connection:
+            row = connection.execute(select(t.c.token_hash).where(and_(
+                t.c.token_hash == wanted, t.c.used_at.is_(None), t.c.expires_at > self.clock()))).fetchone()
+        return row is not None and hashes_match(row.token_hash, wanted)
+
     def complete(self, token: str, password_hash: str) -> Optional[str]:
         """Use the token (once), set the password, revoke every session and end any outstanding code, in one
         transaction. Returns the user id, or None if the token is unknown, expired or already used."""

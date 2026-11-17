@@ -21,7 +21,12 @@
                                             full key is shown
     DELETE /v1/account/api-keys/{id}     -> 204 (revokes it; unknown or someone else's: 404)
 
-Everything except signup and login needs a session token (Authorization: Bearer trs_...), never a Triage API key.
+    POST   /v1/auth/password-reset/request  {email}                   -> 202, always the same answer
+    POST   /v1/auth/password-reset/verify   {email, code}             -> {reset_token, expires_at}
+    POST   /v1/auth/password-reset/complete {reset_token, new_password}
+                                                                   -> {user, session_token, expires_at}, as login
+
+Everything except signup, login and password reset needs a session token (Authorization: Bearer trs_...), never a Triage API key.
 
 Never logged or echoed: emails, passwords, tokens. Auth failures log only the visitor's hash and the outcome.
 Every database call and password hash runs in a worker thread.
@@ -32,12 +37,13 @@ import unicodedata
 from typing import Optional
 
 import anyio
-from fastapi import APIRouter, Depends, Header, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request, Response
 from pydantic import BaseModel, ConfigDict
 
 from app.accounts.credentials import (CredentialError, check_password_rules, hash_password,
-                                      looks_like_session_token, needs_rehash, normalize_display_name,
-                                      normalize_email, verify_password)
+                                      looks_like_reset_token, looks_like_session_token, needs_rehash,
+                                      normalize_display_name, normalize_email, verify_password)
+from app.accounts.email import EmailSendError
 from app.accounts.api_keys import MAX_ACTIVE_KEYS, NAME_MAX as API_KEY_NAME_MAX, TooManyKeys
 from app.accounts.encryption import DecryptionError
 from app.accounts.ratelimit import RateLimited, email_subject
@@ -55,9 +61,13 @@ SESSION_ENDED = "Your session has expired or was revoked. Log in again."
 INCORRECT_PASSWORD = "That password isn't right."
 
 
-def _log(event: str, outcome: str, visitor: Optional[str] = None) -> None:
-    """One JSON line: the event, the outcome and the visitor's hash. Never an email, password or token."""
-    logger.info(json.dumps({"event": event, "outcome": outcome, "visitor": visitor}, separators=(",", ":")))
+def _log(event: str, outcome: str, visitor: Optional[str] = None, detail: Optional[str] = None) -> None:
+    """One JSON line: the event, the outcome and the visitor's hash (detail: a short fixed kind, e.g. why an
+    email failed). Never an email, password, code or token."""
+    line = {"event": event, "outcome": outcome, "visitor": visitor}
+    if detail is not None:
+        line["detail"] = detail
+    logger.info(json.dumps(line, separators=(",", ":")))
 
 
 def _invalid_credentials() -> APIError:
@@ -109,6 +119,28 @@ class PasswordChange(_Body):
 
 class AccountDelete(_Body):
     password: str
+
+
+class ResetRequestBody(_Body):
+    email: str
+
+
+class ResetVerifyBody(_Body):
+    email: str
+    code: str
+
+
+class ResetCompleteBody(_Body):
+    reset_token: str
+    new_password: str
+
+
+RESET_SENT = ("If an account exists for that email, we've sent it a 6-digit code. It expires in 10 minutes. "
+              "Check your spam folder if it doesn't arrive.")
+INVALID_CODE = ("That code isn't right, or it has expired. Use the code from the latest email, or request a new "
+                "one.")
+INVALID_RESET_TOKEN = "This password reset has expired or was already used. Request a new code to start again."
+EMAIL_UNAVAILABLE = "Password reset by email isn't available on this server right now."
 
 
 class ProviderKeyBody(_Body):
@@ -300,6 +332,109 @@ def account_router() -> APIRouter:
         await anyio.to_thread.run_sync(request.app.state.deps.accounts.delete_user, user.id)
         _log("delete_account", "ok", visitor(request))
         return Response(status_code=204)
+
+    # ----- password reset (no session: the user has lost their password) -----
+
+    def email_ready(request: Request) -> None:
+        sender = request.app.state.deps.email_sender
+        if sender is None or not sender.available:
+            raise APIError(503, EMAIL_UNAVAILABLE, "server_error", code="email_unavailable")
+
+    async def limit(request: Request, kind: str, subject: str, event: str, what: str) -> None:
+        try:
+            await anyio.to_thread.run_sync(request.app.state.deps.auth_limiter.hit, kind, subject)
+        except RateLimited as error:
+            _log(event, "rate_limited", visitor(request), kind)
+            raise _too_many(error, what) from None
+
+    async def send_reset_code(deps, email: str, who: str) -> None:
+        """After the 202 has gone out, so the response takes as long whether or not the account exists."""
+        try:
+            user = await anyio.to_thread.run_sync(deps.accounts.user_by_email, email)
+            if user is None:
+                _log("password_reset_request", "no_account", who)
+                return
+            issued = await anyio.to_thread.run_sync(deps.password_resets.issue_code, user.id)
+            if issued is None:
+                _log("password_reset_request", "cooldown", who)
+                return
+            code, code_id = issued
+            await anyio.to_thread.run_sync(deps.email_sender.send_reset_code, user.email, user.id, code, code_id)
+            _log("password_reset_request", "sent", who)
+        except EmailSendError as error:
+            _log("password_reset_request", "send_failed", who, error.kind)
+        except Exception as error:             # the type only: a database error's text can quote the email
+            _log("password_reset_request", "error", who, type(error).__name__)
+
+    @router.post("/v1/auth/password-reset/request", status_code=202)
+    async def password_reset_request(body: ResetRequestBody, request: Request, background: BackgroundTasks):
+        """Always the same 202 (unless malformed or rate limited, which never depends on the account). Finding the
+        user, the cooldown, the code and the email all happen in a background task."""
+        email_ready(request)
+        deps, who = request.app.state.deps, visitor(request)
+        try:
+            email = normalize_email(body.email)
+        except CredentialError as error:
+            raise _credential_error(error, "email") from None
+        await limit(request, "reset_request_ip", who, "password_reset_request", "password reset")
+        await limit(request, "reset_request_email", email_subject(email, deps.hash_secret),
+                    "password_reset_request", "password reset")
+        background.add_task(send_reset_code, deps, email, who)
+        return {"message": RESET_SENT}
+
+    @router.post("/v1/auth/password-reset/verify")
+    async def password_reset_verify(body: ResetVerifyBody, request: Request):
+        """A wrong code, an unknown email and a dead, used or expired code are the same 400 invalid_code (no
+        attempts-left count: it would show the account exists)."""
+        email_ready(request)
+        deps, who = request.app.state.deps, visitor(request)
+        try:
+            email = normalize_email(body.email)
+        except CredentialError as error:
+            raise _credential_error(error, "email") from None
+        await limit(request, "reset_verify_ip", who, "password_reset_verify", "reset code")
+        subject = email_subject(email, deps.hash_secret)
+        try:
+            await anyio.to_thread.run_sync(deps.auth_limiter.check, "reset_verify_failure_email", subject)
+        except RateLimited as error:
+            _log("password_reset_verify", "rate_limited", who, "reset_verify_failure_email")
+            raise _too_many(error, "reset code") from None
+        user = await anyio.to_thread.run_sync(deps.accounts.user_by_email, email)
+        result = await anyio.to_thread.run_sync(deps.password_resets.verify_code, user.id if user else None,
+                                                body.code)
+        if result is None:
+            await anyio.to_thread.run_sync(deps.auth_limiter.record, "reset_verify_failure_email", subject)
+            _log("password_reset_verify", "invalid_code", who)
+            raise APIError(400, INVALID_CODE, param="code", code="invalid_code")
+        token, expires_at = result
+        _log("password_reset_verify", "ok", who)
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"reset_token": token, "expires_at": expires_at.isoformat().replace("+00:00", "Z")},
+                            headers={"Cache-Control": "no-store"})
+
+    @router.post("/v1/auth/password-reset/complete")
+    async def password_reset_complete(body: ResetCompleteBody, request: Request):
+        """Sets the password, revokes every session (account API keys stay valid) and logs the user in."""
+        email_ready(request)
+        deps, who = request.app.state.deps, visitor(request)
+        if not looks_like_reset_token(body.reset_token):
+            raise APIError(400, INVALID_RESET_TOKEN, param="reset_token", code="invalid_reset_token")
+        try:
+            check_password_rules(body.new_password)
+        except CredentialError as error:
+            raise _credential_error(error, "new_password") from None
+        if not await anyio.to_thread.run_sync(deps.password_resets.token_is_live, body.reset_token):
+            _log("password_reset_complete", "invalid_token", who)
+            raise APIError(400, INVALID_RESET_TOKEN, param="reset_token", code="invalid_reset_token")
+        new_hash = await anyio.to_thread.run_sync(hash_password, body.new_password)
+        user_id = await anyio.to_thread.run_sync(deps.password_resets.complete, body.reset_token, new_hash)
+        if user_id is None:                     # used by a parallel request meanwhile
+            _log("password_reset_complete", "invalid_token", who)
+            raise APIError(400, INVALID_RESET_TOKEN, param="reset_token", code="invalid_reset_token")
+        user = await anyio.to_thread.run_sync(deps.accounts.user_by_id, user_id)
+        token, session = await anyio.to_thread.run_sync(deps.accounts.create_session, user.id)
+        _log("password_reset_complete", "ok", who)
+        return _session_response(user, token, session)
 
     # ----- saved provider keys -----
 
