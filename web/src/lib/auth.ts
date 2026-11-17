@@ -18,7 +18,7 @@ type SessionResponse = {
 
 type ApiError = { error?: { code?: string; message?: string } }
 
-async function request<T>(path: string, method: string, body?: unknown, token?: string): Promise<T> {
+export async function request<T>(path: string, method: string, body?: unknown, token?: string): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   if (token) headers.Authorization = `Bearer ${token}`
 

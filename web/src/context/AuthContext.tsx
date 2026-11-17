@@ -14,6 +14,9 @@ type AuthContextValue = {
   login: (email: string, password: string) => Promise<void>
   resetPassword: (resetToken: string, newPassword: string) => Promise<void>
   logout: () => Promise<void>
+  updateUser: (user: User) => void  // after a change the backend returned 
+  refreshUser: () => Promise<void>  // ask the backend again
+  expireSession: () => void         // the session stopped working: log out locally
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -96,8 +99,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [token])
 
+  const updateUser = useCallback((newUser: User) => {
+    setUser(newUser)
+  }, [])
+
+  const refreshUser = useCallback(async () => {
+    if (!token) return
+    const me = await authApi.getMe(token)
+    setUser(me)
+  }, [token])
+
+  const expireSession = useCallback(() => {
+    localStorage.removeItem(TOKEN_KEY)
+    setToken(null)
+    setUser(null)
+  }, [])
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, signup, login, logout, resetPassword }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ 
+        user, token, loading, signup, login, logout, resetPassword, updateUser, refreshUser, expireSession
+    }}>{children}</AuthContext.Provider>
   )
 }
 
