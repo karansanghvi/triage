@@ -134,6 +134,27 @@ account_day_table = Table(
            primary_key=True),
     Column("requests", Integer, nullable=False))
 
+password_reset_codes_table = Table(
+    "password_reset_codes", metadata,
+    Column("user_id", Text, ForeignKey("users.id", name="fk_password_reset_codes_user_id_users", ondelete="CASCADE"),
+           primary_key=True),                                  # one code per user: a new one replaces it
+    Column("id", Text, nullable=False),                        # a UUID per code (the email's idempotency key)
+    Column("code_hash", Text, nullable=False),                 # HMAC of the code (TRIAGE_HASH_SECRET); never the code
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("attempts", Integer, nullable=False),               # tries so far, counted before each comparison
+    Column("used_at", DateTime(timezone=True)),
+    Column("last_sent_at", DateTime(timezone=True), nullable=False))   # the resend cooldown
+password_reset_tokens_table = Table(
+    "password_reset_tokens", metadata,
+    Column("token_hash", Text, primary_key=True),              # SHA-256 of the "rst_" token; never the token
+    Column("user_id", Text, ForeignKey("users.id", name="fk_password_reset_tokens_user_id_users",
+                                       ondelete="CASCADE"), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("used_at", DateTime(timezone=True)))
+Index("idx_password_reset_tokens_user_id", password_reset_tokens_table.c.user_id, unique=True)
+
 demo_day_table = Table("demo_day", metadata,
                        Column("day", Text, primary_key=True), Column("requests", Integer, nullable=False),
                        Column("tokens", Integer, nullable=False), Column("calls", Integer, nullable=False))

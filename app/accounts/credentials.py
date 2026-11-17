@@ -5,7 +5,7 @@ exhaust a small instance during a burst of logins. Hashing is slow on purpose: c
 A password is never stored, logged or put in an error message; only its hash is kept.
 
 Session tokens are "trs_" + 32 random bytes in base62. Only their SHA-256 is stored; the token itself is shown
-once, at signup or login.
+once, at signup or login. Password reset tokens ("rst_") have the same shape and the same storage.
 """
 import hashlib
 import hmac
@@ -144,3 +144,38 @@ def api_key_hash(key: str, secret: bytes) -> str:
 def looks_like_session_token(token: str) -> bool:
     return (token.startswith(SESSION_PREFIX) and len(token) == len(SESSION_PREFIX) + _TOKEN_CHARS
             and all(c in _BASE62 for c in token[len(SESSION_PREFIX):]))
+
+
+# ---------- password reset ----------
+
+RESET_TOKEN_PREFIX = "rst_"
+RESET_CODE_DIGITS = 6
+
+
+def new_reset_code() -> str:
+    """Six random digits (secrets), leading zeros kept."""
+    return f"{secrets.randbelow(10 ** RESET_CODE_DIGITS):0{RESET_CODE_DIGITS}d}"
+
+
+def reset_code_hash(code: str, user_id: str, secret: bytes) -> str:
+    """HMAC-SHA256 with TRIAGE_HASH_SECRET, bound to the user: a code has only a million values, so without the
+    secret a stolen table can't be searched, and a row can't be tested for another user."""
+    return hmac.new(secret, f"reset-code:{user_id}:{code}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def normalize_reset_code(code) -> Optional[str]:
+    """The digits of an entered code (spaces ignored), or None if it can't be a code."""
+    if not isinstance(code, str):
+        return None
+    code = "".join(code.split())
+    return code if len(code) == RESET_CODE_DIGITS and code.isascii() and code.isdigit() else None
+
+
+def new_reset_token() -> str:
+    return RESET_TOKEN_PREFIX + _base62(secrets.token_bytes(TOKEN_BYTES))
+
+
+def looks_like_reset_token(token) -> bool:
+    return (isinstance(token, str) and token.startswith(RESET_TOKEN_PREFIX)
+            and len(token) == len(RESET_TOKEN_PREFIX) + _TOKEN_CHARS
+            and all(c in _BASE62 for c in token[len(RESET_TOKEN_PREFIX):]))
