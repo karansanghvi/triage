@@ -3,6 +3,7 @@ account; cooldown, expiry, the 5-try lock, single-use tokens, sessions revoked, 
 nothing secret in logs or the database. No network: emails go to a FakeEmailSender or a mocked Resend."""
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -169,7 +170,7 @@ def test_a_full_reset_through_mocked_resend():
     request_code(http)
     (email,) = sent
     assert email["to"] == ["ada.lovelace@example.com"]
-    code = email["text"].split("code is: ")[1][:6]
+    code = re.search(r"^    (\d{6})$", email["text"], re.M).group(1)
     token = verify(http, code).json()["reset_token"]
     assert complete(http, token).status_code == 200
 
@@ -347,3 +348,12 @@ def test_no_code_token_email_or_password_in_logs_or_the_database(caplog):
     for secret in (code, token, session, NEW_PASSWORD, PASSWORD, "ada.lovelace", "nobody@"):
         assert secret not in logs, secret
         assert secret not in stored, secret
+
+
+def test_the_email_greets_the_account_by_its_display_name():
+    http, deps, clock = app()
+    http.post("/v1/auth/signup", json={"email": EMAIL, "password": PASSWORD, "display_name": "Ada"}, headers=ip(200))
+    signup(http, email="nameless@example.com")
+    request_code(http)
+    request_code(http, "nameless@example.com", n=2)
+    assert [m["display_name"] for m in deps.email_sender.sent] == ["Ada", None]

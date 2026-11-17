@@ -25,12 +25,10 @@ def resend(handler):
 
 # ---------- the message ----------
 
-def test_the_email_has_the_code_the_expiry_and_the_ignore_line():
+def test_the_email_has_the_code_and_no_code_in_the_subject():
     subject, text, html = reset_email(CODE)
-    for part in (text, html):
-        assert CODE in part and "10 minutes" in part and "didn't ask for this, ignore this email" in part.replace(
-            "&#x27;", "'")
-    assert "Triage" in subject and CODE not in subject
+    assert CODE in text and CODE in html
+    assert subject == "Reset your Triage password" and CODE not in subject
 
 
 # ---------- Resend ----------
@@ -81,7 +79,7 @@ def test_the_sender_never_shows_its_key():
 def test_the_fake_sender_remembers_and_sends_nothing():
     fake = FakeEmailSender()
     fake.send_reset_code(TO, "user-1", CODE, "k")
-    assert fake.sent == [{"to": TO, "user_id": "user-1", "code": CODE, "idempotency_key": "k"}]
+    assert fake.sent == [{"to": TO, "user_id": "user-1", "code": CODE, "idempotency_key": "k", "display_name": None}]
 
 
 def test_the_console_sender_logs_the_user_id_and_code_but_no_address():

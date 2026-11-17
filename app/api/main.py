@@ -423,6 +423,8 @@ def set_up_email(deps) -> None:
         deps.email_sender = sender_from_env(fake=os.environ.get(FAKE_MODELS_ENV) == "1")
     if not deps.email_sender.available:
         logger.warning("password reset is unavailable: %s", deps.email_sender.reason)
+    elif getattr(deps.email_sender, "logo_problem", None):
+        logger.warning("reset emails will show the plain logo mark: %s", deps.email_sender.logo_problem)
     elif deps.email_sender.name == "console":
         logger.warning("TRIAGE_DEV_EMAIL_LOG is on: password reset codes are printed to this console")
 

@@ -359,7 +359,8 @@ def account_router() -> APIRouter:
                 _log("password_reset_request", "cooldown", who)
                 return
             code, code_id = issued
-            await anyio.to_thread.run_sync(deps.email_sender.send_reset_code, user.email, user.id, code, code_id)
+            await anyio.to_thread.run_sync(lambda: deps.email_sender.send_reset_code(
+                user.email, user.id, code, code_id, display_name=user.display_name))
             _log("password_reset_request", "sent", who)
         except EmailSendError as error:
             _log("password_reset_request", "send_failed", who, error.kind)

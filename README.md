@@ -443,6 +443,7 @@ there on purpose: the server refuses to start rather than run with a guessable v
 | `TRIAGE_ACCOUNTS` | no | `off` | `on`: user accounts and account chat |
 | `TRIAGE_ENCRYPTION_KEYS` | with accounts | none | Encrypts saved provider keys: `k2:<base64>,k1:<base64>` |
 | `RESEND_API_KEY`, `TRIAGE_EMAIL_FROM` | for password reset | none | Resend API key and sender address; without both, the reset endpoints answer 503 |
+| `TRIAGE_EMAIL_LOGO_URL` | no | none | An `https://` URL of a hosted PNG logo for reset emails; empty: a plain blue square |
 | `TRIAGE_DEV_EMAIL_LOG` | no | `off` | `on`: print reset codes to the console instead of emailing (local development only) |
 | `TRIAGE_CORS_ORIGINS` | for a website | none | Browser origins allowed to call the API |
 | `TRIAGE_TRUSTED_PROXY_HOPS` | behind a proxy | `0` | Proxies that append to `X-Forwarded-For` (visitor IPs) |
@@ -491,7 +492,10 @@ Reset codes are sent with [Resend](https://resend.com) (`POST https://api.resend
    `email@domain` or `Name <email@domain>`. Surrounding whitespace and one matching pair of quotes are removed;
    anything else (such as a quote left on one end) is refused at startup with a warning naming the variable, and
    the reset endpoints answer 503 until it's fixed.
-3. Check the server's log line for each request: `{"event":"password_reset_request","outcome":"sent"}`, or
+3. Optional: host the logo as a PNG (72x72, shown at 36x36) and set `TRIAGE_EMAIL_LOGO_URL` to its `https://` URL.
+   An unusable URL is ignored with a startup warning, and emails show the plain blue square instead. In Resend's
+   domain settings, keep open and click tracking off: the email has no tracking of its own.
+4. Check the server's log line for each request: `{"event":"password_reset_request","outcome":"sent"}`, or
    `send_failed` with a `detail` such as `resend_403`. Nothing else about the email is logged. A failed send
    isn't retried; the user can ask again after 60 seconds.
 

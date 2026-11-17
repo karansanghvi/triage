@@ -1,6 +1,6 @@
 """Sending password reset codes. Blocking: call from a worker thread in async code.
 
-Every sender has send_reset_code(to, user_id, code, idempotency_key) and `available`. Chosen at startup
+Every sender has send_reset_code(to, user_id, code, idempotency_key, display_name=None) and `available`. Chosen at startup
 (sender_from_env), first match wins:
 
     1. TRIAGE_DEV_EMAIL_LOG=on   ConsoleDevSender: logs "reset code for user <id>: 123456" to the server console.
@@ -30,6 +30,8 @@ from urllib.parse import urlsplit
 import httpx
 from sqlalchemy.engine import make_url
 
+from app.accounts.email_template import LogoUrlError, parse_logo_url, reset_email
+
 RESEND_KEY_ENV, EMAIL_FROM_ENV, DEV_EMAIL_LOG_ENV = "RESEND_API_KEY", "TRIAGE_EMAIL_FROM", "TRIAGE_DEV_EMAIL_LOG"
 RESEND_URL = "https://api.resend.com/emails"
 USER_AGENT = "triage/0.5"            # Resend refuses requests without a User-Agent (403)
@@ -47,23 +49,9 @@ class EmailSendError(Exception):
         self.kind = kind
 
 
-# ---------- the message ----------
+# ---------- the message (app/accounts/email_template.py) ----------
 
-SUBJECT = "Your Triage password reset code"
-
-
-def reset_email(code: str) -> tuple:
-    """(subject, text, html). The HTML contains only the code's digits, nothing a user typed."""
-    text = (f"Your Triage password reset code is: {code}\n\n"
-            "It expires in 10 minutes.\n\n"
-            "If you didn't ask for this, ignore this email: your password won't change.\n")
-    html = ('<div style="font-family: sans-serif; font-size: 15px; line-height: 1.5; color: #222;">'
-            "<p>Your Triage password reset code is:</p>"
-            f'<p style="font-size: 28px; font-weight: bold; letter-spacing: 4px;">{code}</p>'
-            "<p>It expires in 10 minutes.</p>"
-            '<p style="color: #666;">If you didn\'t ask for this, ignore this email: your password won\'t '
-            "change.</p></div>")
-    return SUBJECT, text, html
+LOGO_URL_ENV = "TRIAGE_EMAIL_LOGO_URL"
 
 
 # ---------- senders ----------
@@ -72,14 +60,18 @@ class ResendSender:
     available = True
     name = "resend"
 
-    def __init__(self, api_key: str, sender: str, transport: Optional[httpx.BaseTransport] = None):
+    def __init__(self, api_key: str, sender: str, transport: Optional[httpx.BaseTransport] = None,
+                 logo_url: Optional[str] = None, logo_problem: Optional[str] = None):
         self._api_key, self.sender, self._transport = api_key, sender, transport
+        self.logo_url = logo_url                 # TRIAGE_EMAIL_LOGO_URL, checked; None = the plain blue mark
+        self.logo_problem = logo_problem         # why a set TRIAGE_EMAIL_LOGO_URL was ignored (never its value)
 
     def __repr__(self) -> str:
         return "ResendSender()"
 
-    def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str) -> None:
-        subject, text, html = reset_email(code)
+    def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str,
+                        display_name: Optional[str] = None) -> None:
+        subject, text, html = reset_email(code, display_name, self.logo_url)
         headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json",
                    "User-Agent": USER_AGENT, "Idempotency-Key": idempotency_key}
         body = {"from": self.sender, "to": [to], "subject": subject, "text": text, "html": html}
@@ -101,8 +93,10 @@ class FakeEmailSender:
     name = "fake"
     sent: list = field(default_factory=list)
 
-    def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str) -> None:
-        self.sent.append({"to": to, "user_id": user_id, "code": code, "idempotency_key": idempotency_key})
+    def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str,
+                        display_name: Optional[str] = None) -> None:
+        self.sent.append({"to": to, "user_id": user_id, "code": code, "idempotency_key": idempotency_key,
+                          "display_name": display_name})
 
 
 class ConsoleDevSender:
@@ -118,7 +112,8 @@ class ConsoleDevSender:
             dev_logger.setLevel(logging.INFO)
             dev_logger.propagate = False         # not into any log aggregation configured on the root logger
 
-    def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str) -> None:
+    def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str,
+                        display_name: Optional[str] = None) -> None:
         dev_logger.info("reset code for user %s: %s", user_id, code)
 
 
@@ -138,7 +133,8 @@ class UnavailableSender:
             return self.problem
         return f"{' and '.join(self.missing)} not set"
 
-    def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str) -> None:
+    def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str,
+                        display_name: Optional[str] = None) -> None:
         raise EmailSendError("unavailable")
 
 
@@ -216,6 +212,11 @@ def sender_from_env(fake: bool, environ: Optional[Mapping[str, str]] = None):
     if not (api_key and sender):
         return UnavailableSender(tuple(n for n, v in ((RESEND_KEY_ENV, api_key), (EMAIL_FROM_ENV, sender)) if not v))
     try:
-        return ResendSender(api_key, parse_sender(sender))
+        sender = parse_sender(sender)
     except SenderError as error:
         return UnavailableSender(problem=str(error))
+    try:
+        logo_url, logo_problem = parse_logo_url(environ.get(LOGO_URL_ENV)), None
+    except LogoUrlError as error:            # cosmetic: send without the image rather than not at all
+        logo_url, logo_problem = None, str(error)
+    return ResendSender(api_key, sender, logo_url=logo_url, logo_problem=logo_problem)
