@@ -7,7 +7,9 @@ about one of them sets it itself with monkeypatch.
 import pytest
 
 DEPLOYMENT_ENV = ("TRIAGE_PUBLIC", "TRIAGE_ACCOUNTS", "TRIAGE_ENCRYPTION_KEYS", "TRIAGE_CORS_ORIGINS", "TRIAGE_SERVER_PROVIDERS", "TRIAGE_TRUSTED_PROXY_HOPS",
-                  "DATABASE_URL", "TRIAGE_FAKE_DB")
+                  "DATABASE_URL", "TRIAGE_FAKE_DB",
+                  # a developer's real Resend key must never send mail from a test
+                  "RESEND_API_KEY", "TRIAGE_EMAIL_FROM", "TRIAGE_DEV_EMAIL_LOG")
 
 
 @pytest.fixture(autouse=True)

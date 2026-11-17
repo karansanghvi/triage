@@ -413,6 +413,20 @@ def set_up_keyring(deps) -> None:
     deps.provider_keys.keyring = deps.keyring
 
 
+def set_up_email(deps) -> None:
+    """Password reset emails: choose the sender (app/accounts/email.py) unless deps already has one. Refuses to
+    start if TRIAGE_DEV_EMAIL_LOG=on outside local development; without Resend settings, warns (names only) and
+    the reset endpoints answer 503."""
+    if deps.email_sender is None:
+        from app.accounts.email import sender_from_env
+        from app.api.deps import FAKE_MODELS_ENV
+        deps.email_sender = sender_from_env(fake=os.environ.get(FAKE_MODELS_ENV) == "1")
+    if not deps.email_sender.available:
+        logger.warning("password reset is unavailable: %s not set", " and ".join(deps.email_sender.missing))
+    elif deps.email_sender.name == "console":
+        logger.warning("TRIAGE_DEV_EMAIL_LOG is on: password reset codes are printed to this console")
+
+
 def cors_origins_from_env() -> list:
     return [o.strip().rstrip("/") for o in os.environ.get(CORS_ORIGINS_ENV, "").split(",") if o.strip()]
 
@@ -494,6 +508,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             app.state.deps = load_deps()          # predictor + embedding model, once
         if app.state.accounts:
             set_up_keyring(app.state.deps)        # refuses to start without valid TRIAGE_ENCRYPTION_KEYS
+            set_up_email(app.state.deps)          # refuses TRIAGE_DEV_EMAIL_LOG=on outside local development
         yield
 
     _ensure_json_handler()

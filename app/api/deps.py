@@ -45,6 +45,7 @@ class RouterDeps:
     api_keys: Optional[object] = None                    # app.accounts.api_keys.ApiKeyStore
     account_limiter: Optional[object] = None             # app.accounts.limits.AccountLimiter (account chat)
     password_resets: Optional[object] = None             # app.accounts.password_reset.ResetStore
+    email_sender: Optional[object] = field(default=None, repr=False)   # app.accounts.email (chosen at startup)
 
     def strong_model(self, providers=None, prefer=None) -> str:
         """The savings baseline: the first model of the high chain after filtering by provider, and reordering
