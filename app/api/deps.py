@@ -44,6 +44,8 @@ class RouterDeps:
     key_verifier: Optional[object] = None                # app.accounts.verify_keys.verify_key (tests: a fake)
     api_keys: Optional[object] = None                    # app.accounts.api_keys.ApiKeyStore
     account_limiter: Optional[object] = None             # app.accounts.limits.AccountLimiter (account chat)
+    password_resets: Optional[object] = None             # app.accounts.password_reset.ResetStore
+    email_sender: Optional[object] = field(default=None, repr=False)   # app.accounts.email (chosen at startup)
 
     def strong_model(self, providers=None, prefer=None) -> str:
         """The savings baseline: the first model of the high chain after filtering by provider, and reordering
@@ -100,6 +102,8 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
     deps.key_verifier = key_verifier or verify_key
     from app.accounts.api_keys import ApiKeyStore
     deps.api_keys = ApiKeyStore(engine, hash_secret)            # keys are kept as an HMAC with this secret
+    from app.accounts.password_reset import ResetStore
+    deps.password_resets = ResetStore(engine, hash_secret)      # codes are kept as an HMAC with this secret
     from app.accounts.limits import AccountLimiter, load_account_limits
     deps.account_limiter = AccountLimiter(account_limits or load_account_limits(), engine)
     # refuse to start if background labels could eat more than half of the strong or judge model's daily budget

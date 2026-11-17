@@ -66,3 +66,23 @@ export function logout(token: string) {
 export function getMe(token: string) {
   return request<User>("/v1/auth/me", "GET", undefined, token)
 }
+
+type ResetTokenResponse = {
+  reset_token: string
+  expires_at?: string
+}
+
+export function requestPasswordReset(email: string) {
+  return request<void>("/v1/auth/password-reset/request", "POST", { email })
+}
+
+export function verifyResetCode(email: string, code: string) {
+  return request<ResetTokenResponse>("/v1/auth/password-reset/verify", "POST", { email, code })
+}
+
+export function completePasswordReset(resetToken: string, newPassword: string) {
+  return request<SessionResponse>("/v1/auth/password-reset/complete", "POST", {
+    reset_token: resetToken,
+    new_password: newPassword,
+  })
+}

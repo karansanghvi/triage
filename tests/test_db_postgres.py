@@ -480,3 +480,114 @@ def test_the_daily_account_limit_holds_across_instances_on_postgres(migrated_url
     for limiter in limiters:
         limiter.engine.dispose()
     engine.dispose()
+
+
+# ---------- password reset on Postgres ----------
+
+from app.accounts.credentials import hash_password                   # noqa: E402
+from app.accounts.email import FakeEmailSender                       # noqa: E402
+from app.accounts.password_reset import MAX_ATTEMPTS, ResetStore     # noqa: E402
+
+RESET = "/v1/auth/password-reset"
+
+
+@pytest.fixture
+def pg_reset_app(pg_app):
+    http, deps, log = pg_app
+    deps.email_sender = FakeEmailSender()
+    return http, deps
+
+
+def test_the_whole_password_reset_on_postgres(pg_reset_app):
+    http, deps = pg_reset_app
+    ip = {"X-Forwarded-For": "203.0.113.9"}
+    old = http.post("/v1/auth/signup", json={"email": "ada@example.com", "password": PASSWORD},
+                    headers=ip).json()["session_token"]
+    known = http.post(f"{RESET}/request", json={"email": "ada@example.com"}, headers=ip)
+    unknown = http.post(f"{RESET}/request", json={"email": "nobody@example.com"}, headers=ip)
+    assert known.status_code == unknown.status_code == 202 and known.content == unknown.content
+    (sent,) = deps.email_sender.sent
+    code = sent["code"]
+    assert http.post(f"{RESET}/verify", json={"email": "ada@example.com", "code": f"{(int(code) + 1) % 10**6:06d}"},
+                     headers=ip).json()["error"]["code"] == "invalid_code"
+    token = http.post(f"{RESET}/verify", json={"email": "ada@example.com", "code": code},
+                      headers=ip).json()["reset_token"]
+    r = http.post(f"{RESET}/complete", json={"reset_token": token, "new_password": "a brand new secret"}, headers=ip)
+    assert r.status_code == 200
+    assert http.get("/v1/auth/me", headers=bearer(old)).status_code == 401
+    assert http.get("/v1/auth/me", headers=bearer(r.json()["session_token"])).status_code == 200
+    assert http.post(f"{RESET}/complete", json={"reset_token": token, "new_password": "another new secret"},
+                     headers=ip).json()["error"]["code"] == "invalid_reset_token"
+    with deps.engine.connect() as connection:
+        stored = str(connection.execute(text("SELECT * FROM password_reset_codes")).all()) + \
+            str(connection.execute(text("SELECT * FROM password_reset_tokens")).all())
+    assert code not in stored and token not in stored and "ada@" not in stored
+    assert http.request("DELETE", "/v1/account", json={"password": "a brand new secret"},
+                        headers=bearer(r.json()["session_token"])).status_code == 204
+    with deps.engine.connect() as connection:                      # ON DELETE CASCADE
+        assert connection.execute(text("SELECT count(*) FROM password_reset_codes")).scalar() == 0
+        assert connection.execute(text("SELECT count(*) FROM password_reset_tokens")).scalar() == 0
+
+
+def test_reset_request_limit_on_postgres(pg_reset_app):
+    http, _ = pg_reset_app
+    for n in range(3):
+        assert http.post(f"{RESET}/request", json={"email": "x@example.com"},
+                         headers={"X-Forwarded-For": f"203.0.113.{n}"}).status_code == 202
+    r = http.post(f"{RESET}/request", json={"email": "x@example.com"}, headers={"X-Forwarded-For": "203.0.113.50"})
+    assert r.status_code == 429 and int(r.headers["retry-after"]) > 0
+
+
+def reset_instances(migrated_url, n=3):
+    engines = [db.open_engine(migrated_url) for _ in range(n)]
+    user = AccountStore(engines[0]).create_user("ada@example.com", "$argon2id$fake", None)
+    return engines, [ResetStore(e, b"s" * 32) for e in engines], user
+
+
+def test_parallel_wrong_codes_across_instances_get_at_most_five_tries(migrated_url):
+    engines, stores, user = reset_instances(migrated_url)
+    code, _ = stores[0].issue_code(user.id)
+    guess = f"{(int(code) + 1) % 10**6:06d}"
+    results, _ = run_together([lambda s=stores[i % 3]: s.verify_code(user.id, guess) for i in range(15)])
+    assert results == [None] * 15
+    with engines[0].connect() as connection:
+        assert connection.execute(text("SELECT attempts FROM password_reset_codes")).scalar() == MAX_ATTEMPTS
+    assert stores[1].verify_code(user.id, code) is None                # dead
+    [e.dispose() for e in engines]
+
+
+def test_parallel_requests_across_instances_issue_one_code(migrated_url):
+    engines, stores, user = reset_instances(migrated_url)
+    results, _ = run_together([lambda s=stores[i % 3]: s.issue_code(user.id) for i in range(9)])
+    issued = [r for r in results if r is not None]
+    assert len(issued) == 1
+    assert stores[2].verify_code(user.id, issued[0][0]) is not None
+    [e.dispose() for e in engines]
+
+
+def test_parallel_completes_across_instances_use_the_token_once(migrated_url):
+    engines, stores, user = reset_instances(migrated_url)
+    code, _ = stores[0].issue_code(user.id)
+    token, _ = stores[1].verify_code(user.id, code)
+    hashed = hash_password("a brand new secret")
+    results, _ = run_together([lambda s=stores[i % 3]: s.complete(token, hashed) for i in range(9)])
+    assert results.count(user.id) == 1 and results.count(None) == 8
+    [e.dispose() for e in engines]
+
+
+def test_reset_expiry_with_postgres_timestamps(migrated_url):
+    engine = db.open_engine(migrated_url)
+    now = [datetime.now(timezone.utc)]
+    user = AccountStore(engine).create_user("ada@example.com", "$argon2id$fake", None)
+    store = ResetStore(engine, b"s" * 32, clock=lambda: now[0])
+    code, _ = store.issue_code(user.id)
+    now[0] += timedelta(seconds=59)
+    assert store.issue_code(user.id) is None                           # cooldown
+    now[0] += timedelta(minutes=9, seconds=1)                          # exactly 10 minutes
+    assert store.verify_code(user.id, code) is None
+    now[0] += timedelta(seconds=1)
+    code, _ = store.issue_code(user.id)
+    token, _ = store.verify_code(user.id, code)
+    now[0] += timedelta(minutes=15)
+    assert store.complete(token, "$argon2id$fake2") is None
+    engine.dispose()

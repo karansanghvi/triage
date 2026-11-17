@@ -5,6 +5,10 @@
     login_failure_email   5 failed logins per email per 15 minutes
     provider_key_user     20 provider-key saves or re-checks per user per hour (each is a call to a provider)
     api_key_create_user   10 account API keys created per user per hour
+    reset_request_ip      10 password reset requests per IP per hour
+    reset_request_email   3 password reset requests per email per hour (counted whether or not it has an account)
+    reset_verify_ip       10 reset code checks per IP per 15 minutes
+    reset_verify_failure_email  10 wrong reset codes per email per day, across codes
 
 Sliding windows: one row per counted attempt, counted over the last window. The subject is always a keyed hash:
 an IP's visitor_id (app/api/demo.py), email_subject() of a normalized email, or a user's id (an opaque UUID).
@@ -23,7 +27,7 @@ from sqlalchemy import and_, delete, select
 from app import db
 
 AUTH_LOCK_KEY = 0x7472_6961_6765_0002          # pg_advisory_xact_lock key (see app/api/demo.py DEMO_LOCK_KEY)
-KEEP = timedelta(days=1)                       # rows older than this are deleted as attempts come in
+KEEP = timedelta(days=1)                       # rows older than this are deleted (the longest window)
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,11 @@ LIMITS = {
     # Triage mustn't become a way to hammer providers or test stolen keys in bulk
     "provider_key_user": Limit(20, timedelta(hours=1)),
     "api_key_create_user": Limit(10, timedelta(hours=1)),
+    # Password reset: emails sent and codes guessed
+    "reset_request_ip": Limit(10, timedelta(hours=1)),
+    "reset_request_email": Limit(3, timedelta(hours=1)),
+    "reset_verify_ip": Limit(10, timedelta(minutes=15)),
+    "reset_verify_failure_email": Limit(10, timedelta(days=1)),    # wrong codes, across codes
 }
 
 

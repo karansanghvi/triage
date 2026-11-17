@@ -309,6 +309,8 @@ Non-streaming responses also carry the same facts as a `triage` object in the bo
 | Triage API keys | 20 active per account; 10 new per hour | 409 `too_many_api_keys`; 429 `too_many_attempts` |
 | Sign-up | 5 per IP per hour | 429 `too_many_attempts` |
 | Log-in | 10 per IP per 15 minutes; 5 wrong passwords per account per 15 minutes | 429; for wrong passwords, the same 401 as a wrong password |
+| Password reset codes | 3 requests per email and 10 per IP per hour; one email per address per 60 seconds | 429 `too_many_attempts`; inside the 60 seconds, the usual 202 but no email |
+| Checking reset codes | 10 per IP per 15 minutes; 5 tries per code; 10 wrong codes per email per day | 429 `too_many_attempts`; after 5 wrong tries the code is dead (request a new one) |
 
 ### Error codes
 
@@ -321,6 +323,8 @@ Errors use OpenAI's shape, `{"error": {"message", "type", "param", "code"}}`.
 | 400 | `no_usable_model` | Your keys reach no model |
 | 400 | `max_tokens_too_low` | A named reasoning model spent every token thinking; send a higher `max_tokens` |
 | 400 | `invalid_provider_key` | Saving a key the provider rejected (nothing is stored) |
+| 400 | `invalid_code` | A password reset code that's wrong, expired, used or dead, or an email with no account (always the same message) |
+| 400 | `invalid_reset_token` | A password reset token that's unknown, expired or already used |
 | 401 | `invalid_api_key` | A missing, unknown or revoked Triage key or session |
 | 401 | `invalid_provider_key` | A provider rejected your key during chat |
 | 401 | `invalid_credentials` | Log-in failed (always the same message) |
@@ -334,11 +338,12 @@ Errors use OpenAI's shape, `{"error": {"message", "type", "param", "code"}}`.
 | 500 | `internal_error` | A bug on our side; the response never contains internal details |
 | 502 | `model_error` | The model failed while answering |
 | 503 | `all_models_failed` | No model could answer; try again |
+| 503 | `email_unavailable` | Password reset: the server has no email settings |
 | (in a stream) | `stream_interrupted` | The model failed after text was sent |
 
 ### Reference: account endpoints
 
-All of these except sign-up and log-in need a **session token** (`Authorization: Bearer trs_...`) and accept
+All of these except sign-up, log-in and password reset need a **session token** (`Authorization: Bearer trs_...`) and accept
 nothing else, not even a Triage API key.
 
 | Endpoint | Body | Result |
@@ -350,6 +355,9 @@ nothing else, not even a Triage API key.
 | `PATCH /v1/account` | `display_name?`, `preferred_provider?` | the user; only the fields sent change, `null` clears one |
 | `POST /v1/account/password` | `current_password`, `new_password` | 204; every other session is ended |
 | `DELETE /v1/account` | `password` | 204; deletes the user, sessions, saved keys and API keys (request rows stay, unlinked) |
+| `POST /v1/auth/password-reset/request` | `email` | 202 `{message}`, the same whether or not the account exists |
+| `POST /v1/auth/password-reset/verify` | `email`, `code` | 200 `{reset_token, expires_at}` |
+| `POST /v1/auth/password-reset/complete` | `reset_token`, `new_password` | 200 `{user, session_token, expires_at}`, as log-in |
 | `GET /v1/account/provider-keys` | | `[{provider, last4, status, status_detail, verified_at, created_at, updated_at}]` |
 | `PUT /v1/account/provider-keys/{provider}` | `key` | the summary (checked with the provider; replaces any saved key) |
 | `POST /v1/account/provider-keys/{provider}/verify` | | the summary after checking again |
@@ -358,11 +366,33 @@ nothing else, not even a Triage API key.
 | `POST /v1/account/api-keys` | `name` | 201 `{id, name, public_id, created_at, key, note}`: the only time `key` is shown |
 | `DELETE /v1/account/api-keys/{id}` | | 204, revokes it |
 
+### Resetting a forgotten password
+
+Three steps, no session needed. The answer to step 1 is always the same 202, whether or not the email has an
+account, and the email is sent after the answer, so neither the answer nor its timing tells anyone which emails
+have accounts.
+
+```bash
+B=http://localhost:8000; CT="Content-Type: application/json"
+# 1. Ask for a code. Its email has a 6-digit code that expires in 10 minutes.
+curl -s -X POST $B/v1/auth/password-reset/request -H "$CT" -d '{"email":"you@example.com"}'
+# 2. Trade the code for a reset token (rst_..., 15 minutes, single use). 5 wrong tries kill the code.
+curl -s -X POST $B/v1/auth/password-reset/verify -H "$CT" -d '{"email":"you@example.com","code":"123456"}'
+# 3. Set the new password. Every session is logged out, and a new one comes back, so you're logged in again.
+curl -s -X POST $B/v1/auth/password-reset/complete -H "$CT" \
+  -d '{"reset_token":"rst_...","new_password":"a new long password"}'
+```
+
+A new code replaces an earlier unused one, but asking again within 60 seconds sends nothing and keeps the code
+you already have. A wrong code, an expired one and an email with no account all get the same 400 `invalid_code`.
+Your Triage API keys keep working after a reset; revoke them separately if you think they leaked.
+
 With an account key or session, `GET /v1/models` works, and `GET /v1/stats` and `GET /v1/requests/{id}` show only
 your own account's requests, whichever of your keys made them.
 
 **How your data is kept:**
 - **Passwords:** 10 to 128 characters, hashed with argon2id.
+- **Password reset codes and tokens:** only keyed hashes are stored, never the code, token or your email.
 - **Sessions:** last 30 days from log-in, or 7 days unused.
 - **Provider keys:** encrypted with AES-256-GCM; only their last 4 characters are visible.
 - **Triage API keys:** only a keyed hash is stored, so a lost key can't be shown again. Revoke it and create a new one.
@@ -412,6 +442,9 @@ there on purpose: the server refuses to start rather than run with a guessable v
 | `TRIAGE_PUBLIC` | no | `off` | `on`: the free demo and BYOK without a Triage key |
 | `TRIAGE_ACCOUNTS` | no | `off` | `on`: user accounts and account chat |
 | `TRIAGE_ENCRYPTION_KEYS` | with accounts | none | Encrypts saved provider keys: `k2:<base64>,k1:<base64>` |
+| `RESEND_API_KEY`, `TRIAGE_EMAIL_FROM` | for password reset | none | Resend API key and sender address; without both, the reset endpoints answer 503 |
+| `TRIAGE_EMAIL_LOGO_URL` | no | none | An `https://` URL of a hosted PNG logo for reset emails; empty: a plain blue square |
+| `TRIAGE_DEV_EMAIL_LOG` | no | `off` | `on`: print reset codes to the console instead of emailing (local development only) |
 | `TRIAGE_CORS_ORIGINS` | for a website | none | Browser origins allowed to call the API |
 | `TRIAGE_TRUSTED_PROXY_HOPS` | behind a proxy | `0` | Proxies that append to `X-Forwarded-For` (visitor IPs) |
 | `TRIAGE_SERVER_PROVIDERS` | no | `routing.yaml`'s | e.g. `groq,gemini` on a host without Ollama |
@@ -448,6 +481,32 @@ Keep them in your host's secret settings (e.g. Render's environment), never in t
 Request logs from before the database layer (`data/logs/requests.sqlite3`) aren't opened any more; copy them in
 with `venv/bin/python scripts/import_sqlite_log.py <file>` (safe to re-run; the file is only read).
 
+### Password reset email (Resend)
+
+Reset codes are sent with [Resend](https://resend.com) (`POST https://api.resend.com/emails`,
+[API reference](https://resend.com/docs/api-reference/emails/send-email)).
+
+1. In Resend, verify the domain you'll send from (DNS records), and create an API key with sending access.
+   Until a domain is verified, Resend only delivers to your own address and refuses the rest (403).
+2. Set `RESEND_API_KEY` and `TRIAGE_EMAIL_FROM` (e.g. `Triage <no-reply@your-domain>`). The sender must be
+   `email@domain` or `Name <email@domain>`. Surrounding whitespace and one matching pair of quotes are removed;
+   anything else (such as a quote left on one end) is refused at startup with a warning naming the variable, and
+   the reset endpoints answer 503 until it's fixed.
+3. Optional: host the logo as a PNG (72x72, shown at 36x36) and set `TRIAGE_EMAIL_LOGO_URL` to its `https://` URL.
+   An unusable URL is ignored with a startup warning, and emails show the plain blue square instead. In Resend's
+   domain settings, keep open and click tracking off: the email has no tracking of its own.
+4. Check the server's log line for each request: `{"event":"password_reset_request","outcome":"sent"}`, or
+   `send_failed` with a `detail` such as `resend_403`. Nothing else about the email is logged. A failed send
+   isn't retried; the user can ask again after 60 seconds.
+
+Without both variables the server still starts, logs a warning naming what's missing, and the three reset
+endpoints answer 503 `email_unavailable`. Fake mode (`TRIAGE_FAKE_MODELS=1`) never emails.
+
+**Local development:** `TRIAGE_DEV_EMAIL_LOG=on` prints `reset code for user <id>: 123456` to the server console
+instead of sending anything (it also works in fake mode). The server refuses to start with it if anything looks
+like a deployment: a non-SQLite `DATABASE_URL`, `TRIAGE_PUBLIC=on`, a `TRIAGE_CORS_ORIGINS` entry that isn't
+localhost, or `TRIAGE_TRUSTED_PROXY_HOPS` above 0.
+
 ### Neon
 
 - **Production:** use Neon's **pooled** connection string (its host contains `-pooler`) in `DATABASE_URL`, as
@@ -483,6 +542,7 @@ Only rotate it if it leaked: it keys several HMACs at once, and changing it inva
 | Prompt HMACs in the request log | New rows don't match old ones. **Retraining:** run `scripts/retrain.py` with the secret the rows were logged under, or a validation or test prompt sent before the change won't be recognized and could leak into training |
 | Response cache entries for BYOK and account requests | Become misses (they're fingerprinted per key) |
 | Demo visitor ids and sign-in rate-limit counters | Start over |
+| Password reset codes already emailed | Stop working (`invalid_code`); users ask for a new one |
 
 Sessions (`trs_`), passwords and saved provider keys don't use it and keep working.
 
@@ -490,7 +550,10 @@ Sessions (`trs_`), passwords and saved provider keys don't use it and keep worki
 
 - **Keys rejected during a sync-verify escalation aren't marked invalid yet.** Only rejections while routing a
   request mark a saved key `invalid`; the escalation's rejected attempts just fall back.
-- No email verification or password reset.
+- No email verification: an account's email isn't confirmed at sign-up (password reset sends only to the
+  address on the account).
+- The server's own log shows each reset request's outcome (`sent`, `no_account`, `cooldown`), so whoever can read
+  the server logs can tell whether a reset was for a real account. Clients can't.
 - Session tokens are bearer tokens the website keeps in the browser, so the website must avoid third-party
   scripts (a strict Content-Security-Policy).
 - The per-minute limits (demo and account) are kept in memory by each server instance.
