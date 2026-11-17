@@ -13,11 +13,16 @@ Every sender has send_reset_code(to, user_id, code, idempotency_key) and `availa
                                  (https://resend.com/docs/api-reference/emails/send-email).
     4. otherwise                 UnavailableSender: the reset endpoints answer 503 email_unavailable.
 
+TRIAGE_EMAIL_FROM must be "email@domain" or "Name <email@domain>" (parse_sender). Surrounding whitespace and one
+matching pair of surrounding quotes are removed (some hosts and `docker --env-file` keep a .env value's quotes);
+anything else, such as a quote left on one end, makes email unavailable at startup instead of failing every send.
+
 Never logged or put in an error: the address, the code, the API key, or Resend's response body. A failed send
 raises EmailSendError with a short kind ("resend_403", "timeout", ...) and nothing else.
 """
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Mapping, Optional
 from urllib.parse import urlsplit
@@ -119,13 +124,51 @@ class ConsoleDevSender:
 
 @dataclass(frozen=True)
 class UnavailableSender:
-    """Email isn't configured: reset endpoints answer 503. missing: variable names, never values."""
+    """Email isn't configured: reset endpoints answer 503. missing: variable names, never values. problem: why a
+    set variable was refused (never its value)."""
     missing: tuple = ()
+    problem: Optional[str] = None
     available = False
     name = "unavailable"
 
+    @property
+    def reason(self) -> str:
+        """For the startup warning: names and reasons only."""
+        if self.problem:
+            return self.problem
+        return f"{' and '.join(self.missing)} not set"
+
     def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str) -> None:
         raise EmailSendError("unavailable")
+
+
+# ---------- the sender address ----------
+
+_ADDRESS = r"[A-Za-z0-9.!#$%&*+/=?^_{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"
+_BARE = re.compile(rf"^{_ADDRESS}$")
+_NAMED = re.compile(rf"^([^<>\"'`\x00-\x1f\x7f]+?)\s*<({_ADDRESS})>$")
+QUOTES = "\"'`"
+
+
+class SenderError(ValueError):
+    """TRIAGE_EMAIL_FROM isn't a usable sender. The message describes the problem, never the value."""
+
+
+def parse_sender(value: str) -> str:
+    """The sender, cleaned: whitespace trimmed and one matching pair of surrounding quotes removed. Accepted:
+    "email@domain" or "Name <email@domain>" (the name without quotes, angle brackets or control characters).
+    Raises SenderError otherwise."""
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    if not text:
+        raise SenderError(f"{EMAIL_FROM_ENV} is empty")
+    if any(q in text for q in QUOTES):
+        raise SenderError(f"{EMAIL_FROM_ENV} has a quote character left in it (check the quotes around the value "
+                          "in .env or your host's settings)")
+    if _BARE.match(text) or _NAMED.match(text):
+        return text
+    raise SenderError(f"{EMAIL_FROM_ENV} isn't a valid sender: use email@domain or Name <email@domain>")
 
 
 # ---------- choosing one ----------
@@ -170,6 +213,9 @@ def sender_from_env(fake: bool, environ: Optional[Mapping[str, str]] = None):
     if fake:
         return FakeEmailSender()
     api_key, sender = (environ.get(RESEND_KEY_ENV) or "").strip(), (environ.get(EMAIL_FROM_ENV) or "").strip()
-    if api_key and sender:
-        return ResendSender(api_key, sender)
-    return UnavailableSender(tuple(n for n, v in ((RESEND_KEY_ENV, api_key), (EMAIL_FROM_ENV, sender)) if not v))
+    if not (api_key and sender):
+        return UnavailableSender(tuple(n for n, v in ((RESEND_KEY_ENV, api_key), (EMAIL_FROM_ENV, sender)) if not v))
+    try:
+        return ResendSender(api_key, parse_sender(sender))
+    except SenderError as error:
+        return UnavailableSender(problem=str(error))

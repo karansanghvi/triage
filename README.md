@@ -487,7 +487,10 @@ Reset codes are sent with [Resend](https://resend.com) (`POST https://api.resend
 
 1. In Resend, verify the domain you'll send from (DNS records), and create an API key with sending access.
    Until a domain is verified, Resend only delivers to your own address and refuses the rest (403).
-2. Set `RESEND_API_KEY` and `TRIAGE_EMAIL_FROM` (e.g. `Triage <no-reply@your-domain>`).
+2. Set `RESEND_API_KEY` and `TRIAGE_EMAIL_FROM` (e.g. `Triage <no-reply@your-domain>`). The sender must be
+   `email@domain` or `Name <email@domain>`. Surrounding whitespace and one matching pair of quotes are removed;
+   anything else (such as a quote left on one end) is refused at startup with a warning naming the variable, and
+   the reset endpoints answer 503 until it's fixed.
 3. Check the server's log line for each request: `{"event":"password_reset_request","outcome":"sent"}`, or
    `send_failed` with a `detail` such as `resend_403`. Nothing else about the email is logged. A failed send
    isn't retried; the user can ask again after 60 seconds.

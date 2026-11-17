@@ -178,3 +178,81 @@ def test_fake_mode_never_uses_resend_even_with_a_key(monkeypatch):
     with TestClient(application):
         pass
     assert deps.email_sender.name == "fake"
+
+
+# ---------- TRIAGE_EMAIL_FROM: .env quoting and validation ----------
+
+from dotenv import dotenv_values                                     # noqa: E402
+
+from app.accounts.email import SenderError, parse_sender            # noqa: E402
+
+SENDER = "Triage <no-reply@send.example.dev>"
+
+
+def from_env_file(tmp_path, line: str, final_newline: bool = True) -> dict:
+    """The environment a .env containing `line` gives, parsed by python-dotenv as the server does."""
+    path = tmp_path / ".env"
+    path.write_text(f"RESEND_API_KEY={API_KEY_VALUE}\n{line}" + ("\n" if final_newline else ""), encoding="utf-8")
+    return dict(dotenv_values(path))
+
+
+@pytest.mark.parametrize("line", [
+    f'TRIAGE_EMAIL_FROM="{SENDER}"',                     # double quotes
+    f"TRIAGE_EMAIL_FROM='{SENDER}'",                     # single quotes
+    f"TRIAGE_EMAIL_FROM={SENDER}",                       # unquoted
+    f'TRIAGE_EMAIL_FROM=  "{SENDER}"  ',                 # whitespace around the quotes
+    f'TRIAGE_EMAIL_FROM=" {SENDER} "',                   # whitespace inside the quotes
+    f'export TRIAGE_EMAIL_FROM="{SENDER}"',
+    f'TRIAGE_EMAIL_FROM="{SENDER}"\r',                   # CRLF line ending
+])
+@pytest.mark.parametrize("final_newline", [True, False])            # the sender as the file's last line
+def test_dotenv_values_give_a_clean_sender(tmp_path, line, final_newline):
+    sender = sender_from_env(False, from_env_file(tmp_path, line, final_newline))
+    assert sender.name == "resend" and sender.sender == SENDER
+
+
+@pytest.mark.parametrize("raw", [f'"{SENDER}"', f"'{SENDER}'", f'  "{SENDER}"  ', f"  {SENDER}\t"])
+def test_quotes_and_whitespace_a_host_passes_through_are_removed(raw):
+    """docker --env-file and some hosts' dashboards keep a value's quotes: one matching pair is unwrapped."""
+    sender = sender_from_env(False, {**RESEND_ENV, "TRIAGE_EMAIL_FROM": raw})
+    assert sender.name == "resend" and sender.sender == SENDER
+
+
+@pytest.mark.parametrize("value", ["no-reply@send.example.dev", "Triage Team <no-reply@send.example.dev>",
+                                   "Triage<a+reset@mail.example.co.uk>"])
+def test_both_sender_forms_are_accepted(value):
+    assert parse_sender(value) == value
+
+
+@pytest.mark.parametrize("value, problem", [
+    (f'{SENDER}"', "quote character left"),                       # what reached Resend: the 422
+    (f'"{SENDER}', "quote character left"),
+    (f'"{SENDER}\'', "quote character left"),                     # mismatched pair
+    (f'""{SENDER}""', "quote character left"),                    # only one pair is removed
+    ('"Triage, Inc" <no-reply@send.example.dev>', "quote character left"),
+    ("Triage <no-reply@send.example.dev", "isn't a valid sender"),
+    ("no-reply@localhost", "isn't a valid sender"),
+    ("Triage", "isn't a valid sender"),
+    ("<no-reply@send.example.dev>", "isn't a valid sender"),
+    ("no-reply@send.example.dev\r\nBcc: someone@example.com", "isn't a valid sender"),
+    ('""', "is empty"),
+])
+def test_malformed_senders_are_refused_without_echoing_them(value, problem):
+    with pytest.raises(SenderError) as caught:
+        parse_sender(value)
+    assert problem in str(caught.value) and "example" not in str(caught.value)
+    sender = sender_from_env(False, {**RESEND_ENV, "TRIAGE_EMAIL_FROM": value})
+    assert sender.name == "unavailable" and "TRIAGE_EMAIL_FROM" in sender.reason
+
+
+def test_a_stray_quote_in_env_makes_email_unavailable_at_startup(tmp_path, monkeypatch, caplog):
+    env = from_env_file(tmp_path, f'TRIAGE_EMAIL_FROM={SENDER}"')     # the opening quote lost: dotenv keeps the "
+    assert env["TRIAGE_EMAIL_FROM"].endswith('"')
+    application, deps = startup_app(monkeypatch, **env)
+    with caplog.at_level(logging.WARNING, logger="triage.api"), TestClient(application) as http:
+        r = http.post("/v1/auth/password-reset/request", json={"email": TO})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "email_unavailable"
+    warnings = [m for m in caplog.messages if "password reset is unavailable" in m]
+    assert warnings == ["password reset is unavailable: TRIAGE_EMAIL_FROM has a quote character left in it "
+                        "(check the quotes around the value in .env or your host's settings)"]
+    assert SENDER not in caplog.text and API_KEY_VALUE not in caplog.text

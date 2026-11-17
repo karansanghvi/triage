@@ -422,7 +422,7 @@ def set_up_email(deps) -> None:
         from app.api.deps import FAKE_MODELS_ENV
         deps.email_sender = sender_from_env(fake=os.environ.get(FAKE_MODELS_ENV) == "1")
     if not deps.email_sender.available:
-        logger.warning("password reset is unavailable: %s not set", " and ".join(deps.email_sender.missing))
+        logger.warning("password reset is unavailable: %s", deps.email_sender.reason)
     elif deps.email_sender.name == "console":
         logger.warning("TRIAGE_DEV_EMAIL_LOG is on: password reset codes are printed to this console")
 
