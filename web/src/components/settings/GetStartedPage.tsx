@@ -58,6 +58,7 @@ export default function GetStartedPage() {
             ) : (
                 <ol className="space-y-3">
                     <ChecklistItem
+                        step={1}
                         done={progress.hasProviderKey}
                         title="Add a provider key"
                         body="Your OpenAI, Anthropic, Groq or Gemini key. Triage uses it to answer your requests."
@@ -65,6 +66,7 @@ export default function GetStartedPage() {
                         cta="Add a key"
                     />
                     <ChecklistItem
+                        step={2}
                         done={progress.hasApiKey}
                         title="Create a Triage API key"
                         body="Your app sends this key to Triage instead of your provider keys."
@@ -113,6 +115,7 @@ export default function GetStartedPage() {
 }
 
 type ChecklistItemProps = {
+  step: number
   done: boolean
   title: string
   body: string
@@ -120,18 +123,18 @@ type ChecklistItemProps = {
   cta: string
 }
 
-function ChecklistItem({ done, title, body, to, cta }: ChecklistItemProps) {
+function ChecklistItem({ step, done, title, body, to, cta }: ChecklistItemProps) {
     return (
         <>
             <li className="flex flex-wrap items-center gap-4 rounded-xl border border-[#1F2130] bg-[#0E0F15] px-4 py-3.5">
                 <span
                     className={cn(
-                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border",
-                        done ? "border-[#22C55E]/40 bg-[#22C55E]/15 text-[#4ADE80]" : "border-[#2A2D3D] text-transparent"
+                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[13px] font-semibold",
+                        done ? "border-[#22C55E]/40 bg-[#22C55E]/15 text-[#4ADE80]" : "border-[#2A2D3D] bg-[#1A1C26] text-[#93C5FD]"
                     )}
                     aria-hidden="true"
                 >
-                    <Check className="h-4 w-4" strokeWidth={2.5} />
+                    {done ? <Check className="h-4 w-4" strokeWidth={2.5} /> : step}
                 </span>
                 <div className="min-w-0 flex-[1_1_240px]">
                     <p className={cn("text-sm font-medium", done && "text-muted-foreground line-through decoration-[#4ADE80]/60")}>
@@ -143,7 +146,7 @@ function ChecklistItem({ done, title, body, to, cta }: ChecklistItemProps) {
                 {!done && (
                     <Link
                         to={to}
-                        className="group inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] bg-[#2563EB] px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
+                        className="group inline-flex h-9 w-[136px] shrink-0 items-center justify-center gap-1.5 rounded-[10px] bg-[#2563EB] px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
                     >
                         {cta}
                         <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
