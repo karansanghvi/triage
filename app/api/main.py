@@ -394,6 +394,8 @@ class InternalErrorMiddleware:
 
 CORS_ORIGINS_ENV = "TRIAGE_CORS_ORIGINS"      # comma-separated, e.g. https://triage.example.com
 # Request headers a browser page may send, and response headers its JavaScript may read
+# Every method an endpoint uses (tests/test_cors.py checks each route's preflight against this list)
+CORS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 CORS_REQUEST_HEADERS = ["Authorization", "Content-Type", *PROVIDER_KEY_HEADERS.values(), "X-Triage-Quality",
                         "X-Triage-Task", "X-Triage-Verify", "X-Triage-Prefer-Provider"]
 CORS_RESPONSE_HEADERS = ["X-Triage-Request-Id", "X-Triage-Model", "X-Triage-Tier", "X-Triage-Reason",
@@ -522,7 +524,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app.add_middleware(InternalErrorMiddleware)       # first, so it sits inside CORSMiddleware
     if origins:
         # No cookies or credentials: the browser sends keys only as the explicit headers listed
-        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=CORS_METHODS,
                            allow_headers=CORS_REQUEST_HEADERS, expose_headers=CORS_RESPONSE_HEADERS,
                            allow_credentials=False, max_age=600)
 
