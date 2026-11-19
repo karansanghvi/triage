@@ -608,11 +608,12 @@ def test_a_failed_auto_request_logs_every_attempt_tier_and_primary(stream):
 
 
 def test_a_failed_no_key_request_logs_its_attempts_too():
-    http, deps = app({"groq-small": DOWN, "gemini-flash": DOWN})
+    http, deps = app({"groq-small": DOWN, "gemini-flash": DOWN, "gemini-flash-lite": DOWN})
     assert chat(http, headers={"X-Triage-Quality": "0.92"}).status_code == 503
     (row,) = deps.log.rows()
     assert (row.tier, row.primary_model) == ("medium", "groq-small")
-    assert [a["model"] for a in row.attempts] == ["groq-small"] * 3 + ["gemini-flash"] * 3      # with retries
+    assert [a["model"] for a in row.attempts] == (["groq-small"] * 3 + ["gemini-flash"] * 3      # with retries
+                                                  + ["gemini-flash-lite"] * 3)
 
 
 def test_successful_attempts_carry_no_message():

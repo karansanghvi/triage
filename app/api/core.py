@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Callable, Optional
 from functools import partial
 from app.router.quality import route
+from app.router.small_talk import is_small_talk
 
 import anyio
 
@@ -68,6 +69,9 @@ class RouteDecision:
     task_type_guessed: Optional[bool] = None
     attempts: tuple = ()            # app.reliability.Attempt records from before the first token
     preferred_provider: Optional[str] = None   # the BYOK preferred provider applied to the chains, if any
+    # What decided the tier: "classifier", "small_talk" (a greeting or pleasantry: the low tier, no prediction),
+    # or "requested_model" (pass-through)
+    routed_by: str = "classifier"
 
     @property
     def fell_back(self) -> bool:
@@ -171,14 +175,20 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
     
     kwargs = settings.as_kwargs()   # only what the caller set; the rest come from routing.yaml 
     
+    small_talk = is_auto and is_small_talk(messages, deps.client.routing.small_talk_phrases)
     if is_auto:
-        # 1. How likely are the cheap and medium models to get this right?
-        prediction = await anyio.to_thread.run_sync(
-            deps.predictor.predict_messages, messages, task_type)
-        
-        # 2. Pick the cheapest tier the quality dial (tau) trusts 
-        routing = route(prediction.p_low, prediction.p_medium, tau)
-        tier, reason = routing.tier, routing.reason
+        if small_talk:
+            # 1-2. A pure greeting or pleasantry: the cheapest tier, without asking the classifier
+            prediction = None
+            tier, reason = "low", "small talk: the cheapest model answers greetings and pleasantries"
+        else:
+            # 1. How likely are the cheap and medium models to get this right?
+            prediction = await anyio.to_thread.run_sync(
+                deps.predictor.predict_messages, messages, task_type)
+
+            # 2. Pick the cheapest tier the quality dial (tau) trusts
+            routing = route(prediction.p_low, prediction.p_medium, tau)
+            tier, reason = routing.tier, routing.reason
         if is_byok(keys):              # only the user's providers: the tier may have no model for them
             used = usable_tier(tier, deps.client.routing, deps.registry, keys.providers)
             if used is None:
@@ -194,9 +204,12 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
         if prefer is not None:
             reason = f"{reason}; preferred provider {prefer}"
 
-        used_tau = tau
-        p_low, p_medium = prediction.p_low, prediction.p_medium
-        used_task, guessed = prediction.task_type, prediction.task_type_guessed 
+        if small_talk:                 # no prediction: no probabilities, no tau, no task type
+            used_tau = p_low = p_medium = used_task = guessed = None
+        else:
+            used_tau = tau
+            p_low, p_medium = prediction.p_low, prediction.p_medium
+            used_task, guessed = prediction.task_type, prediction.task_type_guessed
     else:
         # Pass-through: exactly the model the caller named, no prediction, no fallback 
         result = await anyio.to_thread.run_sync(
@@ -220,6 +233,7 @@ async def route_and_stream(messages: list, *, tau: Optional[float], task_type: O
         task_type_guessed=guessed,
         attempts=tuple(result.attempts),
         preferred_provider=prefer,
+        routed_by="small_talk" if small_talk else ("classifier" if is_auto else "requested_model"),
     )
     
     # 5. Hand back the live answer (stream) or the finished one (non-stream)

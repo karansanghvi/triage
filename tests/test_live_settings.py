@@ -27,11 +27,19 @@ def test_generation_settings_match_phase2(configs):
     assert routing.generation == {"temperature": collection.temperature, "max_tokens": collection.max_tokens}
 
 
+# Live-only params allowed on a Phase 2 model: groq-allam's reply-language system_prefix (see routing.yaml)
+EXEMPT_PARAMS = {"system_prefix"}
+
+
+def without_exempt(params) -> dict:
+    return {k: v for k, v in (params or {}).items() if k not in EXEMPT_PARAMS}
+
+
 def test_model_params_match_phase2_for_every_label_tier_model(configs):
     _, routing, collection = configs
     for tier in collection.label_tiers:
         name = collection.tiers[tier]
-        assert routing.model_params.get(name, {}) == collection.model_params.get(name, {}), name
+        assert without_exempt(routing.model_params.get(name, {})) == collection.model_params.get(name, {}), name
 
 
 def test_raw_yaml_sections_match():
@@ -40,7 +48,8 @@ def test_raw_yaml_sections_match():
     phase2 = yaml.safe_load(COLLECTION_CONFIG_PATH.read_text())
     assert live["generation"] == phase2["generation"]
     for name in (phase2["tiers"][t] for t in phase2["label_tiers"]):
-        assert live.get("model_params", {}).get(name) == phase2.get("model_params", {}).get(name), name
+        assert (without_exempt(live.get("model_params", {}).get(name))
+                == (phase2.get("model_params", {}).get(name) or {})), name
 
 
 def test_each_tier_calls_its_phase2_model_first(configs):

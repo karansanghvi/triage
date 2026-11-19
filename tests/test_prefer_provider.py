@@ -25,18 +25,21 @@ def byok(*providers):
 def test_the_preferred_providers_models_go_first_and_the_rest_keep_their_order(tier, prefer):
     filtered = ROUTING.chain_for(tier, REGISTRY, ALL_FOUR)
     chain = ROUTING.chain_for(tier, REGISTRY, ALL_FOUR, prefer)
-    first = [n for n in filtered if REGISTRY[n].provider == prefer]
-    assert first and chain == first + [n for n in filtered if REGISTRY[n].provider != prefer]
+    first = next(n for n in filtered if REGISTRY[n].provider == prefer)     # only its FIRST model moves
+    assert chain == [first] + [n for n in filtered if n != first]
     assert sorted(chain) == sorted(filtered)                      # only reordered
 
 
 def test_the_high_chain_with_each_preference():
     assert ROUTING.chain_for("high", REGISTRY, ALL_FOUR) == ["groq-large", "gemini-flash", "openai-sol",
-                                                             "claude-opus"]
+                                                             "claude-opus", "gemini-flash-lite"]
     assert ROUTING.chain_for("high", REGISTRY, ALL_FOUR, "anthropic") == ["claude-opus", "groq-large",
-                                                                          "gemini-flash", "openai-sol"]
+                                                                          "gemini-flash", "openai-sol",
+                                                                          "gemini-flash-lite"]
     assert ROUTING.chain_for("high", REGISTRY, ALL_FOUR, "openai")[0] == "openai-sol"
-    assert ROUTING.chain_for("high", REGISTRY, ALL_FOUR, "gemini")[0] == "gemini-flash"
+    # Preferring Gemini puts Gemini Flash first; Flash-Lite stays the last resort, after every other provider
+    assert ROUTING.chain_for("high", REGISTRY, ALL_FOUR, "gemini") == ["gemini-flash", "groq-large", "openai-sol",
+                                                                       "claude-opus", "gemini-flash-lite"]
     assert ROUTING.chain_for("high", REGISTRY, ALL_FOUR, "groq") == ROUTING.chain_for("high", REGISTRY, ALL_FOUR)
 
 
@@ -52,11 +55,13 @@ def test_no_preference_leaves_every_chain_unchanged():
             assert ROUTING.chain_for(tier, REGISTRY, providers, None) == ROUTING.chain_for(tier, REGISTRY, providers)
 
 
-def test_prefer_chain_keeps_several_preferred_models_in_order():
+def test_prefer_chain_moves_only_the_first_preferred_model():
+    """A provider's later model (a last resort like gemini-flash-lite) keeps its place."""
     names = ["groq-allam", "claude-haiku", "groq-small", "claude-sonnet"]
-    assert prefer_chain(names, REGISTRY, "anthropic") == ["claude-haiku", "claude-sonnet", "groq-allam",
-                                                          "groq-small"]
+    assert prefer_chain(names, REGISTRY, "anthropic") == ["claude-haiku", "groq-allam", "groq-small",
+                                                          "claude-sonnet"]
     assert prefer_chain(names, REGISTRY, None) == names
+    assert prefer_chain(names, REGISTRY, "gemini") == names          # no model on that provider: unchanged
 
 
 # ---------- ReliableClient.send ----------

@@ -245,7 +245,8 @@ def test_checker_calls_use_the_reliable_client_timeout_and_cache(tmp_path):
     checks = calls(deps, "check")
     assert len(checks) == 1                                                        # the second check was cached
     routing = deps.config.snapshot().routing
-    assert checks[0]["timeout"] == routing.timeout_for("groq-small")
+    # groq-small's timeout, longer for the checker's long prompt (length-aware), never past its cap
+    assert routing.timeout_for("groq-small") < checks[0]["timeout"] <= routing.model_timeout_caps["groq-small"]
     assert checks[0]["reasoning_effort"] == "low"
     assert last_row(deps).check_cost == 0                                          # a cached check costs nothing
 
@@ -253,7 +254,8 @@ def test_checker_calls_use_the_reliable_client_timeout_and_cache(tmp_path):
 def test_if_escalation_finds_no_model_the_last_answer_is_served():
     http, deps = app_with({"groq-small": FakeBehavior(check_reply=BAD_CHECK),
                            "groq-large": FakeBehavior(fail_before="server"),
-                           "gemini-flash": FakeBehavior(fail_before="server")})
+                           "gemini-flash": FakeBehavior(fail_before="server"),
+                           "gemini-flash-lite": FakeBehavior(fail_before="server")})     # high's last resort
     r = post(http)
     assert r.status_code == 200 and r.json()["model"] == "groq-small"
     assert r.headers["x-triage-escalated"] == "false"

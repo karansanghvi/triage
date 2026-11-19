@@ -2,7 +2,10 @@
 
 export type Tier = "low" | "medium" | "high"
 
-export type RequestMode = "api" | "byok" | "demo"
+export type RequestMode = "api" | "byok" | "demo" | "account"
+
+// What decided the tier: the classifier, the small-talk rule (a greeting: the cheapest model), or a named model
+export type RoutedBy = "classifier" | "small_talk" | "requested_model"
 
 export type RoutingInfo = {
   requestId: string
@@ -18,6 +21,7 @@ export type RoutingInfo = {
   cacheHit: boolean
   fellBack: boolean           // a backup model answered
   mode: RequestMode
+  routedBy?: RoutedBy         // missing on answers saved before it existed
 }
 
 // ---------- Messages in the conversation ----------
@@ -28,6 +32,7 @@ export type ChatError = {
   code: string                // e.g. "demo_limit_reached"
   message: string
   retryAfter?: number         // seconds, when Triage says when to try again
+  provider?: string           // display name of the provider that rejected a saved key, e.g. "Groq"
 }
 
 export type UserMessage = {

@@ -1,6 +1,7 @@
-import type { DemoStatus, Message, RoutingInfo, Tier, RequestMode } from "@/types/chat"
+import type { DemoStatus, Message, RoutingInfo, Tier, RequestMode, RoutedBy } from "@/types/chat"
 import { TriageError } from "@/lib/errors"
 import { qualityToTau } from "@/lib/quality"
+import { LANGUAGE_INSTRUCTION, withLanguageInstruction, type ApiMessage } from "@/lib/chatMessages"
 
 const BASE_URL = import.meta.env.VITE_TRIAGE_URL ?? "http://localhost:8000"
 const DEFAULT_MAX_PROMPT_CHARS = 8000
@@ -21,6 +22,7 @@ type ApiTriage = {
   cache: string
   fallback: string
   mode: RequestMode
+  routed_by?: RoutedBy | null
 }
 
 type ApiChatResponse = {
@@ -54,8 +56,6 @@ export type ChatResult = {
 }
 
 // ---------- Helpers ----------
-
-type ApiMessage = { role: "user" | "assistant"; content: string }
 
 // Only real, finished turns go to Triage: no "thinking" placeholders, no errors
 function toApiMessages(messages: Message[]): ApiMessage[] {
@@ -108,19 +108,33 @@ function toRoutingInfo(t: ApiTriage): RoutingInfo {
     cacheHit: t.cache === "hit",
     fellBack: t.fallback !== "none",
     mode: t.mode,
+    routedBy: t.routed_by ?? undefined,
   }
 }
 
 // ---------- Public functions ----------
 
+export type SendChatOptions = {
+  maxPromptChars?: number
+  sessionToken?: string | null   // given: account mode (the account's saved keys); not given: demo, as for guests
+}
+
+const TOO_LARGE_MESSAGE = "This conversation is too long to send. Start a new chat or shorten your message."
+
+
 export async function sendChat(
   messages: Message[],
   quality: number,
-  maxPromptChars: number = DEFAULT_MAX_PROMPT_CHARS
+  { maxPromptChars = DEFAULT_MAX_PROMPT_CHARS, sessionToken = null }: SendChatOptions = {}
 ): Promise<ChatResult> {
+  // Only the demo has a prompt limit: account mode sends the whole conversation. The demo counts every message,
+  // the language instruction too, so the history gets what is left.
+  const history = toApiMessages(messages)
   const body = {
     model: "auto",
-    messages: trimToLimit(toApiMessages(messages), maxPromptChars),
+    messages: withLanguageInstruction(
+      sessionToken ? history : trimToLimit(history, maxPromptChars - LANGUAGE_INSTRUCTION.length)
+    ),
   }
 
   let response: Response
@@ -130,6 +144,7 @@ export async function sendChat(
       headers: {
         "Content-Type": "application/json",
         "X-Triage-Quality": qualityToTau(quality).toFixed(2),
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
       },
       body: JSON.stringify(body),
     })
@@ -140,9 +155,13 @@ export async function sendChat(
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as ApiError
     const retryAfter = response.headers.get("Retry-After")
+    // An ended or unknown session gets the same 401 as a bad API key here: it means the session is over
+    if (sessionToken && response.status === 401 && data.error?.code === "invalid_api_key") {
+      throw new TriageError("invalid_session", "Please log in again.")
+    }
     throw new TriageError(
       data.error?.code ?? `http_${response.status}`,
-      data.error?.message ?? "Something went wrong. Please try again.",
+      data.error?.message ?? (response.status === 413 ? TOO_LARGE_MESSAGE : "Something went wrong. Please try again."),
       retryAfter ? Number(retryAfter) : undefined
     )
   }

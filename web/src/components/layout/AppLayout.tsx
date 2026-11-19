@@ -3,19 +3,22 @@ import Sidebar from "./Sidebar"
 import NamePrompt from "@/components/NamePrompt"
 import { DemoStatusProvider } from "@/context/DemoStatusContext"
 import { ChatsProvider } from "@/context/ChatsContext"
+import { ProviderKeysProvider } from "@/context/ProviderKeysContext"
 
 export default function AppLayout() {
   return (
     <DemoStatusProvider>
-      <ChatsProvider>
-        <div className="flex h-screen bg-background text-foreground">
-          <Sidebar />
-          <main className="flex-1 overflow-y-auto p-6">
-            <Outlet />
-          </main>
-          <NamePrompt />
-        </div>
-      </ChatsProvider>
+      <ProviderKeysProvider>
+        <ChatsProvider>
+          <div className="flex h-screen bg-background text-foreground">
+            <Sidebar />
+            <main className="flex-1 overflow-y-auto p-6">
+              <Outlet />
+            </main>
+            <NamePrompt />
+          </div>
+        </ChatsProvider>
+      </ProviderKeysProvider>
     </DemoStatusProvider>
   )
 }

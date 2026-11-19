@@ -48,7 +48,7 @@ def eligible(row) -> bool:
     # labels would spend the free quota on strangers' prompts, and an unknown mode is never assumed safe
     return (row.mode == "api" and row.requested_model == "auto" and row.status == "ok" and row.verified == "off"
             and row.tier in ("low", "medium") and row.fell_back is False and not row.escalated
-            and not row.cache_hit)
+            and not row.cache_hit and row.routed_by != "small_talk")     # no classifier decision to grade
 
 
 class JudgeSend:

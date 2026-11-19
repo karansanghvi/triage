@@ -1,44 +1,22 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Check, ChevronDown, Loader2 } from "lucide-react"
 import SettingsCard from "@/components/settings/SettingsCard"
 import ProviderKeyRow from "@/components/settings/ProviderKeyRow"
 import { useAccountApi } from "@/hooks/useAccountApi"
 import { useAuth } from "@/context/AuthContext"
-import { PROVIDERS, type Provider, type ProviderKey } from "@/lib/account"
+import { useProviderKeys } from "@/context/ProviderKeysContext"
+import { PROVIDERS, type Provider } from "@/lib/account"
 import { TriageError } from "@/lib/errors"
 
 export default function ProviderKeysPage() {
   const api = useAccountApi()
   const { user } = useAuth()
-  const [keys, setKeys] = useState<ProviderKey[] | null>(null)
-  const [loadError, setLoadError] = useState(false)
+  // Shared with the sidebar: changes here show there at once
+  const { keys, error: loadError, upsertKey: upsert, removeKey: remove } = useProviderKeys()
 
   const [prefSaving, setPrefSaving] = useState(false)
   const [prefSaved, setPrefSaved] = useState(false)
   const [prefError, setPrefError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    api
-      .listProviderKeys()
-      .then((list) => {
-        if (!cancelled) setKeys(list)
-      })
-      .catch(() => {
-        if (!cancelled) setLoadError(true)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [api])
-
-  function upsert(key: ProviderKey) {
-    setKeys((prev) => [...(prev ?? []).filter((k) => k.provider !== key.provider), key])
-  }
-
-  function remove(provider: Provider) {
-    setKeys((prev) => (prev ?? []).filter((k) => k.provider !== provider))
-  }
 
   // Only providers with a usable key can be preferred
   const usable = PROVIDERS.filter((p) => keys?.some((k) => k.provider === p.id && k.status !== "invalid"))

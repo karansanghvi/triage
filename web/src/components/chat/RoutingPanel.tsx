@@ -1,6 +1,6 @@
 import { formatCost, formatPercent } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { Message, RoutingInfo, Tier } from "@/types/chat"
+import type { Message, RequestMode, RoutingInfo, Tier } from "@/types/chat"
 import { Database, LifeBuoy } from "lucide-react"
 
 type RoutingPanelProps = {
@@ -33,10 +33,11 @@ const TIER_BAR: Record<Tier, string> = {
   high: "bg-warning",
 }
 
-const MODE_LABEL = {
+const MODE_LABEL: Record<RequestMode, string> = {
   demo: "Free demo",
   byok: "Using your own keys",
   api: "API",
+  account: "Using your keys",
 }
 
 function savedShare(routing: RoutingInfo): number | null {
@@ -46,6 +47,7 @@ function savedShare(routing: RoutingInfo): number | null {
 
 // Turns Triage's numbers into one plain sentence
 function explain(routing: RoutingInfo): string {
+  if (routing.routedBy === "small_talk") return "Small talk, so Triage used the cheapest model."
   const { tier, pLow, pMedium, tau } = routing
   if (tau === null || pLow === null) return routing.reason
 
@@ -131,7 +133,7 @@ function SelectedDetails({ routing }: { routing: RoutingInfo }) {
       </section>
 
       {/* Could a cheaper model handle it? */}
-      {routing.tau !== null && (
+      {routing.tau !== null && routing.routedBy !== "small_talk" && (
         <section>
           <p className="text-xs text-muted-foreground">Could a cheaper model handle it?</p>
           <div className="mt-3 space-y-3">

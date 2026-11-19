@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils"
 import { useDisplayName } from "@/hooks/useDisplayName"
 import { useAuth } from "@/context/AuthContext"
 import { useDemoStatus } from "@/context/DemoStatusContext"
+import { useProviderKeys } from "@/context/ProviderKeysContext"
 import ChatHistory from "./ChatHistory"
 
 type NavItem = {
@@ -58,9 +59,50 @@ export default function Sidebar() {
       {onChatPage ? <ChatHistory /> : <div className="flex-1" />}
 
       <div className="flex flex-col gap-3 pt-4">
-        {loading ? null : user ? <AccountRow /> : <GuestBottom />}
+        {loading ? null : user ? <AccountBottom /> : <GuestBottom />}
       </div>
     </aside>
+  )
+}
+
+/* ---------- Logged in: the demo card or "Using your keys", then the account row ---------- */
+
+function AccountBottom() {
+  const { loading, error, hasUsableKey, allRejected } = useProviderKeys()
+
+  // While loading (or if the keys couldn't be loaded), nothing extra: no flash of the wrong card
+  const known = !loading && !error
+  return (
+    <>
+      {known && (hasUsableKey ? <OwnKeysCard /> : <DemoCard forAccount allRejected={allRejected} />)}
+      <AccountRow />
+    </>
+  )
+}
+
+function OwnKeysCard() {
+  const { usableProviders } = useProviderKeys()
+  return (
+    <Link
+      to="/settings/provider-keys"
+      aria-label={`Using your keys: ${usableProviders.join(", ")}. Manage provider keys`}
+      className="block cursor-pointer rounded-xl border border-[#2A2D3D] bg-background p-4 transition-colors hover:border-[#3B4058] hover:bg-[#101119]"
+    >
+      <p className="flex items-center gap-2 whitespace-nowrap text-sm font-medium">
+        <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-[#4ADE80] shadow-[0_0_6px_rgba(74,222,128,0.6)]" />
+        Using your keys
+      </p>
+      <ul className="mt-2 flex flex-wrap gap-1.5">
+        {usableProviders.map((name) => (
+          <li
+            key={name}
+            className="rounded-full border border-[#2A2D3D] bg-[#1A1C26] px-2 py-0.5 text-[11px] text-[#C9CDD8]"
+          >
+            {name}
+          </li>
+        ))}
+      </ul>
+    </Link>
   )
 }
 
@@ -130,7 +172,12 @@ function formatResetTime(resetsAt: string): string | null {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
 }
 
-function DemoCard() {
+type DemoCardProps = {
+  forAccount?: boolean       // logged in without a working key: point to the key settings, not sign-up
+  allRejected?: boolean      // their saved keys were all rejected
+}
+
+function DemoCard({ forAccount = false, allRejected = false }: DemoCardProps) {
   const { status, loading } = useDemoStatus()
 
   // Demo is off or Triage is unreachable: don't show a card with made-up numbers
@@ -162,12 +209,21 @@ function DemoCard() {
 
       {resetTime && exhausted && <p className="mt-2 text-xs text-muted-foreground">Resets at {resetTime}</p>}
 
+      {forAccount && allRejected && (
+        <p className="mt-3 text-xs text-warning">
+          Your saved keys were rejected.{" "}
+          <Link to="/settings/provider-keys" className="font-medium underline underline-offset-2 hover:no-underline">
+            Fix your keys
+          </Link>
+        </p>
+      )}
+
       <Link
-        to="/signup"
+        to={forAccount ? "/settings/provider-keys" : "/signup"}
         className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-primary/15 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/25"
       >
         <KeyRound className="h-4 w-4" />
-        Use your own keys
+        {forAccount ? "Add your keys" : "Use your own keys"}
       </Link>
     </div>
   )

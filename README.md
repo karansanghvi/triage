@@ -21,10 +21,11 @@ steps are in [reports/PHASE_4.md](reports/PHASE_4.md).
 - **Streaming.** Answers can arrive piece by piece, with time-to-first-token measured.
 - **A model registry in config.** `config/models.yaml` lists every model with its provider, tier, and price. Tiers are ordered by real price (low < medium < high), so routing a request down a tier always saves money. Free models carry a `price_as` price, so savings numbers stay realistic.
 - **Honest costs.** Hidden reasoning ("thinking") tokens are counted as output, since providers bill them that way.
-- **One error type.** Every provider's errors become a `ProviderError` with a kind: `rate_limit`, `server`, `timeout`, `connection`, `client`, or `config`.
+- **One error type.** Every provider's errors become a `ProviderError` with a kind: `rate_limit`, `server`, `overloaded`, `timeout`, `connection`, `client`, or `config`. Timeouts include 408/504 and each provider's deadline errors; overloaded includes Gemini 503, Anthropic 529, OpenAI 503 and Groq 498.
 - **Reliability layer** (`app/reliability.py`):
-  - a timeout on every call
-  - retries with exponential backoff and full jitter, only for rate limits (429) and server errors (5xx)
+  - a timeout on every call, longer for long inputs: `base + timeout_per_1k_input_tokens x input tokens / 1000`, at most `timeout_cap_seconds` (per model, also for the first-token limit)
+  - a time budget per request across the whole chain (`request_time_budget_seconds`, 150): each call gets at most the time left, and when it runs out the rest are skipped
+  - retries with exponential backoff and full jitter, only for rate limits (429) and server errors (5xx); timeouts and overloads move straight to the next model
   - fallback chains per tier in `config/routing.yaml`, with backups on a different provider
   - a circuit breaker: 3 failures in a row skip a model for 60 seconds (server errors, timeouts and rate limits are about one model); connection and auth errors skip every model on that provider
   - every fallback logged for the dashboard
@@ -268,8 +269,19 @@ Streaming (`stream: true`) works the same way.
 
 Set a default with `PATCH /v1/account {"preferred_provider": "anthropic"}` (`null` clears it), or per request with
 `X-Triage-Prefer-Provider`, which overrides it. It applies only to `model: "auto"` and only to a provider you
-have a key for (otherwise it's ignored). The tier decision doesn't change: within each tier, that provider's
-models are tried first. Savings are then measured against that provider's strongest model.
+have a key for (otherwise it's ignored). The tier decision doesn't change: within each tier, that provider's model
+is tried first (its first model in the chain; a last-resort model such as `gemini-flash-lite` at the end of medium
+and high stays last). Savings are then measured against that provider's strongest model.
+
+### Small talk
+
+With `model: "auto"`, a message that is only a greeting or pleasantry ("hi", "Thanks!", "Good morning 👋") goes
+to the cheapest model without asking the classifier. The whole latest user message must be one of the phrases in
+`config/routing.yaml` (`small_talk.phrases`, editable), after trimming, lowercasing and removing trailing
+punctuation and emoji; "hi, can you help with X" is routed as usual. Fallbacks and answer checking work as
+always. These requests say `small_talk` in `X-Triage-Routed-By`, the response's `triage.routed_by` and the
+request log, and are left out of classifier training data, background labels and the `GET /v1/stats` numbers
+(counted on their own as `small_talk_requests`).
 
 ### Headers
 
@@ -291,7 +303,8 @@ models are tried first. Savings are then measured against that provider's strong
 | `X-Triage-Mode` | `account` for your requests (`api`, `byok`, `demo` otherwise) |
 | `X-Triage-Model`, `X-Triage-Tier` | The model that answered and its tier (`low`, `medium`, `high`) |
 | `X-Triage-Reason` | Why, in words, e.g. `cheap 0.400 < tau 0.860; medium 0.950 >= tau` |
-| `X-Triage-P-Low`, `X-Triage-P-Medium`, `X-Triage-Tau` | The predicted pass chances and the bar used (6 decimals; `model: "auto"` only) |
+| `X-Triage-P-Low`, `X-Triage-P-Medium`, `X-Triage-Tau` | The predicted pass chances and the bar used (6 decimals; `model: "auto"` only, not for small talk) |
+| `X-Triage-Routed-By` | What decided the tier: `classifier`, `small_talk` (see below) or `requested_model` |
 | `X-Triage-Preferred-Provider` | The preferred provider applied, or `none` |
 | `X-Triage-Fallback` | `primary->backup` when a backup answered, else `none` |
 | `X-Triage-Cache` | `hit`, `miss` or `bypass` (only `temperature: 0`, non-streaming answers are cached) |
@@ -339,6 +352,9 @@ Errors use OpenAI's shape, `{"error": {"message", "type", "param", "code"}}`.
 | 502 | `model_error` | The model failed while answering |
 | 503 | `all_models_failed` | No model could answer; try again |
 | 503 | `email_unavailable` | Password reset: the server has no email settings |
+| 503 | `provider_overloaded` | Every model that was tried was too busy (e.g. Gemini's "high demand" 503); the message names the provider |
+| 503 | `provider_unavailable` | Every model that was tried was busy or too slow (a mix of the two cases above and below) |
+| 504 | `provider_timeout` | Every model that was tried ran out of time (its timeout in `config/routing.yaml`); the message names the provider |
 | (in a stream) | `stream_interrupted` | The model failed after text was sent |
 
 ### Reference: account endpoints

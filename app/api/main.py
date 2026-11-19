@@ -52,6 +52,7 @@ from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_pre
                              parse_task, parse_verify, resolve_keys)
 from app.accounts.limits import AccountLimitError
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
+from app.router.small_talk import is_small_talk
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
@@ -65,7 +66,8 @@ logger = logging.getLogger("triage.api")
 request_logger = logging.getLogger("triage.requests")
 JSON_LOG_FIELDS = ("request_id", "timestamp", "key_id", "requested_model", "stream", "tier", "served_model",
                    "fell_back", "cache_hit", "status", "http_status", "error_kind", "latency_ms", "ttft_ms",
-                   "price_as_cost", "saved", "verified", "escalated", "decided_by", "training_eligible")
+                   "price_as_cost", "saved", "verified", "escalated", "decided_by", "routed_by",
+                   "training_eligible")
 
 
 def json_log_line(row: RequestRow) -> str:
@@ -196,6 +198,7 @@ def _apply_decision(row: RequestRow, d: core.RouteDecision) -> None:
     row.task_type, row.task_type_guessed = d.task_type, d.task_type_guessed
     row.tier, row.primary_model, row.served_model, row.fell_back = d.tier, d.primary_model, d.model, d.fell_back
     row.attempts = [_attempt_dict(a) for a in d.attempts]
+    row.routed_by = d.routed_by
 
 
 def _add_truncated_costs(row: RequestRow, attempts) -> None:
@@ -219,6 +222,7 @@ def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] =
             "X-Triage-Fallback": f"{d.primary_model}->{d.model}" if d.fell_back else "none",
             "X-Triage-Cache": cache, "X-Triage-Verified": verified,
             "X-Triage-Escalated": "true" if escalated else "false", "X-Triage-Check": check,
+            "X-Triage-Routed-By": d.routed_by,
             "X-Triage-Preferred-Provider": d.preferred_provider or "none", **_probability_headers(d)}
 
 
@@ -277,7 +281,7 @@ def triage_body(headers: dict) -> dict:
             "reason": headers["X-Triage-Reason"], "cost": number("X-Triage-Cost"),
             "strong_cost": number("X-Triage-Strong-Cost"), "saved": number("X-Triage-Saved"),
             "cache": headers["X-Triage-Cache"], "fallback": headers["X-Triage-Fallback"],
-            "mode": headers.get("X-Triage-Mode"),
+            "mode": headers.get("X-Triage-Mode"), "routed_by": headers.get("X-Triage-Routed-By"),
             "preferred_provider": None if preferred in (None, "none") else preferred}
 
 
@@ -316,6 +320,43 @@ def rejected_key_providers(attempts) -> list:
     if not failed or any(a.error_kind != "auth" for a in failed):
         return []
     return list(dict.fromkeys(a.provider for a in failed))
+
+
+def providers_if_every_failure_was(attempts, *kinds: str) -> list:
+    """The providers tried, if EVERY failed attempt had one of these error kinds (e.g. "timeout"); otherwise []
+    (other failures keep the usual 503). In the order they were tried."""
+    failed = [a for a in attempts if a.outcome == "error"]
+    if not failed or any(a.error_kind not in kinds for a in failed):
+        return []
+    return list(dict.fromkeys(a.provider for a in failed))
+
+
+def unavailable_message(providers: list, own_keys: bool) -> str:
+    names = _join([PROVIDER_NAMES.get(p, p) for p in providers])
+    if own_keys:
+        return (f"{names} couldn't answer right now (busy or too slow). Try again in a moment, or add another "
+                "provider key so Triage can fall back.")
+    return f"{names} couldn't answer right now (busy or too slow). Try again in a moment."
+
+
+def timed_out_providers(attempts) -> list:
+    return providers_if_every_failure_was(attempts, "timeout")
+
+
+def overloaded_message(providers: list, own_keys: bool) -> str:
+    names = _join([PROVIDER_NAMES.get(p, p) for p in providers])
+    verb = "are" if len(providers) > 1 else "is"
+    if own_keys:
+        return (f"{names} {verb} very busy right now. Try again in a moment, or add another provider key so Triage "
+                "can fall back.")
+    return f"{names} {verb} very busy right now. Try again in a moment."
+
+
+def timeout_message(providers: list, own_keys: bool) -> str:
+    names = _join([PROVIDER_NAMES.get(p, p) for p in providers])
+    if own_keys:       # BYOK or an account: another key of theirs gives Triage something to fall back to
+        return f"{names} took too long to answer. Try again, or add another provider key so Triage can fall back."
+    return f"{names} took too long to answer. Try again."
 
 
 def _join(items: list) -> str:
@@ -400,7 +441,7 @@ CORS_REQUEST_HEADERS = ["Authorization", "Content-Type", *PROVIDER_KEY_HEADERS.v
                         "X-Triage-Task", "X-Triage-Verify", "X-Triage-Prefer-Provider"]
 CORS_RESPONSE_HEADERS = ["X-Triage-Request-Id", "X-Triage-Model", "X-Triage-Tier", "X-Triage-Reason",
                          "X-Triage-Fallback", "X-Triage-Cache", "X-Triage-Verified", "X-Triage-Escalated",
-                         "X-Triage-Check", "X-Triage-Preferred-Provider", "X-Triage-P-Low", "X-Triage-P-Medium", "X-Triage-Tau",
+                         "X-Triage-Check", "X-Triage-Routed-By", "X-Triage-Preferred-Provider", "X-Triage-P-Low", "X-Triage-P-Medium", "X-Triage-Tau",
                          "X-Triage-Cost", "X-Triage-Strong-Cost", "X-Triage-Saved", "X-Triage-Mode",
                          "X-Triage-Demo-Remaining", "X-Triage-Demo-Limit", "X-Triage-Demo-Resets",
                          "X-Triage-Max-Tokens", "Retry-After"]
@@ -687,6 +728,11 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                          mode=mode, user_id=who.user_id if account else None)
         if not auto and body.model in deps.registry:       # a named model is its own primary, even if it fails
             row.primary_model, row.tier = body.model, deps.registry[body.model].tier
+        # What decides the tier, known before routing (so a request whose every model fails says it too)
+        small_talk = auto and is_small_talk(messages, snapshot.routing.small_talk_phrases)
+        row.routed_by = "small_talk" if small_talk else ("classifier" if auto else "requested_model")
+        if small_talk:                                      # no classifier, no quality dial
+            row.tau = row.classifier = None
 
         logged, admitted = [], []          # admitted: this request's DemoLimiter Admission, once counted
         invalidate = []                    # account: (provider, redacted detail) of saved keys a provider rejected
@@ -793,6 +839,21 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 await finish("error", 401, "invalid_provider_key")
                 raise APIError(401, invalid_key_message(rejected, saved_providers), code="invalid_provider_key") \
                     from None
+            timed_out = timed_out_providers(error.attempts)
+            if timed_out:                                   # every model ran out of time: say who, as a 504
+                await finish("error", 504, "provider_timeout")
+                raise APIError(504, timeout_message(timed_out, byok), "server_error",
+                               code="provider_timeout") from None
+            overloaded = providers_if_every_failure_was(error.attempts, "overloaded")
+            if overloaded:                                  # every model was too busy: say who
+                await finish("error", 503, "provider_overloaded")
+                raise APIError(503, overloaded_message(overloaded, byok), "server_error",
+                               code="provider_overloaded") from None
+            busy_or_slow = providers_if_every_failure_was(error.attempts, "overloaded", "timeout")
+            if busy_or_slow:                                # a mix of the two: one message for both
+                await finish("error", 503, "provider_unavailable")
+                raise APIError(503, unavailable_message(busy_or_slow, byok), "server_error",
+                               code="provider_unavailable") from None
             await finish("error", 503, "all_models_failed")
             raise APIError(503, f"No model could answer: {error}", "server_error", code="all_models_failed") from None
         decision = routed.decision
