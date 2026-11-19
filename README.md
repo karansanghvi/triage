@@ -442,8 +442,10 @@ there on purpose: the server refuses to start rather than run with a guessable v
 | `TRIAGE_PUBLIC` | no | `off` | `on`: the free demo and BYOK without a Triage key |
 | `TRIAGE_ACCOUNTS` | no | `off` | `on`: user accounts and account chat |
 | `TRIAGE_ENCRYPTION_KEYS` | with accounts | none | Encrypts saved provider keys: `k2:<base64>,k1:<base64>` |
-| `RESEND_API_KEY`, `TRIAGE_EMAIL_FROM` | for password reset | none | Resend API key and sender address; without both, the reset endpoints answer 503 |
-| `TRIAGE_EMAIL_LOGO_URL` | no | none | An `https://` URL of a hosted PNG logo for reset emails; empty: a plain blue square |
+| `RESEND_API_KEY`, `TRIAGE_EMAIL_FROM` | for emails | none | Resend API key and sender address; without both, the reset endpoints answer 503 and no welcome email is sent |
+| `TRIAGE_EMAIL_LOGO_URL` | no | none | An `https://` URL of a hosted PNG logo for emails; empty or not serving an image: a plain blue square |
+| `TRIAGE_APP_URL` | for email links | none | The website (e.g. `https://gettriage.dev`, locally `http://localhost:5173`); the only place email links go. Empty: emails without links |
+| `TRIAGE_PUBLIC_API_URL` | no | `https://api.gettriage.dev` | The API address shown in the welcome email's code sample |
 | `TRIAGE_DEV_EMAIL_LOG` | no | `off` | `on`: print reset codes to the console instead of emailing (local development only) |
 | `TRIAGE_CORS_ORIGINS` | for a website | none | Browser origins allowed to call the API |
 | `TRIAGE_TRUSTED_PROXY_HOPS` | behind a proxy | `0` | Proxies that append to `X-Forwarded-For` (visitor IPs) |
@@ -481,9 +483,9 @@ Keep them in your host's secret settings (e.g. Render's environment), never in t
 Request logs from before the database layer (`data/logs/requests.sqlite3`) aren't opened any more; copy them in
 with `venv/bin/python scripts/import_sqlite_log.py <file>` (safe to re-run; the file is only read).
 
-### Password reset email (Resend)
+### Emails: password reset and welcome (Resend)
 
-Reset codes are sent with [Resend](https://resend.com) (`POST https://api.resend.com/emails`,
+Reset codes and the welcome email are sent with [Resend](https://resend.com) (`POST https://api.resend.com/emails`,
 [API reference](https://resend.com/docs/api-reference/emails/send-email)).
 
 1. In Resend, verify the domain you'll send from (DNS records), and create an API key with sending access.
@@ -497,9 +499,22 @@ Reset codes are sent with [Resend](https://resend.com) (`POST https://api.resend
    `image/*` content-type, or can't be reached, it's ignored with one startup warning and emails show the plain
    blue square instead of a broken image. Restart after fixing the hosting. In Resend's
    domain settings, keep open and click tracking off: the email has no tracking of its own.
-4. Check the server's log line for each request: `{"event":"password_reset_request","outcome":"sent"}`, or
+4. Set `TRIAGE_APP_URL` to the website (e.g. `https://gettriage.dev`; locally `http://localhost:5173`): every link
+   in the emails goes to one of its pages (`/settings/get-started`, `/settings/provider-keys`,
+   `/settings/api-keys`, and the site itself in the footer). `https://` is required, except `http://` for
+   localhost. Unset or invalid: emails are sent without links or buttons, and startup logs one warning. Set
+   `TRIAGE_PUBLIC_API_URL` to the API's public address for the welcome email's code sample (default
+   `https://api.gettriage.dev`; a trailing `/v1` is removed).
+5. Check the server's log line for each request: `{"event":"password_reset_request","outcome":"sent"}`, or
    `send_failed` with a `detail` such as `resend_403`. Nothing else about the email is logged. A failed send
    isn't retried; the user can ask again after 60 seconds.
+
+**Welcome email.** After each successful signup (`POST /v1/auth/signup`), a background task sends one welcome
+email: three setup steps (add a provider key, create an API key, point the OpenAI client at Triage) and a button to
+the settings. Signup never waits for it or fails because of it. The log line is
+`{"event":"welcome_email","outcome":"sent"}`, or `send_failed` with a short `detail`; a failed send isn't retried.
+It's sent only at signup, once per account. Without Resend settings nothing is sent and signup works as usual;
+with `TRIAGE_DEV_EMAIL_LOG=on` the console shows only `welcome email for user <id>`.
 
 Without both variables the server still starts, logs a warning naming what's missing, and the three reset
 endpoints answer 503 `email_unavailable`. Fake mode (`TRIAGE_FAKE_MODELS=1`) never emails.

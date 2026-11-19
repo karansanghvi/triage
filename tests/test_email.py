@@ -177,7 +177,7 @@ def test_the_server_starts_when_the_logo_host_is_down(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="triage.api"), TestClient(application) as http:
         assert http.get("/v1/models").status_code in (200, 401)
     assert deps.email_sender.available and deps.email_sender.logo_url is None
-    assert "reset emails will show the plain logo mark: TRIAGE_EMAIL_LOGO_URL is unreachable" in caplog.text
+    assert "emails will show the plain logo mark: TRIAGE_EMAIL_LOGO_URL is unreachable" in caplog.text
 
 def test_the_server_refuses_the_dev_log_behind_a_proxy(monkeypatch):
     application, _ = startup_app(monkeypatch, TRIAGE_DEV_EMAIL_LOG="on", TRIAGE_TRUSTED_PROXY_HOPS="1")

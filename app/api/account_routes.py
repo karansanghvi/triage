@@ -34,6 +34,7 @@ Every database call and password hash runs in a worker thread.
 import json
 import logging
 import unicodedata
+import uuid
 from typing import Optional
 
 import anyio
@@ -190,7 +191,7 @@ def account_router() -> APIRouter:
     # ----- sign up, log in, log out, me -----
 
     @router.post("/v1/auth/signup", status_code=201)
-    async def signup(body: SignupBody, request: Request):
+    async def signup(body: SignupBody, request: Request, background: BackgroundTasks):
         deps, who = request.app.state.deps, visitor(request)
         try:
             email = normalize_email(body.email)
@@ -218,6 +219,8 @@ def account_router() -> APIRouter:
                            code="email_taken", param="email") from None
         token, session = await anyio.to_thread.run_sync(deps.accounts.create_session, user.id)
         _log("signup", "ok", who)
+        if deps.email_sender is not None and deps.email_sender.available:
+            background.add_task(send_welcome, deps, user, who)       # after the response: never slows signup
         return _session_response(user, token, session, status=201)
 
     @router.post("/v1/auth/login")
@@ -346,6 +349,17 @@ def account_router() -> APIRouter:
         except RateLimited as error:
             _log(event, "rate_limited", visitor(request), kind)
             raise _too_many(error, what) from None
+
+    async def send_welcome(deps, user, who: str) -> None:
+        """Once, after a signup's 201 has gone out. A failure is logged (outcome and short kind) and not retried."""
+        try:
+            await anyio.to_thread.run_sync(lambda: deps.email_sender.send_welcome(
+                user.email, user.id, str(uuid.uuid4()), display_name=user.display_name))
+            _log("welcome_email", "sent", who)
+        except EmailSendError as error:
+            _log("welcome_email", "send_failed", who, error.kind)
+        except Exception as error:             # the type only: its text could quote the email
+            _log("welcome_email", "error", who, type(error).__name__)
 
     async def send_reset_code(deps, email: str, who: str) -> None:
         """After the 202 has gone out, so the response takes as long whether or not the account exists."""
