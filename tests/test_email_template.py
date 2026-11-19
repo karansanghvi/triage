@@ -2,12 +2,15 @@
 and what reaches Resend. No network."""
 import html as htmllib
 import json
+import logging
 import re
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from app.accounts.email import ResendSender, sender_from_env
+from app.accounts.email import ResendSender, logo_url_problem, sender_from_env
+from app.api.main import set_up_email
 from app.accounts.email_template import LogoUrlError, parse_logo_url, reset_email
 
 CODE = "042917"
@@ -92,7 +95,13 @@ def test_without_a_logo_url_the_blue_square_stays_and_there_is_no_image():
 
 def test_with_a_logo_url_it_sits_in_the_36px_blue_square():
     _, _, html = reset_email(CODE, "Ada", LOGO)
-    assert f'<img src="{LOGO}" width="36" height="36"' in html and 'bgcolor="#2563EB"' in html
+    assert 'bgcolor="#2563EB"' in html
+    (tag,) = re.findall(r"<img [^>]*>", html)
+    attrs = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', tag))
+    assert attrs["src"] == LOGO and attrs["src"].startswith("https://")
+    assert attrs["width"] == "36" and attrs["height"] == "36" and attrs["border"] == "0"
+    assert attrs["alt"] == "Triage"                                     # shown when images are blocked
+    assert "display: block" in attrs["style"]
 
 
 # ---------- the logo URL ----------
@@ -145,3 +154,82 @@ def test_no_address_user_id_or_token_in_the_message(name, logo):
         assert EMAIL not in part and "ada@" not in part and USER_ID not in part and "idem-key-1" not in part
         assert not TOKEN_SHAPES.search(part)
     assert CODE in body["text"] and CODE in body["html"]
+
+
+# ---------- the startup check of the logo URL (one HEAD, mocked) ----------
+
+def logo_server(respond):
+    """A mock transport: `respond(request)` answers the logo HEAD; Resend sends get a 200. Records every request."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if request.url.host == "api.resend.com":
+            return httpx.Response(200, json={"id": "e1"})
+        return respond(request)
+    return httpx.MockTransport(handler), seen
+
+
+def started(respond, caplog):
+    transport, seen = logo_server(respond)
+    sender = ResendSender(RESEND_ENV["RESEND_API_KEY"], RESEND_ENV["TRIAGE_EMAIL_FROM"], transport=transport,
+                          logo_url=LOGO)
+    with caplog.at_level(logging.WARNING, logger="triage.api"):
+        set_up_email(SimpleNamespace(email_sender=sender))
+    return sender, seen
+
+
+def test_a_logo_that_serves_an_image_is_kept(caplog):
+    sender, seen = started(lambda r: httpx.Response(200, headers={"content-type": "image/png"}), caplog)
+    assert sender.logo_url == LOGO and sender.logo_problem is None
+    assert [(r.method, str(r.url)) for r in seen] == [("HEAD", LOGO)]
+    assert "logo" not in caplog.text
+
+
+def raise_(error):
+    def respond(request):
+        raise error
+    return respond
+
+
+@pytest.mark.parametrize("respond, reason", [
+    (lambda r: httpx.Response(404), "TRIAGE_EMAIL_LOGO_URL returned 404"),
+    (lambda r: httpx.Response(200, headers={"content-type": "text/html; charset=utf-8"}),
+     "TRIAGE_EMAIL_LOGO_URL is not an image (content-type text/html)"),
+    (lambda r: httpx.Response(200), "TRIAGE_EMAIL_LOGO_URL is not an image (content-type missing)"),
+    (raise_(httpx.ReadTimeout("slow")), "TRIAGE_EMAIL_LOGO_URL is unreachable (timed out)"),
+    (raise_(httpx.ConnectError("no such host")), "TRIAGE_EMAIL_LOGO_URL is unreachable"),
+    (raise_(RuntimeError("anything else")), "TRIAGE_EMAIL_LOGO_URL could not be checked (RuntimeError)"),
+])
+def test_a_broken_logo_falls_back_to_the_square_with_one_warning(respond, reason, caplog):
+    sender, _ = started(respond, caplog)
+    assert sender.logo_url is None and sender.logo_problem == reason
+    warnings = [m for m in caplog.messages if "logo" in m]
+    assert warnings == [f"reset emails will show the plain logo mark: {reason}"]
+    assert LOGO not in caplog.text and "example" not in caplog.text
+    _, _, html = reset_email(CODE, "Ada", sender.logo_url)
+    assert "<img" not in html and 'bgcolor="#2563EB"' in html
+
+
+def test_the_logo_is_checked_once_not_per_email(caplog):
+    sender, seen = started(lambda r: httpx.Response(200, headers={"content-type": "image/png"}), caplog)
+    for n in range(3):
+        sender.send_reset_code(EMAIL, USER_ID, CODE, f"idem-{n}", display_name="Ada")
+    assert [r.method for r in seen] == ["HEAD", "POST", "POST", "POST"]
+
+
+def test_no_logo_url_means_no_request(caplog):
+    transport, seen = logo_server(lambda r: httpx.Response(500))
+    sender = ResendSender(RESEND_ENV["RESEND_API_KEY"], RESEND_ENV["TRIAGE_EMAIL_FROM"], transport=transport)
+    set_up_email(SimpleNamespace(email_sender=sender))
+    assert seen == [] and sender.logo_problem is None
+
+
+def test_redirects_to_an_image_are_followed():
+    def respond(request):
+        if request.url.path == "/triage-logo.png":
+            return httpx.Response(301, headers={"location": "https://cdn.example.dev/v2/logo.png"})
+        return httpx.Response(200, headers={"content-type": "image/png"})
+    transport, _ = logo_server(respond)
+    assert logo_url_problem(LOGO, transport) is None
+

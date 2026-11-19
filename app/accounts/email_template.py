@@ -71,9 +71,11 @@ def reset_email(code: str, display_name: Optional[str] = None, logo_url: Optiona
 
 def _logo(logo_url: Optional[str]) -> str:
     if logo_url:
-        inner = (f'<img src="{html.escape(logo_url, quote=True)}" width="36" height="36" alt="" '
+        # alt names the product if images are blocked; width/height/border attributes for older clients
+        inner = (f'<img src="{html.escape(logo_url, quote=True)}" width="36" height="36" border="0" alt="Triage" '
                  'style="display: block; width: 36px; height: 36px; border: 0; outline: none; '
-                 'text-decoration: none; border-radius: 8px;">')
+                 'text-decoration: none; border-radius: 8px; font-family: sans-serif; font-size: 10px; '
+                 'color: #FFFFFF;">')
     else:
         inner = "&nbsp;"                         # the blue square alone still reads as the mark
     return ('<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'

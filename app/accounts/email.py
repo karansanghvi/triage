@@ -52,6 +52,28 @@ class EmailSendError(Exception):
 # ---------- the message (app/accounts/email_template.py) ----------
 
 LOGO_URL_ENV = "TRIAGE_EMAIL_LOGO_URL"
+LOGO_CHECK_TIMEOUT = httpx.Timeout(5.0)
+
+
+def logo_url_problem(url: str, transport: Optional[httpx.BaseTransport] = None) -> Optional[str]:
+    """One HEAD request to the logo URL. None if it answers 200 with an image/* content-type; otherwise a short
+    reason naming the variable (never the URL). Never raises: a failed check only means the plain mark is used."""
+    try:
+        with httpx.Client(transport=transport, timeout=LOGO_CHECK_TIMEOUT, follow_redirects=True,
+                          headers={"User-Agent": USER_AGENT}) as client:
+            response = client.head(url)
+    except httpx.TimeoutException:
+        return f"{LOGO_URL_ENV} is unreachable (timed out)"
+    except httpx.HTTPError:
+        return f"{LOGO_URL_ENV} is unreachable"
+    except Exception as error:                       # e.g. a malformed URL: never stop the server starting
+        return f"{LOGO_URL_ENV} could not be checked ({type(error).__name__})"
+    if response.status_code != 200:
+        return f"{LOGO_URL_ENV} returned {response.status_code}"
+    kind = response.headers.get("content-type", "").split(";")[0].strip().lower()
+    if not kind.startswith("image/"):
+        return f"{LOGO_URL_ENV} is not an image (content-type {kind or 'missing'})"
+    return None
 
 
 # ---------- senders ----------
@@ -68,6 +90,14 @@ class ResendSender:
 
     def __repr__(self) -> str:
         return "ResendSender()"
+
+    def check_logo(self) -> None:
+        """At startup, once: if the logo URL doesn't serve an image, send the plain blue mark instead of a broken
+        image (logo_problem says why). Not repeated per email."""
+        if self.logo_url:
+            problem = logo_url_problem(self.logo_url, self._transport)
+            if problem:
+                self.logo_url, self.logo_problem = None, problem
 
     def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str,
                         display_name: Optional[str] = None) -> None:

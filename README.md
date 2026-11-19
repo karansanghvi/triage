@@ -493,7 +493,9 @@ Reset codes are sent with [Resend](https://resend.com) (`POST https://api.resend
    anything else (such as a quote left on one end) is refused at startup with a warning naming the variable, and
    the reset endpoints answer 503 until it's fixed.
 3. Optional: host the logo as a PNG (72x72, shown at 36x36) and set `TRIAGE_EMAIL_LOGO_URL` to its `https://` URL.
-   An unusable URL is ignored with a startup warning, and emails show the plain blue square instead. In Resend's
+   At startup Triage sends one HEAD request (5 s timeout). If the URL is unusable, doesn't answer 200 with an
+   `image/*` content-type, or can't be reached, it's ignored with one startup warning and emails show the plain
+   blue square instead of a broken image. Restart after fixing the hosting. In Resend's
    domain settings, keep open and click tracking off: the email has no tracking of its own.
 4. Check the server's log line for each request: `{"event":"password_reset_request","outcome":"sent"}`, or
    `send_failed` with a `detail` such as `resend_403`. Nothing else about the email is logged. A failed send
