@@ -83,20 +83,15 @@ function AccountBottom() {
 function OwnKeysCard() {
   const { usableProviders } = useProviderKeys()
   return (
-    <div className="rounded-xl border border-border bg-background p-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="flex items-center gap-2 whitespace-nowrap text-sm font-medium">
-          <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-[#4ADE80] shadow-[0_0_6px_rgba(74,222,128,0.6)]" />
-          Using your keys
-        </p>
-        <Link
-          to="/settings/provider-keys"
-          aria-label="Manage provider keys"
-          className="shrink-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          Manage
-        </Link>
-      </div>
+    <Link
+      to="/settings/provider-keys"
+      aria-label={`Using your keys: ${usableProviders.join(", ")}. Manage provider keys`}
+      className="block cursor-pointer rounded-xl border border-[#2A2D3D] bg-background p-4 transition-colors hover:border-[#3B4058] hover:bg-[#101119]"
+    >
+      <p className="flex items-center gap-2 whitespace-nowrap text-sm font-medium">
+        <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-[#4ADE80] shadow-[0_0_6px_rgba(74,222,128,0.6)]" />
+        Using your keys
+      </p>
       <ul className="mt-2 flex flex-wrap gap-1.5">
         {usableProviders.map((name) => (
           <li
@@ -107,7 +102,7 @@ function OwnKeysCard() {
           </li>
         ))}
       </ul>
-    </div>
+    </Link>
   )
 }
 
