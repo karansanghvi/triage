@@ -19,6 +19,16 @@ fallback_chains:
   medium: [groq-small, gemini-flash, openai-terra, claude-sonnet, gemini-flash-lite] # gemini-flash: different provider, at least medium quality
   high: [groq-large, gemini-flash, openai-sol, claude-opus, gemini-flash-lite]       # gemini-flash: free tier is tiny (20/day), backup only
 
+# Small talk: a model="auto" request whose WHOLE latest user message is one of these goes to the low tier without
+# asking the classifier (decided by "small_talk" in the log, X-Triage-Routed-By and the triage object). Compared
+# after trimming, lowercasing, collapsing spaces and removing trailing punctuation and emoji, so "Thanks!!" and
+# "Good morning 👋" match, but "hi, can you help with X" goes to the classifier as usual. The low chain's normal
+# fallbacks apply, answer checking is unchanged, and these requests are never used for training, background
+# labels or the savings stats. Edit the list freely; remove the section to turn small talk off.
+small_talk:
+  phrases: [hi, hey, hello, hiya, yo, good morning, good afternoon, good evening, thanks, thank you, thx, ty,
+            ok, okay, cool, great, nice, bye, goodbye]
+
 # Providers a request WITHOUT its own keys may use (Triage's own keys, or the local Ollama). Models on any other
 # provider are dropped from every chain for those requests before anything is tried: no attempt, no fallback
 # event, nothing logged. An explicit list, not "whichever keys are in .env", so adding OPENAI_API_KEY to .env

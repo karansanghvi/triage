@@ -92,6 +92,9 @@ class RoutingConfig:
     # The most one send() may take across its whole fallback chain, retries and backoff included; each call's
     # timeout is cut to the time left. None = no budget (eval/ builds its own RoutingConfig without one).
     request_time_budget_seconds: Optional[float] = None
+    # Small talk (routing.yaml small_talk.phrases, normalized): a model="auto" request whose whole latest user
+    # message is one of these goes to the low tier without the classifier (app/router/small_talk.py)
+    small_talk_phrases: frozenset = frozenset()
 
     def _scaled(self, model_name: str, base: float, input_tokens: int) -> float:
         """base + per_1k x input_tokens / 1000, at most the model's cap."""
@@ -250,6 +253,7 @@ def routing_from_dict(data: dict, registry: dict) -> RoutingConfig:
     budget = data.get("request_time_budget_seconds")
     budget = None if budget is None else float(_positive_number(budget, "request_time_budget_seconds"))
     return RoutingConfig(chains=chains, retry=retry, breaker=breaker, timeout_seconds=timeout,
+                         small_talk_phrases=_load_small_talk(data.get("small_talk")),
                          model_timeout_per_1k=per_1k, model_timeout_caps=caps, request_time_budget_seconds=budget,
                          generation=_load_generation(data.get("generation")),
                          model_params=_load_model_params(data.get("model_params"), registry),
@@ -312,6 +316,25 @@ def _load_streaming(raw, registry: dict) -> tuple:
             raise ValueError(f"routing.yaml: streaming.model_first_token_timeouts lists unknown model '{name}'")
         out[name] = float(_positive_number(seconds, f"streaming.model_first_token_timeouts.{name}"))
     return default, out
+
+
+def _load_small_talk(raw) -> frozenset:
+    """small_talk: {phrases: [...]}: normalized like the messages they are compared with. None = no small talk."""
+    from app.router.small_talk import normalize
+    if raw is None:
+        return frozenset()
+    if not isinstance(raw, dict) or set(raw) - {"phrases"}:
+        raise ValueError("routing.yaml: 'small_talk' must be a mapping with one key, 'phrases'")
+    phrases = raw.get("phrases") or []
+    if not isinstance(phrases, list) or not all(isinstance(p, str) for p in phrases):
+        raise ValueError("routing.yaml: 'small_talk.phrases' must be a list of strings")
+    out = set()
+    for phrase in phrases:
+        norm = normalize(phrase)
+        if not norm:
+            raise ValueError(f"routing.yaml: small_talk phrase {phrase!r} is empty once normalized")
+        out.add(norm)
+    return frozenset(out)
 
 
 def _load_per_model_seconds(raw, registry: dict, section: str) -> dict:

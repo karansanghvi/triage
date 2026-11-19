@@ -273,6 +273,16 @@ have a key for (otherwise it's ignored). The tier decision doesn't change: withi
 is tried first (its first model in the chain; a last-resort model such as `gemini-flash-lite` at the end of medium
 and high stays last). Savings are then measured against that provider's strongest model.
 
+### Small talk
+
+With `model: "auto"`, a message that is only a greeting or pleasantry ("hi", "Thanks!", "Good morning 👋") goes
+to the cheapest model without asking the classifier. The whole latest user message must be one of the phrases in
+`config/routing.yaml` (`small_talk.phrases`, editable), after trimming, lowercasing and removing trailing
+punctuation and emoji; "hi, can you help with X" is routed as usual. Fallbacks and answer checking work as
+always. These requests say `small_talk` in `X-Triage-Routed-By`, the response's `triage.routed_by` and the
+request log, and are left out of classifier training data, background labels and the `GET /v1/stats` numbers
+(counted on their own as `small_talk_requests`).
+
 ### Headers
 
 **Request** (all optional):
@@ -293,7 +303,8 @@ and high stays last). Savings are then measured against that provider's stronges
 | `X-Triage-Mode` | `account` for your requests (`api`, `byok`, `demo` otherwise) |
 | `X-Triage-Model`, `X-Triage-Tier` | The model that answered and its tier (`low`, `medium`, `high`) |
 | `X-Triage-Reason` | Why, in words, e.g. `cheap 0.400 < tau 0.860; medium 0.950 >= tau` |
-| `X-Triage-P-Low`, `X-Triage-P-Medium`, `X-Triage-Tau` | The predicted pass chances and the bar used (6 decimals; `model: "auto"` only) |
+| `X-Triage-P-Low`, `X-Triage-P-Medium`, `X-Triage-Tau` | The predicted pass chances and the bar used (6 decimals; `model: "auto"` only, not for small talk) |
+| `X-Triage-Routed-By` | What decided the tier: `classifier`, `small_talk` (see below) or `requested_model` |
 | `X-Triage-Preferred-Provider` | The preferred provider applied, or `none` |
 | `X-Triage-Fallback` | `primary->backup` when a backup answered, else `none` |
 | `X-Triage-Cache` | `hit`, `miss` or `bypass` (only `temperature: 0`, non-streaming answers are cached) |

@@ -90,6 +90,8 @@ class RequestRow:
     feature_version: Optional[str] = None  # features.FEATURE_VERSION
     embedding_model: Optional[str] = None  # embeddings.MODEL_NAME
     training_eligible: bool = False        # auto, ok, no fallback, Phase 2 settings, not a cache hit (Step 8)
+    # Phase 5 (migration 0008; last, as the column was added last)
+    routed_by: Optional[str] = None        # classifier | small_talk | requested_model (what decided the tier)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -134,9 +136,11 @@ def is_training_eligible(row: RequestRow) -> bool:
     served from the response cache (a cached answer is a repeat: it adds no new information and would
     over-weight repeated prompts in retraining), and only from an "api" request (a Triage server key).
     An allow-list: BYOK, demo, account and any future or unknown mode are never eligible (their prompts are a
-    user's or a public visitor's)."""
+    user's or a public visitor's). Small talk is never eligible: the classifier didn't decide it, and greetings
+    would teach it nothing."""
     return (row.mode == "api" and row.requested_model == "auto" and row.status == "ok" and row.fell_back is False
-            and not row.escalated and row.settings_match_training is True and not row.cache_hit)
+            and not row.escalated and row.settings_match_training is True and not row.cache_hit
+            and row.routed_by != "small_talk")
 
 
 @dataclass

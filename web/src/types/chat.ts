@@ -4,6 +4,9 @@ export type Tier = "low" | "medium" | "high"
 
 export type RequestMode = "api" | "byok" | "demo" | "account"
 
+// What decided the tier: the classifier, the small-talk rule (a greeting: the cheapest model), or a named model
+export type RoutedBy = "classifier" | "small_talk" | "requested_model"
+
 export type RoutingInfo = {
   requestId: string
   model: string               // e.g. "groq-small"
@@ -18,6 +21,7 @@ export type RoutingInfo = {
   cacheHit: boolean
   fellBack: boolean           // a backup model answered
   mode: RequestMode
+  routedBy?: RoutedBy         // missing on answers saved before it existed
 }
 
 // ---------- Messages in the conversation ----------

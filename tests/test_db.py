@@ -17,7 +17,7 @@ def engine_at(tmp_path, name="t.sqlite3"):
 
 def test_opening_a_new_sqlite_file_creates_the_schema_at_the_latest_revision(tmp_path):
     engine = engine_at(tmp_path)
-    assert db.current_revision(engine) == db.head_revision() == "0007"
+    assert db.current_revision(engine) == db.head_revision() == "0008"
     raw = sqlite3.connect(tmp_path / "t.sqlite3")
     tables = {r[0] for r in raw.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"requests", "labels", "visitor_day", "demo_day", "users", "sessions", "auth_attempts",
@@ -86,7 +86,7 @@ def test_a_database_behind_the_code_is_refused_unless_sqlite(tmp_path, monkeypat
     engine = engine_at(tmp_path)
     monkeypatch.setattr(db, "head_revision", lambda: "9999")
     monkeypatch.setattr(engine.dialect, "name", "postgresql")
-    with pytest.raises(RuntimeError, match="revision 0007, this code needs 9999.*alembic upgrade head"):
+    with pytest.raises(RuntimeError, match="revision 0008, this code needs 9999.*alembic upgrade head"):
         db.migrate_or_check(engine)
     engine.dispose()
 
@@ -203,9 +203,14 @@ def test_upgrading_from_0002_keeps_every_request_row(tmp_path):
         command.downgrade(db.alembic_config(connection), "0002")
     rows = [RequestRow(request_id=f"r{i}", timestamp="t", key_id="k", requested_model="auto", stream=False,
                        p_low=0.1 * i, attempts=[{"model": "m"}]) for i in range(5)]
-    log = SQLRequestLog(engine)
-    for r in rows:
-        log.write(r)
+    # Written as at 0002: only the columns that table had (routed_by came in 0008), as the code of that time did
+    from sqlalchemy import MetaData, Table
+    from app.api.request_log import _to_sql
+    old = Table("requests", MetaData(), autoload_with=engine)
+    with engine.begin() as connection:
+        for r in rows:
+            connection.execute(old.insert(), {c.name: _to_sql(c.name, getattr(r, c.name)) for c in old.columns
+                                              if c.name != "id"})
     engine.dispose()
     again = engine_at(tmp_path)                                    # upgraded on open: the table is rebuilt
     assert db.current_revision(again) == db.head_revision() and SQLRequestLog(again).rows() == rows

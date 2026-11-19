@@ -251,7 +251,7 @@ def test_the_api_cuts_later_models_to_the_time_left_and_gives_the_error_for_the_
                       "gemini-flash": slow, "gemini-flash-lite": slow},
                      predictor=FakePredictor(0.4, 0.95), raw=raw)
     http = TestClient(create_app(deps=deps, auth=Auth([API_KEY])))
-    r = http.post("/v1/chat/completions", json={"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
+    r = http.post("/v1/chat/completions", json={"model": "auto", "messages": [{"role": "user", "content": "Explain B-trees."}]},
                   headers={"Authorization": f"Bearer {API_KEY}"})
     assert r.status_code == 504 and r.json()["error"]["code"] == "provider_timeout"
     assert r.json()["error"]["message"].startswith("Groq and Gemini took too long to answer.")
@@ -268,6 +268,6 @@ def test_without_the_budget_the_same_request_is_answered():
                       "gemini-flash": FakeBehavior(first_token_delay=0.2)},
                      predictor=FakePredictor(0.4, 0.95), raw=raw)
     http = TestClient(create_app(deps=deps, auth=Auth([API_KEY])))
-    r = http.post("/v1/chat/completions", json={"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
+    r = http.post("/v1/chat/completions", json={"model": "auto", "messages": [{"role": "user", "content": "Explain B-trees."}]},
                   headers={"Authorization": f"Bearer {API_KEY}"})
     assert r.status_code == 200 and r.headers["x-triage-model"] == "gemini-flash"

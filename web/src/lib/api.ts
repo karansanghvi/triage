@@ -1,4 +1,4 @@
-import type { DemoStatus, Message, RoutingInfo, Tier, RequestMode } from "@/types/chat"
+import type { DemoStatus, Message, RoutingInfo, Tier, RequestMode, RoutedBy } from "@/types/chat"
 import { TriageError } from "@/lib/errors"
 import { qualityToTau } from "@/lib/quality"
 
@@ -21,6 +21,7 @@ type ApiTriage = {
   cache: string
   fallback: string
   mode: RequestMode
+  routed_by?: RoutedBy | null
 }
 
 type ApiChatResponse = {
@@ -108,6 +109,7 @@ function toRoutingInfo(t: ApiTriage): RoutingInfo {
     cacheHit: t.cache === "hit",
     fellBack: t.fallback !== "none",
     mode: t.mode,
+    routedBy: t.routed_by ?? undefined,
   }
 }
 

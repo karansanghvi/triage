@@ -47,6 +47,7 @@ function savedShare(routing: RoutingInfo): number | null {
 
 // Turns Triage's numbers into one plain sentence
 function explain(routing: RoutingInfo): string {
+  if (routing.routedBy === "small_talk") return "Small talk, so Triage used the cheapest model."
   const { tier, pLow, pMedium, tau } = routing
   if (tau === null || pLow === null) return routing.reason
 
@@ -132,7 +133,7 @@ function SelectedDetails({ routing }: { routing: RoutingInfo }) {
       </section>
 
       {/* Could a cheaper model handle it? */}
-      {routing.tau !== null && (
+      {routing.tau !== null && routing.routedBy !== "small_talk" && (
         <section>
           <p className="text-xs text-muted-foreground">Could a cheaper model handle it?</p>
           <div className="mt-3 space-y-3">

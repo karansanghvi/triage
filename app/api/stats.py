@@ -8,7 +8,11 @@ def _share(counter: Counter, total: int) -> dict:
 
 def summarize(rows: list) -> dict:
     """Costs count only requests whose cost is known (a stream that failed part-way has none).
-    strong_cost is the strong model at the same token counts, so `saved` is an estimate."""
+    strong_cost is the strong model at the same token counts, so `saved` is an estimate.
+    Small talk (greetings routed to the cheapest tier without the classifier) is left out of every number and
+    counted on its own: it would inflate the savings the classifier is credited with."""
+    small_talk = sum(1 for r in rows if getattr(r, "routed_by", None) == "small_talk")
+    rows = [r for r in rows if getattr(r, "routed_by", None) != "small_talk"]
     ok = [r for r in rows if r.status == "ok"]
     priced = [r for r in rows if r.price_as_cost is not None and r.strong_cost is not None]
     cost = sum(r.price_as_cost for r in priced)
@@ -29,4 +33,5 @@ def summarize(rows: list) -> dict:
         "cache_hits": sum(bool(r.cache_hit) for r in rows),
         "fallbacks": sum(bool(r.fell_back) for r in rows),
         "saved_is_estimate": True,
+        "small_talk_requests": small_talk,
     }

@@ -100,7 +100,8 @@ TRIAGE_FIELDS = {"request_id": "x-triage-request-id", "model": "x-triage-model",
                  "p_low": "x-triage-p-low", "p_medium": "x-triage-p-medium", "tau": "x-triage-tau",
                  "reason": "x-triage-reason", "cost": "x-triage-cost", "strong_cost": "x-triage-strong-cost",
                  "saved": "x-triage-saved", "cache": "x-triage-cache", "fallback": "x-triage-fallback",
-                 "mode": "x-triage-mode", "preferred_provider": "x-triage-preferred-provider"}
+                 "mode": "x-triage-mode", "preferred_provider": "x-triage-preferred-provider",
+                 "routed_by": "x-triage-routed-by"}
 NUMBERS = {"p_low", "p_medium", "tau", "cost", "strong_cost", "saved"}
 
 

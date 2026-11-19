@@ -52,6 +52,7 @@ from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_pre
                              parse_task, parse_verify, resolve_keys)
 from app.accounts.limits import AccountLimitError
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
+from app.router.small_talk import is_small_talk
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
@@ -65,7 +66,8 @@ logger = logging.getLogger("triage.api")
 request_logger = logging.getLogger("triage.requests")
 JSON_LOG_FIELDS = ("request_id", "timestamp", "key_id", "requested_model", "stream", "tier", "served_model",
                    "fell_back", "cache_hit", "status", "http_status", "error_kind", "latency_ms", "ttft_ms",
-                   "price_as_cost", "saved", "verified", "escalated", "decided_by", "training_eligible")
+                   "price_as_cost", "saved", "verified", "escalated", "decided_by", "routed_by",
+                   "training_eligible")
 
 
 def json_log_line(row: RequestRow) -> str:
@@ -196,6 +198,7 @@ def _apply_decision(row: RequestRow, d: core.RouteDecision) -> None:
     row.task_type, row.task_type_guessed = d.task_type, d.task_type_guessed
     row.tier, row.primary_model, row.served_model, row.fell_back = d.tier, d.primary_model, d.model, d.fell_back
     row.attempts = [_attempt_dict(a) for a in d.attempts]
+    row.routed_by = d.routed_by
 
 
 def _add_truncated_costs(row: RequestRow, attempts) -> None:
@@ -219,6 +222,7 @@ def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] =
             "X-Triage-Fallback": f"{d.primary_model}->{d.model}" if d.fell_back else "none",
             "X-Triage-Cache": cache, "X-Triage-Verified": verified,
             "X-Triage-Escalated": "true" if escalated else "false", "X-Triage-Check": check,
+            "X-Triage-Routed-By": d.routed_by,
             "X-Triage-Preferred-Provider": d.preferred_provider or "none", **_probability_headers(d)}
 
 
@@ -277,7 +281,7 @@ def triage_body(headers: dict) -> dict:
             "reason": headers["X-Triage-Reason"], "cost": number("X-Triage-Cost"),
             "strong_cost": number("X-Triage-Strong-Cost"), "saved": number("X-Triage-Saved"),
             "cache": headers["X-Triage-Cache"], "fallback": headers["X-Triage-Fallback"],
-            "mode": headers.get("X-Triage-Mode"),
+            "mode": headers.get("X-Triage-Mode"), "routed_by": headers.get("X-Triage-Routed-By"),
             "preferred_provider": None if preferred in (None, "none") else preferred}
 
 
@@ -437,7 +441,7 @@ CORS_REQUEST_HEADERS = ["Authorization", "Content-Type", *PROVIDER_KEY_HEADERS.v
                         "X-Triage-Task", "X-Triage-Verify", "X-Triage-Prefer-Provider"]
 CORS_RESPONSE_HEADERS = ["X-Triage-Request-Id", "X-Triage-Model", "X-Triage-Tier", "X-Triage-Reason",
                          "X-Triage-Fallback", "X-Triage-Cache", "X-Triage-Verified", "X-Triage-Escalated",
-                         "X-Triage-Check", "X-Triage-Preferred-Provider", "X-Triage-P-Low", "X-Triage-P-Medium", "X-Triage-Tau",
+                         "X-Triage-Check", "X-Triage-Routed-By", "X-Triage-Preferred-Provider", "X-Triage-P-Low", "X-Triage-P-Medium", "X-Triage-Tau",
                          "X-Triage-Cost", "X-Triage-Strong-Cost", "X-Triage-Saved", "X-Triage-Mode",
                          "X-Triage-Demo-Remaining", "X-Triage-Demo-Limit", "X-Triage-Demo-Resets",
                          "X-Triage-Max-Tokens", "Retry-After"]
@@ -724,6 +728,11 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                          mode=mode, user_id=who.user_id if account else None)
         if not auto and body.model in deps.registry:       # a named model is its own primary, even if it fails
             row.primary_model, row.tier = body.model, deps.registry[body.model].tier
+        # What decides the tier, known before routing (so a request whose every model fails says it too)
+        small_talk = auto and is_small_talk(messages, snapshot.routing.small_talk_phrases)
+        row.routed_by = "small_talk" if small_talk else ("classifier" if auto else "requested_model")
+        if small_talk:                                      # no classifier, no quality dial
+            row.tau = row.classifier = None
 
         logged, admitted = [], []          # admitted: this request's DemoLimiter Admission, once counted
         invalidate = []                    # account: (provider, redacted detail) of saved keys a provider rejected
