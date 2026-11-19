@@ -6,6 +6,8 @@ of the answer text; their tokens are billed as output and already counted in usa
 Docs: platform.claude.com/docs/en/build-with-claude/thinking and /effort, /api/versioning (checked 2026-11-12).
 """
 import anthropic
+import httpx
+import httpx2
 
 from app.providers.common import (
     Finish, ProviderError, RawResult, Usage, kind_from_status, server_or_given_key, split_system,
@@ -18,6 +20,12 @@ API_VERSION = "2026-10-21"
 HTTP_CLIENT = None
 
 
+# Anthropic's error types that decide the kind whatever the status (platform.claude.com/docs/en/api/errors, checked
+# 2026-11-19): timeout_error is "504 ... The request timed out while processing", and is also sent "with other status
+# codes, such as a 500"; overloaded_error is 529. Both also arrive as SSE error events inside a 200 stream.
+ERROR_TYPE_KINDS = {"timeout_error": "timeout", "overloaded_error": "overloaded"}
+
+
 def _convert_error(error) -> ProviderError:
     if isinstance(error, ProviderError):
         return error
@@ -27,9 +35,18 @@ def _convert_error(error) -> ProviderError:
         return ProviderError(PROVIDER, "connection", "could not reach the provider")
     if isinstance(error, anthropic.APIStatusError):
         body = error.body if isinstance(error.body, dict) else {}
-        overloaded = error.status_code == 529 or (body.get("error") or {}).get("type") == "overloaded_error"
-        kind = "overloaded" if overloaded else kind_from_status(error.status_code)
+        error_type = (body.get("error") or {}).get("type")
+        if error.status_code == 529:
+            kind = "overloaded"
+        else:
+            kind = ERROR_TYPE_KINDS.get(error_type) or kind_from_status(error.status_code)
         return ProviderError(PROVIDER, kind, error.message, error.status_code)
+    # The SDK doesn't wrap a read timeout or a dropped connection while a stream is being read: they arrive as the
+    # HTTP library's own exceptions (httpx2, the anthropic SDK's; plain httpx too in case a client of it is passed)
+    if isinstance(error, (httpx2.TimeoutException, httpx.TimeoutException)):
+        return ProviderError(PROVIDER, "timeout", "request timed out")
+    if isinstance(error, (httpx2.TransportError, httpx.TransportError)):
+        return ProviderError(PROVIDER, "connection", "could not reach the provider")
     # Anything else (a TypeError from an SDK argument change, the SDK refusing a request locally, ...): a client
     # error so the chain moves on instead of a 500. Only the type name: str(error) could echo request details,
     # including a key, until key redaction exists (BYOK wiring step).

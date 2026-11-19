@@ -23,7 +23,16 @@ def _convert_error(error: openai.APIError, provider: str) -> ProviderError:
         # OpenAI's 503: "The engine is currently overloaded" / slow down. Groq and the others keep 503 = server.
         if provider == "openai" and error.status_code == 503:
             kind = "overloaded"
+        # Groq's 498 "Flex Tier Capacity Exceeded": "the flex tier is at capacity" (console.groq.com/docs/errors)
+        if provider == "groq" and error.status_code == 498:
+            kind = "overloaded"
         return ProviderError(provider, kind, error.message, error.status_code)
+    # An error event inside a 200 stream: no status, only the error's code and type
+    code, type_ = getattr(error, "code", None), getattr(error, "type", None)
+    if code == "server_is_overloaded" or type_ == "service_unavailable_error":
+        return ProviderError(provider, "overloaded", error.message)
+    if type_ == "server_error":
+        return ProviderError(provider, "server", error.message)
     return ProviderError(provider, "client", str(error))
 
 

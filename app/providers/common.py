@@ -101,6 +101,10 @@ def kind_from_status(status_code: int) -> str:
     """Turn an HTTP status code into a ProviderError kind"""
     if status_code == 429:
         return "rate_limit"
+    # 504 Gateway Timeout (Anthropic's timeout_error, Gemini's deadline_exceeded) and 408 Request Timeout: the
+    # request ran out of time. A timeout, never retried on the same model (it would just run out again)
+    if status_code in (408, 504):
+        return "timeout"
     if status_code >= 500:
         return "server"
     if status_code in (401, 403):
