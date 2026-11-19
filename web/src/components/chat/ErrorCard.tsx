@@ -122,6 +122,17 @@ function describe(error: ChatError): ErrorDetails {
         tone: "warning",
         icon: LogOut,
       }
+    // Too large for the backend or a proxy (account mode sends the whole conversation): show what it said
+    case "http_413":
+    case "request_too_large":
+    case "context_length_exceeded":
+      return {
+        title: "This conversation is too long",
+        body: error.message,
+        action: null,
+        tone: "warning",
+        icon: AlertCircle,
+      }
     case "network_error":
       return {
         title: "Couldn't reach Triage",

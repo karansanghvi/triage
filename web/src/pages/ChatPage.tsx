@@ -95,6 +95,8 @@ export default function ChatPage() {
         )
       )
       setSelectedId(pendingId)
+      // A backup model answered: the backend may have just marked a saved key invalid, so reload them quietly
+      if (mode.kind === "account" && result.routing.fellBack) void providerKeys.refresh()
     } catch (err) {
       if (mode.kind === "demo") demoStatus.refresh()
 

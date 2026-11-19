@@ -118,14 +118,19 @@ export type SendChatOptions = {
   sessionToken?: string | null   // given: account mode (the account's saved keys); not given: demo, as for guests
 }
 
+const TOO_LARGE_MESSAGE = "This conversation is too long to send. Start a new chat or shorten your message."
+
+
 export async function sendChat(
   messages: Message[],
   quality: number,
   { maxPromptChars = DEFAULT_MAX_PROMPT_CHARS, sessionToken = null }: SendChatOptions = {}
 ): Promise<ChatResult> {
+  // Only the demo has a prompt limit: account mode sends the whole conversation
+  const history = toApiMessages(messages)
   const body = {
     model: "auto",
-    messages: trimToLimit(toApiMessages(messages), maxPromptChars),
+    messages: sessionToken ? history : trimToLimit(history, maxPromptChars),
   }
 
   let response: Response
@@ -152,7 +157,7 @@ export async function sendChat(
     }
     throw new TriageError(
       data.error?.code ?? `http_${response.status}`,
-      data.error?.message ?? "Something went wrong. Please try again.",
+      data.error?.message ?? (response.status === 413 ? TOO_LARGE_MESSAGE : "Something went wrong. Please try again."),
       retryAfter ? Number(retryAfter) : undefined
     )
   }
