@@ -85,12 +85,26 @@ class RoutingConfig:
     # model name -> the smallest max_tokens it gets when the CALLER didn't set max_tokens (raises only our
     # generation default). For reasoning models, whose thinking counts toward max_tokens.
     min_default_max_tokens: dict = field(default_factory=dict)
+    # Length-aware timeouts: model name -> extra seconds per 1,000 input tokens, and the most any timeout of that
+    # model may become (per call and first token alike). A model without an entry keeps its fixed timeout.
+    model_timeout_per_1k: dict = field(default_factory=dict)
+    model_timeout_caps: dict = field(default_factory=dict)
+    # The most one send() may take across its whole fallback chain, retries and backoff included; each call's
+    # timeout is cut to the time left. None = no budget (eval/ builds its own RoutingConfig without one).
+    request_time_budget_seconds: Optional[float] = None
 
-    def timeout_for(self, model_name: str) -> float:
-        return self.model_timeouts.get(model_name, self.timeout_seconds)
+    def _scaled(self, model_name: str, base: float, input_tokens: int) -> float:
+        """base + per_1k x input_tokens / 1000, at most the model's cap."""
+        value = base + self.model_timeout_per_1k.get(model_name, 0.0) * max(0, input_tokens) / 1000
+        cap = self.model_timeout_caps.get(model_name)
+        return min(value, cap) if cap is not None else value
 
-    def first_token_timeout_for(self, model_name: str) -> Optional[float]:
-        return self.model_first_token_timeouts.get(model_name, self.first_token_timeout_seconds)
+    def timeout_for(self, model_name: str, input_tokens: int = 0) -> float:
+        return self._scaled(model_name, self.model_timeouts.get(model_name, self.timeout_seconds), input_tokens)
+
+    def first_token_timeout_for(self, model_name: str, input_tokens: int = 0) -> Optional[float]:
+        base = self.model_first_token_timeouts.get(model_name, self.first_token_timeout_seconds)
+        return None if base is None else self._scaled(model_name, base, input_tokens)
 
     def allowed_providers(self, providers=None) -> Optional[frozenset]:
         """The providers one request may use: `providers` if given (a BYOK request's own), else server_providers."""
@@ -226,10 +240,20 @@ def routing_from_dict(data: dict, registry: dict) -> RoutingConfig:
     server_providers = _load_server_providers(data.get("server_providers"), chains, registry)
     timeout = float(_positive_number(data.get("timeout_seconds", 30), "timeout_seconds"))
     first_token, model_first_token = _load_streaming(data.get("streaming"), registry)
+    model_timeouts = _load_model_timeouts(data.get("model_timeouts"), registry)
+    per_1k = _load_per_model_seconds(data.get("timeout_per_1k_input_tokens"), registry, "timeout_per_1k_input_tokens")
+    caps = _load_per_model_seconds(data.get("timeout_cap_seconds"), registry, "timeout_cap_seconds")
+    for name, cap in caps.items():          # a cap below a model's fixed timeout would shorten it: a mistake
+        floor = max(model_timeouts.get(name, timeout), model_first_token.get(name, first_token or 0))
+        if cap < floor:
+            raise ValueError(f"routing.yaml: timeout_cap_seconds.{name} ({cap:g}) is below its timeout ({floor:g})")
+    budget = data.get("request_time_budget_seconds")
+    budget = None if budget is None else float(_positive_number(budget, "request_time_budget_seconds"))
     return RoutingConfig(chains=chains, retry=retry, breaker=breaker, timeout_seconds=timeout,
+                         model_timeout_per_1k=per_1k, model_timeout_caps=caps, request_time_budget_seconds=budget,
                          generation=_load_generation(data.get("generation")),
                          model_params=_load_model_params(data.get("model_params"), registry),
-                         model_timeouts=_load_model_timeouts(data.get("model_timeouts"), registry),
+                         model_timeouts=model_timeouts,
                          first_token_timeout_seconds=first_token, model_first_token_timeouts=model_first_token,
                          server_providers=server_providers,
                          min_default_max_tokens=_load_min_default_max_tokens(data.get("min_default_max_tokens"),
@@ -288,6 +312,24 @@ def _load_streaming(raw, registry: dict) -> tuple:
             raise ValueError(f"routing.yaml: streaming.model_first_token_timeouts lists unknown model '{name}'")
         out[name] = float(_positive_number(seconds, f"streaming.model_first_token_timeouts.{name}"))
     return default, out
+
+
+def _load_per_model_seconds(raw, registry: dict, section: str) -> dict:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"routing.yaml: '{section}' must be a mapping of model name -> seconds")
+    out = {}
+    for name, seconds in raw.items():
+        if name not in registry:
+            raise ValueError(f"routing.yaml: {section} lists unknown model '{name}'")
+        out[name] = float(_positive_number(seconds, f"{section}.{name}"))
+    return out
+
+
+def estimate_input_tokens(messages: list) -> int:
+    """The request's input size for length-aware timeouts: about 4 characters per token, as elsewhere."""
+    from app.providers.base import _estimate_tokens
+    return sum(_estimate_tokens(m.get("content") or "") for m in messages if isinstance(m.get("content"), str))
 
 
 def _load_model_timeouts(raw, registry: dict) -> dict:
@@ -518,6 +560,7 @@ class ReliableClient:
         self.registry = registry
         self.routing = routing
         self.breaker = CircuitBreaker(routing.breaker, clock)
+        self._clock = clock
         self.fallback_events: list[FallbackEvent] = []
         self._send = send_fn
         self._sleep = sleep
@@ -578,9 +621,17 @@ class ReliableClient:
         # uses the user's key, so it neither reads it (a server-key outage doesn't block a user's working key) nor
         # writes it (a user's bad key or rate limit doesn't block everyone else).
         use_breaker = not is_byok(keys)
+        budget = _Budget(self.routing.request_time_budget_seconds, self._clock, estimate_input_tokens(messages))
 
         for index, model in enumerate(chain):
             next_name = chain[index + 1].name if index + 1 < len(chain) else None
+
+            if budget.spent():                 # out of time: the rest are skipped, the failures so far decide
+                for rest in chain[index:]:
+                    attempts.append(Attempt(rest.name, rest.provider, "skipped", "budget_exhausted",
+                                            f"the request's {budget.seconds:g}s time budget ran out"))
+                self._record_fallback(tier, model.name, None, "budget_exhausted")
+                break
 
             blocked_key = self._blocked_key(model) if use_breaker else None
             if blocked_key:
@@ -592,21 +643,22 @@ class ReliableClient:
                 self._record_fallback(tier, model.name, next_name, "circuit_open")
                 continue
 
-            result, error = self._try_model(model, messages, stream, settings, attempts, keys, use_breaker)
+            result, error = self._try_model(model, messages, stream, settings, attempts, keys, use_breaker, budget)
             if result is not None:
                 return ReliableResult(result, model, tier, chain[0].name, attempts)
             self._record_fallback(tier, model.name, next_name, error.kind)
 
         raise AllModelsFailed(tier, attempts)
 
-    def _try_model(self, model, messages, stream, settings, attempts, keys=None, use_breaker=True):
-        """Try one model, retrying rate limits and server errors."""
+    def _try_model(self, model, messages, stream, settings, attempts, keys=None, use_breaker=True, budget=None):
+        """Try one model, retrying rate limits and server errors (never past the request's time budget)."""
         policy = self.routing.retry
         last_error = None
+        budget = budget or _Budget(None, self._clock, estimate_input_tokens(messages))
 
         for attempt_number in range(1, policy.max_attempts + 1):
             try:
-                result = self._call(model, messages, stream, settings, keys)
+                result = self._call(model, messages, stream, settings, keys, budget)
             except ProviderError as error:
                 error.redact(keys.secrets if is_byok(keys) else ())     # the error may quote the key
                 last_error = error
@@ -626,6 +678,8 @@ class ReliableClient:
                     break
 
                 delay = backoff_delay(attempt_number, policy, self._rng)
+                if budget.left() is not None and budget.left() <= delay:     # no time for the wait and a retry
+                    break
                 logger.info(
                     "retrying %s in %.2fs (try %d of %d) after %s",
                     model.name, delay, attempt_number + 1, policy.max_attempts, error.kind,
@@ -649,12 +703,15 @@ class ReliableClient:
                 return key
         return None
 
-    def _call(self, model, messages, stream, settings, keys=None):
-        # Every call gets the configured timeout (per model if set) and generation settings, unless the caller
-        # set their own, plus the parameters configured for THIS model only (so a fallback never inherits them)
+    def _call(self, model, messages, stream, settings, keys=None, budget=None):
+        # Every call gets the configured timeout (per model if set, longer for long inputs) and generation
+        # settings, unless the caller set their own, plus the parameters configured for THIS model only (so a
+        # fallback never inherits them). Then the request's time budget: never longer than the time left.
+        budget = budget or _Budget(None, self._clock, estimate_input_tokens(messages))
         caller_set_max_tokens = "max_tokens" in settings
-        settings = {"timeout": self.routing.timeout_for(model.name), **self.routing.generation, **settings,
-                    **self.routing.model_params.get(model.name, {})}
+        settings = {"timeout": self.routing.timeout_for(model.name, budget.input_tokens), **self.routing.generation,
+                    **settings, **self.routing.model_params.get(model.name, {})}
+        settings["timeout"] = budget.cut(settings["timeout"])
         floor = self.routing.min_default_max_tokens.get(model.name)
         if floor and not caller_set_max_tokens:       # a caller's own max_tokens is always respected
             settings["max_tokens"] = max(settings.get("max_tokens", 0), floor)
@@ -671,7 +728,8 @@ class ReliableClient:
         iterator = iter(stream_response)
         # Errors before the first piece are raised here, so we can still fall back.
         # Errors after text has started arriving can't be undone, so they go to the caller.
-        first_piece = _first_piece(iterator, self.routing.first_token_timeout_for(model.name), model)
+        first_limit = self.routing.first_token_timeout_for(model.name, budget.input_tokens)
+        first_piece = _first_piece(iterator, budget.cut(first_limit), model)
         return _PrimedStream(stream_response, iterator, first_piece)
 
     def _record_fallback(self, tier, from_model, to_model, reason):
@@ -680,6 +738,29 @@ class ReliableClient:
             logger.warning("fallback (%s tier): %s -> %s because of %s", tier, from_model, to_model, reason)
         else:
             logger.error("fallback (%s tier): %s failed (%s) and no models are left", tier, from_model, reason)
+
+
+class _Budget:
+    """One send()'s time budget across its fallback chain. seconds None = no budget."""
+
+    def __init__(self, seconds: Optional[float], clock, input_tokens: int):
+        self.seconds, self._clock, self.input_tokens = seconds, clock, input_tokens
+        self._deadline = None if seconds is None else clock() + seconds
+
+    def left(self) -> Optional[float]:
+        return None if self._deadline is None else self._deadline - self._clock()
+
+    def spent(self) -> bool:
+        left = self.left()
+        return left is not None and left <= 0
+
+    def cut(self, timeout: Optional[float]) -> Optional[float]:
+        """`timeout`, but never more than the time left (None stays None when there is no budget)."""
+        left = self.left()
+        if left is None:
+            return timeout
+        left = max(left, 0.001)
+        return left if timeout is None else min(timeout, left)
 
 
 def _first_piece(iterator, limit: Optional[float], model: ModelConfig):

@@ -245,7 +245,8 @@ def test_checker_calls_use_the_reliable_client_timeout_and_cache(tmp_path):
     checks = calls(deps, "check")
     assert len(checks) == 1                                                        # the second check was cached
     routing = deps.config.snapshot().routing
-    assert checks[0]["timeout"] == routing.timeout_for("groq-small")
+    # groq-small's timeout, longer for the checker's long prompt (length-aware), never past its cap
+    assert routing.timeout_for("groq-small") < checks[0]["timeout"] <= routing.model_timeout_caps["groq-small"]
     assert checks[0]["reasoning_effort"] == "low"
     assert last_row(deps).check_cost == 0                                          # a cached check costs nothing
 

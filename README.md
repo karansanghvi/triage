@@ -21,10 +21,11 @@ steps are in [reports/PHASE_4.md](reports/PHASE_4.md).
 - **Streaming.** Answers can arrive piece by piece, with time-to-first-token measured.
 - **A model registry in config.** `config/models.yaml` lists every model with its provider, tier, and price. Tiers are ordered by real price (low < medium < high), so routing a request down a tier always saves money. Free models carry a `price_as` price, so savings numbers stay realistic.
 - **Honest costs.** Hidden reasoning ("thinking") tokens are counted as output, since providers bill them that way.
-- **One error type.** Every provider's errors become a `ProviderError` with a kind: `rate_limit`, `server`, `timeout`, `connection`, `client`, or `config`.
+- **One error type.** Every provider's errors become a `ProviderError` with a kind: `rate_limit`, `server`, `overloaded`, `timeout`, `connection`, `client`, or `config`. Timeouts include 408/504 and each provider's deadline errors; overloaded includes Gemini 503, Anthropic 529, OpenAI 503 and Groq 498.
 - **Reliability layer** (`app/reliability.py`):
-  - a timeout on every call
-  - retries with exponential backoff and full jitter, only for rate limits (429) and server errors (5xx)
+  - a timeout on every call, longer for long inputs: `base + timeout_per_1k_input_tokens x input tokens / 1000`, at most `timeout_cap_seconds` (per model, also for the first-token limit)
+  - a time budget per request across the whole chain (`request_time_budget_seconds`, 150): each call gets at most the time left, and when it runs out the rest are skipped
+  - retries with exponential backoff and full jitter, only for rate limits (429) and server errors (5xx); timeouts and overloads move straight to the next model
   - fallback chains per tier in `config/routing.yaml`, with backups on a different provider
   - a circuit breaker: 3 failures in a row skip a model for 60 seconds (server errors, timeouts and rate limits are about one model); connection and auth errors skip every model on that provider
   - every fallback logged for the dashboard

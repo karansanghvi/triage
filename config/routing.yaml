@@ -70,6 +70,50 @@ model_timeouts:
   claude-sonnet: 60
   claude-opus: 60
 
+# Length-aware timeouts (Phase 5): long conversations (account mode sends the whole chat) get more time.
+#   timeout = min(base + timeout_per_1k_input_tokens x input_tokens / 1000, timeout_cap_seconds)
+# base is the timeout above (or the streaming first-token limit below: the same formula applies to both).
+# input_tokens: estimated once per request, about 4 characters per token. A model without an entry keeps its
+# fixed timeout. Gemini's X-Server-Timeout header follows (the SDK sends the per-call timeout).
+timeout_per_1k_input_tokens:
+  # Groq: measured 2026-11-19 (free tier, 3 runs each): 2,428 input tokens added 0.2-0.4 s over an 83-token prompt
+  # on groq-small and groq-large, i.e. about 0.1-0.15 s per 1,000. 0.5 s is about 3x that.
+  groq-allam: 0.5
+  groq-small: 0.5
+  groq-large: 0.5
+  # The rest: guesses, revisit with live data
+  ollama-llama: 4         # local CPU prompt processing is slow
+  gemini-flash: 5         # reasoning models think more on long conversations
+  gemini-flash-lite: 5
+  openai-luna: 5
+  openai-terra: 5
+  openai-sol: 5
+  claude-haiku: 5
+  claude-sonnet: 5
+  claude-opus: 5
+# The most a timeout may grow to (per call and first token). Groq: 2x its base. The rest: guesses, revisit with
+# live data. Kept tight because a longer timeout is also a longer wait before falling back.
+timeout_cap_seconds:
+  groq-allam: 16
+  groq-small: 16
+  groq-large: 20
+  ollama-llama: 64
+  gemini-flash: 120
+  gemini-flash-lite: 120
+  openai-luna: 120
+  openai-terra: 120
+  openai-sol: 120
+  claude-haiku: 120
+  claude-sonnet: 120
+  claude-opus: 120
+
+# The most one request may spend across its whole fallback chain (retries and backoff included) before it
+# answers. Each call's timeout (and first-token limit) is cut to the time left; when it runs out, the remaining
+# models are skipped and the failures so far decide the error (provider_timeout / provider_unavailable /
+# all_models_failed). A stream that has started is never cut off by it. An answer check's escalation is a
+# separate send with its own budget.
+request_time_budget_seconds: 150
+
 # Streaming (Phase 4 Step 5): a time-to-first-token limit, not a total-time limit. A stream whose first
 # piece doesn't arrive in time fails over to the next model in the chain (only possible before any text is
 # sent); a long answer that is streaming steadily is never cut off. The per-call timeout above still applies

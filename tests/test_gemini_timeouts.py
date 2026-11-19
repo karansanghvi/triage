@@ -3,6 +3,7 @@ classified as "timeout", no retries of a model that timed out, and the provider_
 No network: httpx MockTransport."""
 import dataclasses
 import json
+import math
 import random
 
 import httpx
@@ -18,7 +19,7 @@ from app.providers import gemini_provider, openai_provider
 from app.providers.base import send_request
 from app.providers.common import ProviderError
 from app.registry import load_registry
-from app.reliability import AllModelsFailed, ReliableClient, load_routing, routing_from_dict
+from app.reliability import AllModelsFailed, ReliableClient, estimate_input_tokens, load_routing, routing_from_dict
 from tests.api_helpers import API_KEY, ASK, FakePredictor, make_deps, routing_raw
 
 REGISTRY = load_registry()
@@ -94,9 +95,11 @@ def test_the_routing_timeout_for_gemini_flash_reaches_the_wire(monkeypatch):
     wire = gemini_wire(monkeypatch)
     ReliableClient(REGISTRY, routing, sleep=lambda s: None).send_model(MESSAGES, "gemini-flash")
     (request,) = wire.requests
-    expected = routing.timeout_for("gemini-flash")
+    # length-aware: the base plus a little for the input ("Hi" counts as one token); Google gets it rounded up
+    expected = routing.timeout_for("gemini-flash", estimate_input_tokens(MESSAGES))
+    assert expected > routing.timeout_for("gemini-flash")
     assert request.extensions["timeout"]["read"] == pytest.approx(expected)
-    assert request.headers["x-server-timeout"] == str(int(expected))
+    assert request.headers["x-server-timeout"] == str(math.ceil(expected))
 
 
 # ---------- 2. Google's deadline errors are timeouts ----------
