@@ -255,6 +255,12 @@ def _billed_truncations(attempts) -> tuple:
     return sum(r.reported_cost for r in billed), sum(r.cost for r in billed)
 
 
+def stronger_than(tier: str) -> Optional[str]:
+    """The next tier up ("low" -> "medium", "medium" -> "high"); None for "high"."""
+    i = TIERS.index(tier)
+    return TIERS[i + 1] if i + 1 < len(TIERS) else None
+
+
 def escalation_tier(target: str, deps, keys, min_tier: Optional[str] = None) -> Optional[str]:
     """The tier an escalation to `target` uses: `target`, or for BYOK the nearest tier at or above it with a model
     on the user's providers that is at least as strong as `min_tier` (escalation only goes up, and never to a weaker
@@ -324,16 +330,22 @@ async def verify_sync(messages: list, first: Served, policy: SyncPolicy, deps, s
                 break
         if not bad or tier_policy.escalate_to is None:
             break
-        # Only models at least as strong as the answer being replaced: never a weaker one (gemini-flash-lite is the
-        # last resort of medium and high). None of them answering = the original answer is served, as before.
-        target = escalation_tier(tier_policy.escalate_to, deps, keys, min_tier=current.tier)
+        # Only models STRICTLY stronger than the answer being replaced (by their own tier in models.yaml): a bad low
+        # answer only by a medium or high model, a bad medium answer only by a high one. Never the same tier or a
+        # weaker one (gemini-flash-lite, low, is the last resort of medium and high). None available or none
+        # answering = the original answer is served, as before.
+        floor = stronger_than(current.tier)
+        if floor is None:                 # already the strongest tier: nothing stronger to escalate to
+            out.escalation_error = f"no_stronger_model:{tier_policy.escalate_to}"
+            break
+        target = escalation_tier(tier_policy.escalate_to, deps, keys, min_tier=floor)
         if target is None:                # BYOK: no higher tier has a model for the user's keys
             out.escalation_error = f"no_model_for_keys:{tier_policy.escalate_to}"
             break
         started = time.perf_counter()
         try:
             result = await anyio.to_thread.run_sync(partial(deps.client.send, messages, target, stream=False,
-                                                            keys=keys, prefer=prefer, min_tier=current.tier,
+                                                            keys=keys, prefer=prefer, min_tier=floor,
                                                             **settings.as_kwargs()))
         except AllModelsFailed as error:
             out.escalation_latency_ms += (time.perf_counter() - started) * 1000

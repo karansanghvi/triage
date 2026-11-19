@@ -1,5 +1,5 @@
-"""Escalation never serves a weaker model: an escalation only tries models whose own tier (models.yaml) is at
-least the tier of the answer it replaces. gemini-flash-lite (low) is the last resort of medium and high for normal
+"""Escalation only serves a stronger model: an escalation only tries models whose own tier (models.yaml) is strictly
+above the tier of the answer it replaces. gemini-flash-lite (low) is the last resort of medium and high for normal
 routing, never for an escalation away from a medium answer. Fake models only."""
 import copy
 import random
@@ -72,15 +72,32 @@ def test_flash_lite_stays_a_normal_fallback_outside_escalation():
     assert r.status_code == 200 and r.json()["model"] == "gemini-flash-lite"
 
 
-def test_a_low_answer_may_escalate_to_a_model_of_the_same_tier():
-    """"At least as strong": a bad low answer's escalation to medium may end on Flash-Lite (low too)."""
-    # groq-small is also the AI checker, so medium's AI check is skipped here (LOW's p_medium 0.97 is above 0.5): this test is
-    # about which models the escalation may use, not about the checker failing
+def test_a_low_answer_is_never_replaced_by_another_low_model():
+    """Strictly stronger: a bad low answer's escalation to medium may not end on Flash-Lite (low too). With the
+    medium models down, the original low answer is served."""
+    # groq-small is also the AI checker, so medium's AI check is skipped here (LOW's p_medium 0.97 is above 0.5):
+    # this test is about which models the escalation may use, not about the checker failing
     http, deps = app_with({"groq-allam": FakeBehavior(text="five"), "groq-small": DOWN, "gemini-flash": DOWN,
                            "gemini-flash-lite": FakeBehavior(text="2 + 3 = 5.\nAnswer: 5")}, predictor=LOW,
                           medium_skip_check_above=0.5)
     r = post(http, ASK)
-    assert r.json()["model"] == "gemini-flash-lite" and r.headers["x-triage-escalated"] == "true"
+    assert r.status_code == 200 and r.json()["model"] == "groq-allam"
+    assert r.headers["x-triage-escalated"] == "false"
+    assert "gemini-flash-lite" not in answer_calls(deps)
+
+
+def test_a_low_answer_escalates_to_a_medium_or_high_model():
+    """medium's own medium model down: its high-tier backup (gemini-flash) is stronger, so it may answer."""
+    http, deps = app_with({"groq-allam": FakeBehavior(text="five"), "groq-small": DOWN,
+                           "gemini-flash": FakeBehavior(text="2 + 3 = 5.\nAnswer: 5")}, predictor=LOW,
+                          medium_skip_check_above=0.5)
+    r = post(http, ASK)
+    assert r.json()["model"] == "gemini-flash" and r.headers["x-triage-escalated"] == "true"
+
+
+def test_stronger_than():
+    from app.api.verification import stronger_than
+    assert [stronger_than(t) for t in ("low", "medium", "high")] == ["medium", "high", None]
 
 
 # ---------- the client ----------
@@ -134,8 +151,8 @@ def byok(*providers):
 
 
 def test_byok_escalation_tier_needs_a_strong_enough_model():
-    # Gemini only, from medium to high: gemini-flash (high) qualifies
-    assert escalation_tier("high", Deps, byok("gemini"), min_tier="medium") == "high"
+    # Gemini only, from medium to high (floor "high"): gemini-flash (high) qualifies
+    assert escalation_tier("high", Deps, byok("gemini"), min_tier="high") == "high"
     # Groq only, a high answer escalating "to medium": medium's groq-small is weaker, so the high tier is used
     assert escalation_tier("medium", Deps, byok("groq"), min_tier="high") == "high"
     # no floor: as before
