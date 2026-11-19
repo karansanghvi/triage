@@ -133,6 +133,16 @@ function describe(error: ChatError): ErrorDetails {
         tone: "warning",
         icon: AlertCircle,
       }
+    // Every model tried ran out of time. The backend names the provider: "Gemini took too long to answer. Try
+    // again, or add another provider key so Triage can fall back." (without the key advice on the free demo)
+    case "provider_timeout":
+      return {
+        title: "No answer in time",
+        body: error.message || "The model took too long to answer. Try again.",
+        action: "retry",
+        tone: "warning",
+        icon: Clock,
+      }
     case "network_error":
       return {
         title: "Couldn't reach Triage",

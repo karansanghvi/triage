@@ -318,6 +318,22 @@ def rejected_key_providers(attempts) -> list:
     return list(dict.fromkeys(a.provider for a in failed))
 
 
+def timed_out_providers(attempts) -> list:
+    """The providers that ran out of time, if EVERY failed attempt was a timeout; otherwise [] (mixed failures keep
+    the usual 503). In the order they were tried."""
+    failed = [a for a in attempts if a.outcome == "error"]
+    if not failed or any(a.error_kind != "timeout" for a in failed):
+        return []
+    return list(dict.fromkeys(a.provider for a in failed))
+
+
+def timeout_message(providers: list, own_keys: bool) -> str:
+    names = _join([PROVIDER_NAMES.get(p, p) for p in providers])
+    if own_keys:       # BYOK or an account: another key of theirs gives Triage something to fall back to
+        return f"{names} took too long to answer. Try again, or add another provider key so Triage can fall back."
+    return f"{names} took too long to answer. Try again."
+
+
 def _join(items: list) -> str:
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
@@ -793,6 +809,11 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 await finish("error", 401, "invalid_provider_key")
                 raise APIError(401, invalid_key_message(rejected, saved_providers), code="invalid_provider_key") \
                     from None
+            timed_out = timed_out_providers(error.attempts)
+            if timed_out:                                   # every model ran out of time: say who, as a 504
+                await finish("error", 504, "provider_timeout")
+                raise APIError(504, timeout_message(timed_out, byok), "server_error",
+                               code="provider_timeout") from None
             await finish("error", 503, "all_models_failed")
             raise APIError(503, f"No model could answer: {error}", "server_error", code="all_models_failed") from None
         decision = routed.decision

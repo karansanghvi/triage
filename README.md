@@ -339,6 +339,7 @@ Errors use OpenAI's shape, `{"error": {"message", "type", "param", "code"}}`.
 | 502 | `model_error` | The model failed while answering |
 | 503 | `all_models_failed` | No model could answer; try again |
 | 503 | `email_unavailable` | Password reset: the server has no email settings |
+| 504 | `provider_timeout` | Every model that was tried ran out of time (its timeout in `config/routing.yaml`); the message names the provider |
 | (in a stream) | `stream_interrupted` | The model failed after text was sent |
 
 ### Reference: account endpoints

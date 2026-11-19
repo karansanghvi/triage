@@ -12,10 +12,19 @@ PROVIDER = "gemini"
 HTTP_CLIENT = None
 ROLE_MAP = {"user": "user", "assistant": "model"} # Gemini calls the AI role "model"
 
+def _is_deadline(error: errors.APIError) -> bool:
+    """Google's server stopped the call at its deadline (504 DEADLINE_EXCEEDED, "Deadline expired before operation
+    could complete"). The SDK sends our timeout as X-Server-Timeout, so this is our own time limit running out
+    on Google's side: a timeout, not a server fault."""
+    return (error.code == 504 or (error.status or "").upper() == "DEADLINE_EXCEEDED"
+            or "deadline expired" in (error.message or "").lower())
+
+
 def _convert_error(error) -> ProviderError:
     if isinstance(error, errors.APIError):
-        code = error.code or 0 
-        return ProviderError(PROVIDER, kind_from_status(code), error.message or str(error), code or None)
+        code = error.code or 0
+        kind = "timeout" if _is_deadline(error) else kind_from_status(code)
+        return ProviderError(PROVIDER, kind, error.message or str(error), code or None)
     if isinstance(error, httpx.TimeoutException):
         return ProviderError(PROVIDER, "timeout", "request timed out")
     return ProviderError(PROVIDER, "connection", "could not reach the provider")
@@ -36,7 +45,9 @@ def _to_contents(turns):
     
 def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_key=None):
     """api_key: the caller's own key (BYOK); None = GEMINI_API_KEY from the environment."""
-    http_options = {"timeout": int(timeout * 1000)}   # milliseconds
+    # HttpOptions.timeout is in MILLISECONDS (our timeouts are seconds). The SDK turns it back into seconds for
+    # httpx and also sends it to Google as X-Server-Timeout, so the server stops the call at the same limit.
+    http_options = {"timeout": int(timeout * 1000)}
     if HTTP_CLIENT is not None:
         http_options["httpx_client"] = HTTP_CLIENT
     client = genai.Client(
