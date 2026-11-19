@@ -232,3 +232,48 @@ def test_overloaded_mixed_with_other_failures_keeps_all_models_failed():
     http, _ = app(script)
     r = chat(http)
     assert r.status_code == 503 and r.json()["error"]["code"] == "all_models_failed"
+
+
+# ---------- busy and slow mixed: provider_unavailable ----------
+
+SLOW = FakeBehavior(fail_before="timeout")
+
+
+def test_overloaded_and_timeouts_mixed_are_provider_unavailable():
+    script = {name: BUSY for name in REGISTRY}
+    script["gemini-flash-lite"] = SLOW
+    http, deps = app(script)
+    r = chat(http, {"x-gemini-key": SECRET})
+    assert r.status_code == 503
+    err = r.json()["error"]
+    assert err["code"] == "provider_unavailable" and err["type"] == "server_error"
+    assert err["message"] == ("Gemini couldn't answer right now (busy or too slow). Try again in a moment, or add "
+                              "another provider key so Triage can fall back.")
+    (row,) = deps.log.rows()
+    assert row.http_status == 503 and row.error_kind == "provider_unavailable"
+
+
+def test_server_keys_busy_and_slow_say_just_try_again_in_a_moment():
+    script = {name: SLOW for name in REGISTRY}
+    script["groq-small"] = BUSY
+    http, _ = app(script)
+    r = chat(http)
+    assert r.status_code == 503 and r.json()["error"]["code"] == "provider_unavailable"
+    assert r.json()["error"]["message"] == ("Groq and Gemini couldn't answer right now (busy or too slow). "
+                                            "Try again in a moment.")
+
+
+@pytest.mark.parametrize("behavior, code, status", [(BUSY, "provider_overloaded", 503),
+                                                    (SLOW, "provider_timeout", 504)])
+def test_the_pure_cases_keep_their_own_codes(behavior, code, status):
+    http, _ = app({name: behavior for name in REGISTRY})
+    r = chat(http, {"x-gemini-key": SECRET})
+    assert r.status_code == status and r.json()["error"]["code"] == code
+
+
+def test_busy_slow_and_a_server_error_is_still_all_models_failed():
+    script = {name: BUSY for name in REGISTRY}
+    script["gemini-flash"] = SLOW
+    script["groq-small"] = FakeBehavior(fail_before="server")
+    http, _ = app(script)
+    assert chat(http).json()["error"]["code"] == "all_models_failed"

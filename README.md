@@ -341,6 +341,7 @@ Errors use OpenAI's shape, `{"error": {"message", "type", "param", "code"}}`.
 | 503 | `all_models_failed` | No model could answer; try again |
 | 503 | `email_unavailable` | Password reset: the server has no email settings |
 | 503 | `provider_overloaded` | Every model that was tried was too busy (e.g. Gemini's "high demand" 503); the message names the provider |
+| 503 | `provider_unavailable` | Every model that was tried was busy or too slow (a mix of the two cases above and below) |
 | 504 | `provider_timeout` | Every model that was tried ran out of time (its timeout in `config/routing.yaml`); the message names the provider |
 | (in a stream) | `stream_interrupted` | The model failed after text was sent |
 

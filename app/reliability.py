@@ -104,6 +104,19 @@ class RoutingConfig:
                             registry, prefer)
 
 
+TIER_ORDER = ("low", "medium", "high")      # weakest first
+
+
+def at_least(names, registry: dict, min_tier: Optional[str]) -> list:
+    """`names` in order, keeping only models whose own tier (models.yaml) is `min_tier` or stronger. None = all.
+    For escalations: a retry meant to be stronger must never be served by a weaker model (e.g. gemini-flash-lite,
+    the last resort at the end of medium and high)."""
+    if min_tier is None:
+        return list(names)
+    floor = TIER_ORDER.index(min_tier)
+    return [n for n in names if TIER_ORDER.index(registry[n].tier) >= floor]
+
+
 def filter_chain(names, registry: dict, providers: Optional[frozenset]) -> list:
     """`names` in order, keeping only models whose provider is in `providers` (None = keep all)."""
     if providers is None:
@@ -511,7 +524,7 @@ class ReliableClient:
         self._rng = rng or random.Random()
 
     def send(self, messages: list, tier: str, stream: bool = False, *, providers=None, keys=None,
-             prefer: Optional[str] = None, **settings) -> ReliableResult:
+             prefer: Optional[str] = None, min_tier: Optional[str] = None, **settings) -> ReliableResult:
         """Try each model in the tier's chain until one answers.
 
         keys: this request's KeyContext. BYOK: only its providers are used, each call gets that provider's key
@@ -519,6 +532,8 @@ class ReliableClient:
         providers: the providers this request may use; None = routing's server_providers (tests, internal).
         Models on other providers are dropped before anything is tried: no attempt, no fallback event.
         prefer: a provider whose models go first in the (filtered) chain; the rest keep their order.
+        min_tier: only models whose own tier is this or stronger (escalations); the others are dropped like
+        another provider's, before anything is tried. None = the whole chain.
         Raises AllModelsFailed if none of them answer.
         """
         providers = _request_providers(keys, providers)
@@ -531,7 +546,8 @@ class ReliableClient:
             raise ValueError(f"{', '.join(sorted(per_model))} is set per model: put it under model_params "
                              "in the routing config, not in send()")
 
-        chain = [self.registry[name] for name in self.routing.chain_for(tier, self.registry, providers, prefer)]
+        names = at_least(self.routing.chain_for(tier, self.registry, providers, prefer), self.registry, min_tier)
+        chain = [self.registry[name] for name in names]
         if not chain:
             raise AllModelsFailed(tier, [])      # this request's providers have no model in the tier
         return self._send_chain(chain, tier, messages, stream, settings, keys)

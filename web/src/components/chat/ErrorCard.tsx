@@ -153,6 +153,16 @@ function describe(error: ChatError): ErrorDetails {
         tone: "warning",
         icon: Clock,
       }
+    // Every model tried was busy or too slow (a mix of the two). The backend names the provider(s): "Gemini
+    // couldn't answer right now (busy or too slow). Try again in a moment, or add another provider key ..."
+    case "provider_unavailable":
+      return {
+        title: "Couldn't answer right now",
+        body: error.message || "The model couldn't answer right now (busy or too slow). Try again in a moment.",
+        action: "retry",
+        tone: "warning",
+        icon: Clock,
+      }
     case "network_error":
       return {
         title: "Couldn't reach Triage",
