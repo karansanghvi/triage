@@ -37,7 +37,8 @@ def is_cacheable(temperature: float, stream: bool) -> bool:
 
 def make_cache_key(messages: list, model: ModelConfig, temperature: float, max_tokens: int,
                    reasoning_effort: Optional[str] = None, response_format: Optional[dict] = None,
-                   thinking: Optional[str] = None, key_fingerprint: Optional[str] = None) -> str:
+                   thinking: Optional[str] = None, key_fingerprint: Optional[str] = None,
+                   thinking_level: Optional[str] = None) -> str:
     """A fingerprint of everything that affects the answer.
 
     sort_keys makes the same data always produce the same text,
@@ -58,6 +59,8 @@ def make_cache_key(messages: list, model: ModelConfig, temperature: float, max_t
         payload["response_format"] = response_format
     if thinking is not None:
         payload["thinking"] = thinking
+    if thinking_level is not None:
+        payload["thinking_level"] = thinking_level
     if key_fingerprint is not None:    # BYOK: answers are kept per user key (key_fingerprint), never shared
         payload["key"] = key_fingerprint
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -189,7 +192,8 @@ class CachedSender:
 
         key = make_cache_key(messages, model, temperature, max_tokens, settings.get("reasoning_effort"),
                              settings.get("response_format"), settings.get("thinking"),
-                             key_fingerprint(api_key, self._hash_secret) if api_key is not None else None)
+                             key_fingerprint(api_key, self._hash_secret) if api_key is not None else None,
+                             thinking_level=settings.get("thinking_level"))
         started_at = time.perf_counter()
         saved = self.cache.get(key)
 

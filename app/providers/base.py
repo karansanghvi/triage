@@ -25,6 +25,7 @@ OPENAI_FORMAT_PROVIDERS = {"openai", "groq", "ollama", "openrouter"}
 REASONING_EFFORT_PROVIDERS = OPENAI_FORMAT_PROVIDERS | {"anthropic"}
 # Anthropic only: thinking modes we may send (claude-haiku: "disabled")
 THINKING_MODES = {"disabled", "adaptive"}
+GEMINI_THINKING_LEVELS = {"minimal", "low", "medium", "high"}
 
 # Which adapter handles which provider
 ADAPTERS = {
@@ -189,6 +190,7 @@ def send_request(
     response_format: Optional[dict] = None,
     thinking: Optional[str] = None,
     api_key: Optional[str] = None,
+    thinking_level: Optional[str] = None,
 ):
     """Send messages to any model.
 
@@ -199,6 +201,7 @@ def send_request(
     reasoning_effort is also accepted for Anthropic (sent as output_config.effort).
     response_format (e.g. {"type": "json_object"}) asks OpenAI-format providers for JSON-only output.
     thinking ("disabled" or "adaptive") is Anthropic only.
+    thinking_level ("minimal", "low", "medium", "high") is Gemini only. None = not sent: the model's default.
     api_key: a caller's own provider key (BYOK). None = the adapter reads the server's key from the environment,
     as eval/ and scripts/ rely on. The reliability layer always passes it for BYOK requests (never env).
     Ollama ignores it.
@@ -233,6 +236,11 @@ def send_request(
             raise ProviderError(model_config.provider, "config", f"thinking={thinking!r} is only supported on Anthropic "
                                 f"({', '.join(sorted(THINKING_MODES))})")
         settings["thinking"] = thinking
+    if thinking_level is not None:
+        if model_config.provider != "gemini" or thinking_level not in GEMINI_THINKING_LEVELS:
+            raise ProviderError(model_config.provider, "config", f"thinking_level={thinking_level!r} is only "
+                                f"supported on Gemini ({', '.join(sorted(GEMINI_THINKING_LEVELS))})")
+        settings["thinking_level"] = thinking_level
     if api_key is not None:
         settings["api_key"] = api_key
     if response_format is not None:

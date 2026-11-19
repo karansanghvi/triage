@@ -43,8 +43,10 @@ def _to_contents(turns):
         for m in turns
     ]
     
-def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_key=None):
-    """api_key: the caller's own key (BYOK); None = GEMINI_API_KEY from the environment."""
+def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_key=None, thinking_level=None):
+    """api_key: the caller's own key (BYOK); None = GEMINI_API_KEY from the environment.
+    thinking_level: "low" etc., sent as ThinkingConfig(thinking_level="LOW"); None = no thinking config (the
+    model's default level)."""
     # HttpOptions.timeout is in MILLISECONDS (our timeouts are seconds). The SDK turns it back into seconds for
     # httpx and also sends it to Google as X-Server-Timeout, so the server stops the call at the same limit.
     http_options = {"timeout": int(timeout * 1000)}
@@ -62,6 +64,7 @@ def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_ke
         temperature=temperature,
         max_output_tokens=max_tokens,
         system_instruction=system_text or None,
+        thinking_config=types.ThinkingConfig(thinking_level=thinking_level.upper()) if thinking_level else None,
     )
     model = model_id.removeprefix("models/") #accept IDs copied from the model list 
     contents = _to_contents(turns)

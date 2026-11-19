@@ -48,7 +48,7 @@ class BreakerSettings:
 # Generation settings that apply to every model, and request parameters that are set per MODEL
 # (never per call or per tier), so a fallback model never receives a parameter meant for another model.
 GENERATION_KEYS = {"temperature", "max_tokens"}
-MODEL_PARAM_KEYS = {"reasoning_effort", "thinking"}
+MODEL_PARAM_KEYS = {"reasoning_effort", "thinking", "thinking_level"}
 # Providers whose adapter speaks OpenAI's format
 OPENAI_FORMAT_PROVIDERS = {"openai", "groq", "ollama", "openrouter"}
 # reasoning_effort: OpenAI-format providers, plus Anthropic (sent as output_config.effort)
@@ -56,6 +56,10 @@ REASONING_EFFORT_PROVIDERS = OPENAI_FORMAT_PROVIDERS | {"anthropic"}
 # thinking (Anthropic only). "disabled" is a 400 at effort xhigh or max, and on these models at any effort
 THINKING_MODES = {"disabled", "adaptive"}
 THINKING_ALWAYS_ON_MODEL_IDS = {"claude-sonnet-5-5", "claude-opus-5-5"}
+# thinking_level (Gemini only, sent as ThinkingConfig.thinking_level). Gemini 3.8 Flash rejects "minimal" with a
+# validation error (aistudio.google.com/docs/whats-new-gemini-3.8, checked 2026-11-19)
+GEMINI_THINKING_LEVELS = {"minimal", "low", "medium", "high"}
+NO_MINIMAL_THINKING_MODEL_IDS = {"models/gemini-3.8-flash", "gemini-3.8-flash"}
 
 
 @dataclass(frozen=True)
@@ -326,6 +330,14 @@ def _load_model_params(raw, registry: dict) -> dict:
                                  "`thinking: disabled` (use reasoning_effort to limit thinking instead).")
             if params["thinking"] == "disabled" and params.get("reasoning_effort") in ("xhigh", "max"):
                 raise ValueError(f"routing.yaml: '{name}': thinking disabled is a 400 at effort xhigh or max")
+        if "thinking_level" in params:
+            if registry[name].provider != "gemini":
+                raise ValueError(f"routing.yaml: '{name}' ({registry[name].provider}) does not accept thinking_level")
+            if params["thinking_level"] not in GEMINI_THINKING_LEVELS:
+                raise ValueError(f"routing.yaml: '{name}' thinking_level must be one of "
+                                 f"{', '.join(sorted(GEMINI_THINKING_LEVELS))}")
+            if params["thinking_level"] == "minimal" and registry[name].model_id in NO_MINIMAL_THINKING_MODEL_IDS:
+                raise ValueError(f"routing.yaml: '{name}' ({registry[name].model_id}) rejects thinking_level minimal")
         out[name] = dict(params)
     return out
 

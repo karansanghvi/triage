@@ -47,11 +47,13 @@ model_timeouts:
   # calls are the long answers it exists for. Timing them out (2.8% of calls at 8 s) sends traffic to a
   # 20/day fallback whose answers the classifier never saw.
   groq-large: 10
-  # gemini-flash: no Phase 2 latency data. It is the last fallback for medium and high, so a generous
-  # limit beats returning an error. Revisit once live latency data exists.
-  gemini-flash: 30
-  # gemini-flash-lite: no latency data either; same as gemini-flash until there is some. Revisit with live data.
-  gemini-flash-lite: 30
+  # gemini-flash: no Phase 2 latency data. It is the last fallback for medium and high, so a generous limit
+  # beats returning an error. 30 s was too short: Google stops the call at our limit (the SDK sends it as
+  # X-Server-Timeout) and returns 504 "Deadline expired". 60 s, like the BYOK reasoning models: a guess,
+  # revisit with live data. (tests/test_timeouts.py lists both Gemini models in NO_DATA_EXCEPTIONS.)
+  gemini-flash: 60
+  # gemini-flash-lite: no latency data either; same as gemini-flash. Revisit with live data.
+  gemini-flash-lite: 60
   # ollama-llama (local llama3.2:3b, low-tier backup): p95 30,785 ms -> 31 s + 1 s margin
   # (reports/latency_p95.json). With the 8 s default, 33% of its Phase 2 calls would have been killed;
   # with 32 s, 4.8%. Phase 2 ran it alongside the other tiers on the same machine.
@@ -74,8 +76,8 @@ streaming:
   first_token_timeout_seconds: 8
   model_first_token_timeouts:
     groq-large: 10
-    gemini-flash: 30
-    gemini-flash-lite: 30
+    gemini-flash: 60      # no data, revisit with live data
+    gemini-flash-lite: 60
     ollama-llama: 32
     openai-luna: 60       # BYOK models: no data, revisit with live data
     openai-terra: 60
@@ -151,6 +153,12 @@ model_params:
     reasoning_effort: low
   claude-opus:
     reasoning_effort: low
+  # gemini-flash (Gemini 3.8 Flash) thinks at "medium" by default; Google recommends "low" for latency-critical
+  # work like real-time chat (aistudio.google.com/docs/whats-new-gemini-3.8, checked 2026-11-19). It rejects
+  # "minimal". Sent as ThinkingConfig(thinking_level="LOW"). gemini-flash-lite gets nothing: it already thinks at
+  # "minimal" by default, and "low" would be more thinking, not less.
+  gemini-flash:
+    thinking_level: low
 
 # The smallest max_tokens a model gets when the CALLER doesn't set max_tokens (it raises only generation.max_tokens
 # above). Reasoning models count their thinking toward max_tokens, so 4000 can be used up before any answer is

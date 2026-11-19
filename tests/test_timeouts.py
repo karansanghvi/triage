@@ -89,7 +89,9 @@ def test_groq_large_uses_p99_and_no_phase2_call_exceeds_it(routing):
 
 def test_ollama_and_gemini_timeouts(routing):
     assert routing.timeout_for("ollama-llama") == 32 > routing.timeout_seconds
-    assert routing.timeout_for("gemini-flash") == 30
+    # 30 s was too short (Google stopped the call at it: 504 "Deadline expired"). 60 s until there is live data
+    for name in ("gemini-flash", "gemini-flash-lite"):
+        assert routing.timeout_for(name) == 60 and routing.first_token_timeout_for(name) == 60, name
 
 
 def test_byok_models_get_60s_until_there_is_live_data(routing):
