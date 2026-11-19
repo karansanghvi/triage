@@ -84,19 +84,29 @@ function OwnKeysCard() {
   const { usableProviders } = useProviderKeys()
   return (
     <div className="rounded-xl border border-border bg-background p-4">
-      <div className="flex items-center justify-between gap-2">
-        <p className="flex items-center gap-2 text-sm font-medium">
-          <KeyRound className="h-4 w-4 text-primary" />
+      <div className="flex items-center justify-between gap-3">
+        <p className="flex items-center gap-2 whitespace-nowrap text-sm font-medium">
+          <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-[#4ADE80] shadow-[0_0_6px_rgba(74,222,128,0.6)]" />
           Using your keys
         </p>
         <Link
           to="/settings/provider-keys"
-          className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+          aria-label="Manage provider keys"
+          className="shrink-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           Manage
         </Link>
       </div>
-      <p className="mt-1 truncate text-xs text-muted-foreground">{usableProviders.join(", ")}</p>
+      <ul className="mt-2 flex flex-wrap gap-1.5">
+        {usableProviders.map((name) => (
+          <li
+            key={name}
+            className="rounded-full border border-[#2A2D3D] bg-[#1A1C26] px-2 py-0.5 text-[11px] text-[#C9CDD8]"
+          >
+            {name}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
