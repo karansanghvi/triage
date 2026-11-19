@@ -60,13 +60,15 @@ class FakeModels:
         self._lock = threading.Lock()
 
     def __call__(self, messages, model_config, stream=False, temperature=0.0, max_tokens=4000, timeout=30.0,
-                 reasoning_effort=None, response_format=None, thinking=None, api_key=None, thinking_level=None):
+                 reasoning_effort=None, response_format=None, thinking=None, api_key=None, thinking_level=None,
+                 system_prefix=None):
         b = self.script.get(model_config.name, FakeBehavior())
         kind = self._kind(messages, response_format)
         with self._lock:
             self.calls.append({"model": model_config.name, "stream": stream, "temperature": temperature,
                                "max_tokens": max_tokens, "timeout": timeout, "reasoning_effort": reasoning_effort,
                                "thinking": thinking, "thinking_level": thinking_level,
+                               "system_prefix": system_prefix,
                                "byok_key": api_key is not None, "kind": kind})
             self.last_api_key = api_key        # tests only: which key reached the "provider" (never logged)
         if kind != "answer":

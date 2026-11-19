@@ -1,6 +1,7 @@
 import type { DemoStatus, Message, RoutingInfo, Tier, RequestMode, RoutedBy } from "@/types/chat"
 import { TriageError } from "@/lib/errors"
 import { qualityToTau } from "@/lib/quality"
+import { LANGUAGE_INSTRUCTION, withLanguageInstruction, type ApiMessage } from "@/lib/chatMessages"
 
 const BASE_URL = import.meta.env.VITE_TRIAGE_URL ?? "http://localhost:8000"
 const DEFAULT_MAX_PROMPT_CHARS = 8000
@@ -55,8 +56,6 @@ export type ChatResult = {
 }
 
 // ---------- Helpers ----------
-
-type ApiMessage = { role: "user" | "assistant"; content: string }
 
 // Only real, finished turns go to Triage: no "thinking" placeholders, no errors
 function toApiMessages(messages: Message[]): ApiMessage[] {
@@ -128,11 +127,14 @@ export async function sendChat(
   quality: number,
   { maxPromptChars = DEFAULT_MAX_PROMPT_CHARS, sessionToken = null }: SendChatOptions = {}
 ): Promise<ChatResult> {
-  // Only the demo has a prompt limit: account mode sends the whole conversation
+  // Only the demo has a prompt limit: account mode sends the whole conversation. The demo counts every message,
+  // the language instruction too, so the history gets what is left.
   const history = toApiMessages(messages)
   const body = {
     model: "auto",
-    messages: sessionToken ? history : trimToLimit(history, maxPromptChars),
+    messages: withLanguageInstruction(
+      sessionToken ? history : trimToLimit(history, maxPromptChars - LANGUAGE_INSTRUCTION.length)
+    ),
   }
 
   let response: Response

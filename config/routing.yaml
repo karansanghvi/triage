@@ -216,6 +216,13 @@ model_params:
   # "minimal" by default, and "low" would be more thinking, not less.
   gemini-flash:
     thinking_level: low
+  # system_prefix: put at the start of the system message for THIS model only (merged into an existing one).
+  # groq-allam (ALLaM, Arabic-English) sometimes answers short English messages like "hello" in Arabic.
+  # It is the low tier's Phase 2 model, collected without a system prompt; this is the one exemption from "live
+  # params = Phase 2 params" (tests/test_live_settings.py): a reply-language instruction shouldn't change answer
+  # quality on English prompts, and retraining then learns groq-allam as it is served.
+  groq-allam:
+    system_prefix: "Always reply in the same language as the user's latest message."
 
 # The smallest max_tokens a model gets when the CALLER doesn't set max_tokens (it raises only generation.max_tokens
 # above). Reasoning models count their thinking toward max_tokens, so 4000 can be used up before any answer is

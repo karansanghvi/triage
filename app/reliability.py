@@ -49,7 +49,7 @@ class BreakerSettings:
 # Generation settings that apply to every model, and request parameters that are set per MODEL
 # (never per call or per tier), so a fallback model never receives a parameter meant for another model.
 GENERATION_KEYS = {"temperature", "max_tokens"}
-MODEL_PARAM_KEYS = {"reasoning_effort", "thinking", "thinking_level"}
+MODEL_PARAM_KEYS = {"reasoning_effort", "thinking", "thinking_level", "system_prefix"}
 # Providers whose adapter speaks OpenAI's format
 OPENAI_FORMAT_PROVIDERS = {"openai", "groq", "ollama", "openrouter"}
 # reasoning_effort: OpenAI-format providers, plus Anthropic (sent as output_config.effort)
@@ -411,6 +411,10 @@ def _load_model_params(raw, registry: dict) -> dict:
                                  "`thinking: disabled` (use reasoning_effort to limit thinking instead).")
             if params["thinking"] == "disabled" and params.get("reasoning_effort") in ("xhigh", "max"):
                 raise ValueError(f"routing.yaml: '{name}': thinking disabled is a 400 at effort xhigh or max")
+        if "system_prefix" in params:            # any provider: it only changes the messages
+            prefix = params["system_prefix"]
+            if not isinstance(prefix, str) or not prefix.strip():
+                raise ValueError(f"routing.yaml: '{name}' system_prefix must be a non-empty string")
         if "thinking_level" in params:
             if registry[name].provider != "gemini":
                 raise ValueError(f"routing.yaml: '{name}' ({registry[name].provider}) does not accept thinking_level")

@@ -179,6 +179,18 @@ def _validate_messages(messages) -> None:
         raise ValueError("messages need at least one user message")
 
 
+def with_system_prefix(messages: list[dict], prefix: str) -> list[dict]:
+    """`messages` with `prefix` at the start of the system message: merged into the FIRST system message if there is
+    one (prefix, a blank line, then its text), otherwise a new system message first. Never changes the input."""
+    out = [dict(m) for m in messages]
+    for message in out:
+        if message["role"] == "system":
+            existing = message["content"]
+            message["content"] = f"{prefix}\n\n{existing}" if existing.strip() else prefix
+            return out
+    return [{"role": "system", "content": prefix}] + out
+
+
 def send_request(
     messages: list[dict],
     model_config: ModelConfig,
@@ -191,6 +203,7 @@ def send_request(
     thinking: Optional[str] = None,
     api_key: Optional[str] = None,
     thinking_level: Optional[str] = None,
+    system_prefix: Optional[str] = None,
 ):
     """Send messages to any model.
 
@@ -202,6 +215,8 @@ def send_request(
     response_format (e.g. {"type": "json_object"}) asks OpenAI-format providers for JSON-only output.
     thinking ("disabled" or "adaptive") is Anthropic only.
     thinking_level ("minimal", "low", "medium", "high") is Gemini only. None = not sent: the model's default.
+    system_prefix: text put at the start of the system message (merged into an existing one, or a new one first);
+    routing.yaml model_params sets it per model (e.g. groq-allam's reply-language instruction). None = unchanged.
     api_key: a caller's own provider key (BYOK). None = the adapter reads the server's key from the environment,
     as eval/ and scripts/ rely on. The reliability layer always passes it for BYOK requests (never env).
     Ollama ignores it.
@@ -209,6 +224,8 @@ def send_request(
     Raises ProviderError when the provider fails.
     """
     _validate_messages(messages)
+    if system_prefix is not None:
+        messages = with_system_prefix(messages, system_prefix)
 
     adapter = ADAPTERS.get(model_config.provider)
     if adapter is None:
