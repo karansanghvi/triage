@@ -13,14 +13,14 @@ type ProviderKeysContextValue = {
   hasUsableKey: boolean            // at least one key that is "valid" or "unverified"
   allRejected: boolean             // at least one key saved, none usable
   usableProviders: string[]        // display names, e.g. ["Anthropic", "Groq"]
-  refresh: () => Promise<void>
+  refresh: () => Promise<ProviderKey[] | null>   // the new list, or null if it couldn't be loaded
   upsertKey: (key: ProviderKey) => void
   removeKey: (provider: Provider) => void
 }
 
 const ProviderKeysContext = createContext<ProviderKeysContextValue | null>(null)
 
-function usable(key: ProviderKey): boolean {
+export function isUsableKey(key: ProviderKey): boolean {
   return key.status === "valid" || key.status === "unverified"
 }
 
@@ -64,14 +64,17 @@ export function ProviderKeysProvider({ children }: { children: ReactNode }) {
   // Reload in the background: the current keys stay shown until the new list arrives
   const refresh = useCallback(async () => {
     const forUser = userRef.current
-    if (!forUser) return
+    if (!forUser) return null
     try {
       const list = await apiRef.current.listProviderKeys()
-      if (userRef.current === forUser) setLoaded({ userId: forUser, keys: list, error: false })
+      if (userRef.current !== forUser) return null
+      setLoaded({ userId: forUser, keys: list, error: false })
+      return list
     } catch {
       if (userRef.current === forUser) {
         setLoaded((prev) => ({ userId: forUser, keys: prev?.userId === forUser ? prev.keys : null, error: true }))
       }
+      return null
     }
   }, [])
 
@@ -96,7 +99,7 @@ export function ProviderKeysProvider({ children }: { children: ReactNode }) {
   )
 
   const value = useMemo<ProviderKeysContextValue>(() => {
-    const usableIds = new Set((keys ?? []).filter(usable).map((k) => k.provider))
+    const usableIds = new Set((keys ?? []).filter(isUsableKey).map((k) => k.provider))
     return {
       keys,
       loading: !!userId && keys === null && !error,

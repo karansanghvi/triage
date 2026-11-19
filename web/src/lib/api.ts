@@ -113,10 +113,15 @@ function toRoutingInfo(t: ApiTriage): RoutingInfo {
 
 // ---------- Public functions ----------
 
+export type SendChatOptions = {
+  maxPromptChars?: number
+  sessionToken?: string | null   // given: account mode (the account's saved keys); not given: demo, as for guests
+}
+
 export async function sendChat(
   messages: Message[],
   quality: number,
-  maxPromptChars: number = DEFAULT_MAX_PROMPT_CHARS
+  { maxPromptChars = DEFAULT_MAX_PROMPT_CHARS, sessionToken = null }: SendChatOptions = {}
 ): Promise<ChatResult> {
   const body = {
     model: "auto",
@@ -130,6 +135,7 @@ export async function sendChat(
       headers: {
         "Content-Type": "application/json",
         "X-Triage-Quality": qualityToTau(quality).toFixed(2),
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
       },
       body: JSON.stringify(body),
     })
@@ -140,6 +146,10 @@ export async function sendChat(
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as ApiError
     const retryAfter = response.headers.get("Retry-After")
+    // An ended or unknown session gets the same 401 as a bad API key here: it means the session is over
+    if (sessionToken && response.status === 401 && data.error?.code === "invalid_api_key") {
+      throw new TriageError("invalid_session", "Please log in again.")
+    }
     throw new TriageError(
       data.error?.code ?? `http_${response.status}`,
       data.error?.message ?? "Something went wrong. Please try again.",

@@ -1,6 +1,6 @@
 import { formatCost, formatPercent } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { Message, RoutingInfo, Tier } from "@/types/chat"
+import type { Message, RequestMode, RoutingInfo, Tier } from "@/types/chat"
 import { Database, LifeBuoy } from "lucide-react"
 
 type RoutingPanelProps = {
@@ -33,10 +33,11 @@ const TIER_BAR: Record<Tier, string> = {
   high: "bg-warning",
 }
 
-const MODE_LABEL = {
+const MODE_LABEL: Record<RequestMode, string> = {
   demo: "Free demo",
   byok: "Using your own keys",
   api: "API",
+  account: "Using your keys",
 }
 
 function savedShare(routing: RoutingInfo): number | null {

@@ -2,7 +2,7 @@
 
 export type Tier = "low" | "medium" | "high"
 
-export type RequestMode = "api" | "byok" | "demo"
+export type RequestMode = "api" | "byok" | "demo" | "account"
 
 export type RoutingInfo = {
   requestId: string
@@ -28,6 +28,7 @@ export type ChatError = {
   code: string                // e.g. "demo_limit_reached"
   message: string
   retryAfter?: number         // seconds, when Triage says when to try again
+  provider?: string           // display name of the provider that rejected a saved key, e.g. "Groq"
 }
 
 export type UserMessage = {

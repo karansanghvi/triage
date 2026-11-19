@@ -8,15 +8,43 @@ import RoutingPanel from "@/components/chat/RoutingPanel"
 import { useVisitorName } from "@/hooks/useVisitorName"
 import { useDemoStatus } from "@/context/DemoStatusContext"
 import { useChats } from "@/context/ChatsContext"
+import { useAuth } from "@/context/AuthContext"
+import { isUsableKey, useProviderKeys } from "@/context/ProviderKeysContext"
 import { sendChat } from "@/lib/api"
 import { TriageError } from "@/lib/errors"
 import { DEFAULT_QUALITY } from "@/lib/quality"
+import { PROVIDERS, type ProviderKey } from "@/lib/account"
 import type { AssistantMessage, ChatError, Message, UserMessage } from "@/types/chat"
 import LimitBanner from "@/components/chat/LimitBanner";
+import KeysRejectedBanner from "@/components/chat/KeysRejectedBanner"
+
+// How one request is sent: the free demo (no Authorization, as for guests), or account mode with the
+// session token, where the backend uses only the account's saved keys and preferred provider
+type SendMode = { kind: "demo" } | { kind: "account"; token: string; keys: ProviderKey[] }
+
+// After an account-mode key error, the card to show, from the keys reloaded just now (null: reload failed)
+function keyErrorAfterRefresh(code: string, before: ProviderKey[], after: ProviderKey[] | null): ChatError {
+  if (after === null) {
+    return code === "no_provider_keys"
+      ? { code: "keys_changed", message: "" }
+      : { code: "saved_key_rejected", message: "" }
+  }
+  if (after.some(isUsableKey)) {
+    if (code === "no_provider_keys") return { code: "keys_changed", message: "" }
+    // The provider whose key was usable when this was sent and isn't any more
+    const nowUsable = new Set(after.filter(isUsableKey).map((k) => k.provider))
+    const rejected = before.filter((k) => isUsableKey(k) && !nowUsable.has(k.provider)).map((k) => k.provider)
+    const names = PROVIDERS.filter((p) => rejected.includes(p.id)).map((p) => p.name)
+    return { code: "saved_key_rejected", message: "", provider: names.length === 1 ? names[0] : undefined }
+  }
+  return { code: code === "no_provider_keys" ? "keys_removed_demo" : "keys_rejected_demo", message: "" }
+}
 
 export default function ChatPage() {
   const { name } = useVisitorName()
   const demoStatus = useDemoStatus()
+  const { user, token, expireSession } = useAuth()
+  const providerKeys = useProviderKeys()
   const { activeId, activeMessages: messages, updateMessages, newChat, busy, setBusy } = useChats()
 
   const [input, setInput] = useState("")
@@ -24,9 +52,20 @@ export default function ChatPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const isEmpty = messages.length === 0
-  // Free demo used up (when BYOK keys exist, this will also check that the visitor has none)
+
+  // Logged in with at least one usable saved key: account mode. Anyone else (guests, no keys, every key
+  // rejected, or the keys still loading or failed to load): the free demo.
+  const accountMode = !!user && !!token && providerKeys.hasUsableKey
+  const onDemoBecauseRejected = !!user && !accountMode && providerKeys.allRejected
+
+  // Free demo used up: only matters for requests that go to the demo
   const limitStatus = demoStatus.status
-  const outOfRequests = !!limitStatus && (limitStatus.remaining === 0 || limitStatus.paused)
+  const outOfRequests = !accountMode && !!limitStatus && (limitStatus.remaining === 0 || limitStatus.paused)
+
+  // Decided when each request is sent (and again on Try again), from the latest login and keys
+  function currentMode(): SendMode {
+    return accountMode && token ? { kind: "account", token, keys: providerKeys.keys ?? [] } : { kind: "demo" }
+  }
 
   // The selected answer: the one the visitor clicked, or else the latest answer in this chat.
   // Switching chats falls back to the latest answer automatically.
@@ -37,7 +76,7 @@ export default function ChatPage() {
     selectedMessage && selectedMessage.role === "assistant" ? selectedMessage.routing ?? null : null
 
   // Sends a conversation to Triage and fills in the answer
-  async function requestAnswer(history: Message[], chatId: string | null) {
+  async function requestAnswer(history: Message[], chatId: string | null, mode: SendMode) {
     const pendingId = crypto.randomUUID()
     const pending: AssistantMessage = { id: pendingId, role: "assistant", content: "", status: "pending" }
 
@@ -46,8 +85,8 @@ export default function ChatPage() {
     setBusy(true)
 
     try {
-      const result = await sendChat(history, quality)
-      if (result.demo) demoStatus.update(result.demo)
+      const result = await sendChat(history, quality, { sessionToken: mode.kind === "account" ? mode.token : null })
+      if (mode.kind === "demo" && result.demo) demoStatus.update(result.demo)
       updateMessages(id, (prev) =>
         prev.map((m) =>
           m.id === pendingId && m.role === "assistant"
@@ -57,12 +96,22 @@ export default function ChatPage() {
       )
       setSelectedId(pendingId)
     } catch (err) {
-      demoStatus.refresh()
+      if (mode.kind === "demo") demoStatus.refresh()
 
-      const error: ChatError =
+      let error: ChatError =
         err instanceof TriageError
           ? { code: err.code, message: err.message, retryAfter: err.retryAfter }
           : { code: "network_error", message: "Couldn't reach Triage. Please try again." }
+
+      if (mode.kind === "account") {
+        if (error.code === "invalid_provider_key" || error.code === "no_provider_keys") {
+          // The backend has marked the rejected key invalid (or the keys were removed elsewhere): reload them
+          const after = await providerKeys.refresh()
+          error = keyErrorAfterRefresh(error.code, mode.keys, after)
+        } else if (error.code === "invalid_session") {
+          expireSession()           // log out locally; Try again then goes to the free demo
+        }
+      }
 
       updateMessages(id, (prev) =>
         prev.map((m) => (m.id === pendingId && m.role === "assistant" ? { ...m, status: "error", error } : m))
@@ -78,7 +127,7 @@ export default function ChatPage() {
 
     const userMessage: UserMessage = { id: crypto.randomUUID(), role: "user", content }
     setInput("")
-    requestAnswer([...messages, userMessage], activeId)
+    requestAnswer([...messages, userMessage], activeId, currentMode())
   }
 
   // Resend the conversation up to the failed answer
@@ -86,7 +135,7 @@ export default function ChatPage() {
     if (busy) return
     const index = messages.findIndex((m) => m.id === failedId)
     if (index === -1) return
-    requestAnswer(messages.slice(0, index), activeId)
+    requestAnswer(messages.slice(0, index), activeId, currentMode())
   }
 
   function handleNewChat() {
@@ -98,7 +147,11 @@ export default function ChatPage() {
 
   const chatInput = (
     <>
-        {outOfRequests && limitStatus && <LimitBanner status={limitStatus} />}
+        {outOfRequests && limitStatus ? (
+          <LimitBanner status={limitStatus} />
+        ) : (
+          onDemoBecauseRejected && <KeysRejectedBanner />
+        )}
         <ChatInput
             value={input}
             onChange={setInput}
