@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from app.api import main as main_module
@@ -117,3 +118,52 @@ def test_the_json_500_works_without_cors_too(broken_router):
                      headers={"Authorization": f"Bearer {API_KEY}"})
     assert r.status_code == 500 and r.json()["error"]["code"] == "internal_error"
     assert "access-control-allow-origin" not in r.headers
+
+
+# ---------- every endpoint's method passes a preflight ----------
+
+def every_route(routes, prefix=""):
+    """(path, method) for each endpoint, including routers added with include_router (which FastAPI may wrap)."""
+    for route in routes:
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            context = getattr(route, "include_context", None)
+            yield from every_route(inner.routes, prefix + (getattr(context, "prefix", "") or ""))
+        elif isinstance(route, APIRoute):
+            for method in sorted(route.methods - {"HEAD"}):
+                yield prefix + route.path, method
+
+
+def api_app():
+    deps = make_deps(predictor=FakePredictor(0.95, 0.95))
+    return create_app(deps=deps, auth=Auth([API_KEY]), public=True, cors_origins=[SITE], accounts=True)
+
+
+ROUTES = sorted(set(every_route(api_app().routes)))
+
+
+def test_the_route_list_covers_the_whole_api():
+    """If FastAPI changes how included routers are stored, the walk above must not silently find fewer routes."""
+    application = api_app()
+    documented = {(path, method.upper()) for path, item in application.openapi()["paths"].items() for method in item}
+    assert documented <= set(ROUTES), documented - set(ROUTES)
+    paths = {path for path, _ in ROUTES}
+    assert any(p.startswith("/v1/account") for p in paths) and any(p.startswith("/v1/auth") for p in paths)
+    assert ("/v1/account/provider-keys/{provider}", "PUT") in ROUTES
+
+
+@pytest.mark.parametrize("path, method", ROUTES, ids=[f"{m} {p}" for p, m in ROUTES])
+def test_every_endpoint_method_passes_a_browser_preflight(path, method):
+    """A new endpoint with a method CORS doesn't allow fails here: the browser would block it with a network error."""
+    url = re.sub(r"\{[^}]+\}", "x", path)
+    r = TestClient(api_app()).options(url, headers={"Origin": SITE, "Access-Control-Request-Method": method,
+                                                    "Access-Control-Request-Headers": "authorization, content-type"})
+    assert r.status_code == 200, f"{method} {path}: {r.text}"
+    assert r.headers["access-control-allow-origin"] == SITE
+    allowed = {m.strip() for m in r.headers["access-control-allow-methods"].split(",")}
+    assert method in allowed
+
+
+def test_a_method_no_endpoint_uses_is_still_refused():
+    r = TestClient(api_app()).options("/v1/account", headers={"Origin": SITE, "Access-Control-Request-Method": "TRACE"})
+    assert r.status_code == 400

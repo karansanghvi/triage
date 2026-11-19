@@ -1,6 +1,7 @@
-"""Sending password reset codes. Blocking: call from a worker thread in async code.
+"""Sending emails: the password reset code and the welcome email. Blocking: call from a worker thread in async code.
 
-Every sender has send_reset_code(to, user_id, code, idempotency_key, display_name=None) and `available`. Chosen at startup
+Every sender has send_reset_code(to, user_id, code, idempotency_key, display_name=None),
+send_welcome(to, user_id, idempotency_key, display_name=None) and `available`. Chosen at startup
 (sender_from_env), first match wins:
 
     1. TRIAGE_DEV_EMAIL_LOG=on   ConsoleDevSender: logs "reset code for user <id>: 123456" to the server console.
@@ -17,6 +18,9 @@ TRIAGE_EMAIL_FROM must be "email@domain" or "Name <email@domain>" (parse_sender)
 matching pair of surrounding quotes are removed (some hosts and `docker --env-file` keep a .env value's quotes);
 anything else, such as a quote left on one end, makes email unavailable at startup instead of failing every send.
 
+Links in the emails go to TRIAGE_APP_URL pages only; without it, emails are sent without links (one startup
+warning). TRIAGE_PUBLIC_API_URL is the API address shown in the welcome email (default https://api.gettriage.dev).
+
 Never logged or put in an error: the address, the code, the API key, or Resend's response body. A failed send
 raises EmailSendError with a short kind ("resend_403", "timeout", ...) and nothing else.
 """
@@ -30,13 +34,13 @@ from urllib.parse import urlsplit
 import httpx
 from sqlalchemy.engine import make_url
 
-from app.accounts.email_template import LogoUrlError, parse_logo_url, reset_email
+from app.accounts.email_template import (DEFAULT_API_URL, LOCAL_HOSTS, LogoUrlError, PublicUrlError, parse_logo_url,
+                                         parse_public_url, reset_email, welcome_email)
 
 RESEND_KEY_ENV, EMAIL_FROM_ENV, DEV_EMAIL_LOG_ENV = "RESEND_API_KEY", "TRIAGE_EMAIL_FROM", "TRIAGE_DEV_EMAIL_LOG"
 RESEND_URL = "https://api.resend.com/emails"
 USER_AGENT = "triage/0.5"            # Resend refuses requests without a User-Agent (403)
 TIMEOUT = httpx.Timeout(10.0)
-LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 dev_logger = logging.getLogger("triage.email")
 
@@ -52,6 +56,29 @@ class EmailSendError(Exception):
 # ---------- the message (app/accounts/email_template.py) ----------
 
 LOGO_URL_ENV = "TRIAGE_EMAIL_LOGO_URL"
+APP_URL_ENV, API_URL_ENV = "TRIAGE_APP_URL", "TRIAGE_PUBLIC_API_URL"
+LOGO_CHECK_TIMEOUT = httpx.Timeout(5.0)
+
+
+def logo_url_problem(url: str, transport: Optional[httpx.BaseTransport] = None) -> Optional[str]:
+    """One HEAD request to the logo URL. None if it answers 200 with an image/* content-type; otherwise a short
+    reason naming the variable (never the URL). Never raises: a failed check only means the plain mark is used."""
+    try:
+        with httpx.Client(transport=transport, timeout=LOGO_CHECK_TIMEOUT, follow_redirects=True,
+                          headers={"User-Agent": USER_AGENT}) as client:
+            response = client.head(url)
+    except httpx.TimeoutException:
+        return f"{LOGO_URL_ENV} is unreachable (timed out)"
+    except httpx.HTTPError:
+        return f"{LOGO_URL_ENV} is unreachable"
+    except Exception as error:                       # e.g. a malformed URL: never stop the server starting
+        return f"{LOGO_URL_ENV} could not be checked ({type(error).__name__})"
+    if response.status_code != 200:
+        return f"{LOGO_URL_ENV} returned {response.status_code}"
+    kind = response.headers.get("content-type", "").split(";")[0].strip().lower()
+    if not kind.startswith("image/"):
+        return f"{LOGO_URL_ENV} is not an image (content-type {kind or 'missing'})"
+    return None
 
 
 # ---------- senders ----------
@@ -61,17 +88,42 @@ class ResendSender:
     name = "resend"
 
     def __init__(self, api_key: str, sender: str, transport: Optional[httpx.BaseTransport] = None,
-                 logo_url: Optional[str] = None, logo_problem: Optional[str] = None):
+                 logo_url: Optional[str] = None, logo_problem: Optional[str] = None,
+                 app_url: Optional[str] = None, api_url: Optional[str] = None, url_problems: tuple = ()):
         self._api_key, self.sender, self._transport = api_key, sender, transport
         self.logo_url = logo_url                 # TRIAGE_EMAIL_LOGO_URL, checked; None = the plain blue mark
         self.logo_problem = logo_problem         # why a set TRIAGE_EMAIL_LOGO_URL was ignored (never its value)
+        self.app_url = app_url                   # TRIAGE_APP_URL; None = emails without links
+        self.api_url = api_url or DEFAULT_API_URL
+        self.url_problems = tuple(url_problems)  # startup warnings about the two URLs (never their values)
+
+    @property
+    def problems(self) -> list:
+        """One startup warning each: names and reasons, never values."""
+        found = list(self.url_problems)
+        if self.logo_problem:
+            found.append(f"emails will show the plain logo mark: {self.logo_problem}")
+        return found
 
     def __repr__(self) -> str:
         return "ResendSender()"
 
+    def check_logo(self) -> None:
+        """At startup, once: if the logo URL doesn't serve an image, send the plain blue mark instead of a broken
+        image (logo_problem says why). Not repeated per email."""
+        if self.logo_url:
+            problem = logo_url_problem(self.logo_url, self._transport)
+            if problem:
+                self.logo_url, self.logo_problem = None, problem
+
     def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str,
                         display_name: Optional[str] = None) -> None:
-        subject, text, html = reset_email(code, display_name, self.logo_url)
+        self._post(to, idempotency_key, *reset_email(code, display_name, self.logo_url, self.app_url))
+
+    def send_welcome(self, to: str, user_id: str, idempotency_key: str, display_name: Optional[str] = None) -> None:
+        self._post(to, idempotency_key, *welcome_email(display_name, self.logo_url, self.app_url, self.api_url))
+
+    def _post(self, to: str, idempotency_key: str, subject: str, text: str, html: str) -> None:
         headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json",
                    "User-Agent": USER_AGENT, "Idempotency-Key": idempotency_key}
         body = {"from": self.sender, "to": [to], "subject": subject, "text": text, "html": html}
@@ -91,12 +143,17 @@ class FakeEmailSender:
     """Tests and fake mode: remembers each message, sends nothing."""
     available = True
     name = "fake"
-    sent: list = field(default_factory=list)
+    sent: list = field(default_factory=list)          # reset codes
+    welcomed: list = field(default_factory=list)      # welcome emails
 
     def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str,
                         display_name: Optional[str] = None) -> None:
         self.sent.append({"to": to, "user_id": user_id, "code": code, "idempotency_key": idempotency_key,
                           "display_name": display_name})
+
+    def send_welcome(self, to: str, user_id: str, idempotency_key: str, display_name: Optional[str] = None) -> None:
+        self.welcomed.append({"to": to, "user_id": user_id, "idempotency_key": idempotency_key,
+                              "display_name": display_name})
 
 
 class ConsoleDevSender:
@@ -115,6 +172,9 @@ class ConsoleDevSender:
     def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str,
                         display_name: Optional[str] = None) -> None:
         dev_logger.info("reset code for user %s: %s", user_id, code)
+
+    def send_welcome(self, to: str, user_id: str, idempotency_key: str, display_name: Optional[str] = None) -> None:
+        dev_logger.info("welcome email for user %s", user_id)
 
 
 @dataclass(frozen=True)
@@ -135,6 +195,9 @@ class UnavailableSender:
 
     def send_reset_code(self, to: str, user_id: str, code: str, idempotency_key: str,
                         display_name: Optional[str] = None) -> None:
+        raise EmailSendError("unavailable")
+
+    def send_welcome(self, to: str, user_id: str, idempotency_key: str, display_name: Optional[str] = None) -> None:
         raise EmailSendError("unavailable")
 
 
@@ -219,4 +282,24 @@ def sender_from_env(fake: bool, environ: Optional[Mapping[str, str]] = None):
         logo_url, logo_problem = parse_logo_url(environ.get(LOGO_URL_ENV)), None
     except LogoUrlError as error:            # cosmetic: send without the image rather than not at all
         logo_url, logo_problem = None, str(error)
-    return ResendSender(api_key, sender, logo_url=logo_url, logo_problem=logo_problem)
+    app_url, api_url, url_problems = email_urls(environ)
+    return ResendSender(api_key, sender, logo_url=logo_url, logo_problem=logo_problem, app_url=app_url,
+                        api_url=api_url, url_problems=url_problems)
+
+
+def email_urls(environ: Mapping[str, str]) -> tuple:
+    """(app URL or None, API URL or None, startup warnings). A bad value is treated as unset, with a warning."""
+    problems = []
+    try:
+        app_url = parse_public_url(environ.get(APP_URL_ENV), APP_URL_ENV)
+        if app_url is None:
+            problems.append(f"emails are sent without links: {APP_URL_ENV} is not set")
+    except PublicUrlError as error:
+        app_url = None
+        problems.append(f"emails are sent without links: {error}")
+    try:
+        api_url = parse_public_url(environ.get(API_URL_ENV), API_URL_ENV, strip_v1=True)
+    except PublicUrlError as error:
+        api_url = None
+        problems.append(f"the welcome email shows {DEFAULT_API_URL}: {error}")
+    return app_url, api_url, tuple(problems)

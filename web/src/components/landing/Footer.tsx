@@ -26,6 +26,10 @@ export default function Footer() {
           </Link>
         </nav>
       </div>
+      <p className="mx-auto mt-6 max-w-6xl text-xs leading-relaxed text-[#6B7080]">
+        OpenAI, Anthropic, Claude, Gemini and Groq are trademarks of their respective owners. Triage is not affiliated
+        with or endorsed by them. Groq is a trademark of Groq LLC and/or its affiliates.
+      </p>
     </footer>
   )
 }

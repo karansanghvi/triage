@@ -78,7 +78,7 @@ function AccountRow() {
 
   return (
     <div className="flex items-center gap-2 rounded-lg px-1 py-1">
-      <Link to="/settings" className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1 transition-colors hover:bg-accent">
+      <Link to="/settings/account" className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1 transition-colors hover:bg-accent">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-primary">
           {name ? name[0].toUpperCase() : "?"}
         </div>

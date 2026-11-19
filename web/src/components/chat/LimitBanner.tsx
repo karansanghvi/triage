@@ -1,3 +1,4 @@
+import { useAuth } from "@/context/AuthContext";
 import type { DemoStatus } from "@/types/chat";
 import { Clock, KeyRound } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -10,6 +11,8 @@ function formatResetTime(resetsAt: string): string | null {
 }
 
 export default function LimitBanner({ status }: { status: DemoStatus }) {
+
+    const { user } = useAuth()
 
     const resetTime = formatResetTime(status.resetsAt)
 
@@ -32,7 +35,7 @@ export default function LimitBanner({ status }: { status: DemoStatus }) {
             <p className="mt-0.5 text-xs text-muted-foreground">{body}</p>
         </div>
         <Link
-            to="/settings"
+            to={user ? "/settings/provider-keys" : "/signup"}
             className="flex shrink-0 items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90"
         >
             <KeyRound className="h-3.5 w-3.5" />

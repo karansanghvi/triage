@@ -1,13 +1,17 @@
-import { Route, Routes } from "react-router-dom"
+import { Navigate, Route, Routes } from "react-router-dom"
 import AppLayout from "@/components/layout/AppLayout"
 import LandingPage from "@/pages/LandingPage"
 import ChatPage from "@/pages/ChatPage"
 import DashboardPage from "@/pages/DashboardPage"
-import SettingsPage from "@/pages/SettingsPage"
 import SignupPage from "./pages/SignupPage";
 import LoginPage from "./pages/LoginPage";
 import RequireAuth from "./components/auth/RequireAuth";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
+import SettingsLayout from "./components/settings/SettingsLayout";
+import GetStartedPage from "./components/settings/GetStartedPage";
+import ApiKeysPage from "./components/settings/ApiKeysPage";
+import ProviderKeysPage from "./components/settings/ProviderKeysPage";
+import AccountPage from "./components/settings/AccountPage";
 
 export default function App() {
   return (
@@ -26,10 +30,16 @@ export default function App() {
           path="/settings" 
           element={
             <RequireAuth>
-              <SettingsPage />
+              <SettingsLayout />
             </RequireAuth>
           } 
-        />
+        >
+          <Route index element={<Navigate to="get-started" replace />} />
+          <Route path="get-started" element={<GetStartedPage />} />
+          <Route path="api-keys" element={<ApiKeysPage />} />
+          <Route path="provider-keys" element={<ProviderKeysPage />} />
+          <Route path="account" element={<AccountPage />} />
+        </Route>
       </Route>
     </Routes>
   )

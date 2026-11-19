@@ -2,6 +2,7 @@ import { Link } from "react-router-dom"
 import { AlertCircle, Clock, KeyRound, RotateCw, WifiOff } from "lucide-react"
 import type { ChatError } from "@/types/chat"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/context/AuthContext";
 
 type Action = "keys" | "retry" | null
 
@@ -98,6 +99,7 @@ type ErrorCardProps = {
 
 export default function ErrorCard({ error, onRetry }: ErrorCardProps) {
   const { title, body, action, tone, icon: Icon } = describe(error)
+  const { user } = useAuth()
 
   return (
     <div
@@ -114,7 +116,7 @@ export default function ErrorCard({ error, onRetry }: ErrorCardProps) {
 
           {action === "keys" && (
             <Link
-              to="/settings"
+              to={user ? "/settings/provider-keys" : "/signup"}
               className="mt-3 inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
             >
               <KeyRound className="h-3.5 w-3.5" />

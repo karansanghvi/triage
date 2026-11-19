@@ -394,6 +394,8 @@ class InternalErrorMiddleware:
 
 CORS_ORIGINS_ENV = "TRIAGE_CORS_ORIGINS"      # comma-separated, e.g. https://triage.example.com
 # Request headers a browser page may send, and response headers its JavaScript may read
+# Every method an endpoint uses (tests/test_cors.py checks each route's preflight against this list)
+CORS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 CORS_REQUEST_HEADERS = ["Authorization", "Content-Type", *PROVIDER_KEY_HEADERS.values(), "X-Triage-Quality",
                         "X-Triage-Task", "X-Triage-Verify", "X-Triage-Prefer-Provider"]
 CORS_RESPONSE_HEADERS = ["X-Triage-Request-Id", "X-Triage-Model", "X-Triage-Tier", "X-Triage-Reason",
@@ -416,16 +418,19 @@ def set_up_keyring(deps) -> None:
 def set_up_email(deps) -> None:
     """Password reset emails: choose the sender (app/accounts/email.py) unless deps already has one. Refuses to
     start if TRIAGE_DEV_EMAIL_LOG=on outside local development; without Resend settings, warns (names only) and
-    the reset endpoints answer 503."""
+    the reset endpoints answer 503. A TRIAGE_EMAIL_LOGO_URL that doesn't serve an image, or a missing TRIAGE_APP_URL: one warning each."""
     if deps.email_sender is None:
         from app.accounts.email import sender_from_env
         from app.api.deps import FAKE_MODELS_ENV
         deps.email_sender = sender_from_env(fake=os.environ.get(FAKE_MODELS_ENV) == "1")
+    if hasattr(deps.email_sender, "check_logo"):
+        deps.email_sender.check_logo()            # one HEAD request (5 s); a failure only drops the logo
     if not deps.email_sender.available:
         logger.warning("password reset is unavailable: %s", deps.email_sender.reason)
-    elif getattr(deps.email_sender, "logo_problem", None):
-        logger.warning("reset emails will show the plain logo mark: %s", deps.email_sender.logo_problem)
-    elif deps.email_sender.name == "console":
+        return
+    for problem in getattr(deps.email_sender, "problems", ()):
+        logger.warning("%s", problem)
+    if deps.email_sender.name == "console":
         logger.warning("TRIAGE_DEV_EMAIL_LOG is on: password reset codes are printed to this console")
 
 
@@ -522,7 +527,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app.add_middleware(InternalErrorMiddleware)       # first, so it sits inside CORSMiddleware
     if origins:
         # No cookies or credentials: the browser sends keys only as the explicit headers listed
-        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=CORS_METHODS,
                            allow_headers=CORS_REQUEST_HEADERS, expose_headers=CORS_RESPONSE_HEADERS,
                            allow_credentials=False, max_age=600)
 

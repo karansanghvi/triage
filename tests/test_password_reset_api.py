@@ -168,7 +168,8 @@ def test_a_full_reset_through_mocked_resend():
                                             transport=httpx.MockTransport(handler)))
     signup(http)
     request_code(http)
-    (email,) = sent
+    welcome, email = sent                                    # the welcome email at signup, then the code
+    assert welcome["subject"] == "Welcome to Triage"
     assert email["to"] == ["ada.lovelace@example.com"]
     code = re.search(r"^    (\d{6})$", email["text"], re.M).group(1)
     token = verify(http, code).json()["reset_token"]
