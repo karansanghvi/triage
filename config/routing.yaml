@@ -13,8 +13,11 @@ fallback_chains:
   # gemini-flash-lite: the low tier's non-Groq backup on a host without Ollama (TRIAGE_SERVER_PROVIDERS=groq,gemini).
   # Note its price_as ($0.30 / $2.50) is above groq-small's, so a low-tier fallback to it costs more than medium.
   low: [groq-allam, ollama-llama, gemini-flash-lite, openai-luna, claude-haiku]   # ollama-llama: local llama3.2:3b
-  medium: [groq-small, gemini-flash, openai-terra, claude-sonnet] # gemini-flash: different provider, at least medium quality
-  high: [groq-large, gemini-flash, openai-sol, claude-opus]       # gemini-flash: free tier is tiny (20/day), backup only
+  # gemini-flash-lite LAST in medium and high: a Gemini-only account (or the server keys) still gets an answer when
+  # Gemini Flash is overloaded. A low-tier model, so its answers are below what these tiers were predicted for:
+  # a last resort only, after every other provider.
+  medium: [groq-small, gemini-flash, openai-terra, claude-sonnet, gemini-flash-lite] # gemini-flash: different provider, at least medium quality
+  high: [groq-large, gemini-flash, openai-sol, claude-opus, gemini-flash-lite]       # gemini-flash: free tier is tiny (20/day), backup only
 
 # Providers a request WITHOUT its own keys may use (Triage's own keys, or the local Ollama). Models on any other
 # provider are dropped from every chain for those requests before anything is tried: no attempt, no fallback

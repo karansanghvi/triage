@@ -35,6 +35,8 @@ class ProviderError(Exception):
     kind is one of:
       rate_limit  429, too many requests
       server      5xx, a problem on the provider's side
+      overloaded  the provider says the model is too busy right now (Gemini 503 UNAVAILABLE "high demand",
+                  Anthropic 529 overloaded_error, OpenAI 503). Not retried on the same model: the chain moves on
       timeout     no answer in time
       connection  couldn't reach the provider
       auth        401 / 403: the key is missing, wrong or not allowed (provider-wide)

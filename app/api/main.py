@@ -318,13 +318,26 @@ def rejected_key_providers(attempts) -> list:
     return list(dict.fromkeys(a.provider for a in failed))
 
 
-def timed_out_providers(attempts) -> list:
-    """The providers that ran out of time, if EVERY failed attempt was a timeout; otherwise [] (mixed failures keep
-    the usual 503). In the order they were tried."""
+def providers_if_every_failure_was(attempts, kind: str) -> list:
+    """The providers tried, if EVERY failed attempt had this error kind (e.g. "timeout"); otherwise [] (mixed
+    failures keep the usual 503). In the order they were tried."""
     failed = [a for a in attempts if a.outcome == "error"]
-    if not failed or any(a.error_kind != "timeout" for a in failed):
+    if not failed or any(a.error_kind != kind for a in failed):
         return []
     return list(dict.fromkeys(a.provider for a in failed))
+
+
+def timed_out_providers(attempts) -> list:
+    return providers_if_every_failure_was(attempts, "timeout")
+
+
+def overloaded_message(providers: list, own_keys: bool) -> str:
+    names = _join([PROVIDER_NAMES.get(p, p) for p in providers])
+    verb = "are" if len(providers) > 1 else "is"
+    if own_keys:
+        return (f"{names} {verb} very busy right now. Try again in a moment, or add another provider key so Triage "
+                "can fall back.")
+    return f"{names} {verb} very busy right now. Try again in a moment."
 
 
 def timeout_message(providers: list, own_keys: bool) -> str:
@@ -814,6 +827,11 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 await finish("error", 504, "provider_timeout")
                 raise APIError(504, timeout_message(timed_out, byok), "server_error",
                                code="provider_timeout") from None
+            overloaded = providers_if_every_failure_was(error.attempts, "overloaded")
+            if overloaded:                                  # every model was too busy: say who
+                await finish("error", 503, "provider_overloaded")
+                raise APIError(503, overloaded_message(overloaded, byok), "server_error",
+                               code="provider_overloaded") from None
             await finish("error", 503, "all_models_failed")
             raise APIError(503, f"No model could answer: {error}", "server_error", code="all_models_failed") from None
         decision = routed.decision

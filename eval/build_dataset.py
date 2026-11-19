@@ -63,7 +63,7 @@ DAILY_QUOTA_HINT = re.compile(r"per ?day|perday|daily|requests_per_day|RPD", re.
 DAILY_QUOTA_BACKOFF_SECONDS = 30 * 60   # after a daily-quota 429, wait this long before trying again
 WAIT_STEP_SECONDS = 60                  # long waits sleep in steps this long, re-checking the wall clock
 # Errors worth retrying later in the same run; client and config errors are not
-RETRYABLE_KINDS = {"rate_limit", "server", "timeout", "connection", "circuit_open", "unknown"}
+RETRYABLE_KINDS = {"rate_limit", "server", "overloaded", "timeout", "connection", "circuit_open", "unknown"}
 MAX_PASSES = 5                          # passes over a tier's failed prompts within one run
 WAITS_FILE = "waits.json"               # tier -> resume time while waiting on a daily limit
 

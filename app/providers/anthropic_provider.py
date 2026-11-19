@@ -26,7 +26,10 @@ def _convert_error(error) -> ProviderError:
     if isinstance(error, anthropic.APIConnectionError):
         return ProviderError(PROVIDER, "connection", "could not reach the provider")
     if isinstance(error, anthropic.APIStatusError):
-        return ProviderError(PROVIDER, kind_from_status(error.status_code), error.message, error.status_code)
+        body = error.body if isinstance(error.body, dict) else {}
+        overloaded = error.status_code == 529 or (body.get("error") or {}).get("type") == "overloaded_error"
+        kind = "overloaded" if overloaded else kind_from_status(error.status_code)
+        return ProviderError(PROVIDER, kind, error.message, error.status_code)
     # Anything else (a TypeError from an SDK argument change, the SDK refusing a request locally, ...): a client
     # error so the chain moves on instead of a 500. Only the type name: str(error) could echo request details,
     # including a key, until key redaction exists (BYOK wiring step).

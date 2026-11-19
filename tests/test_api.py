@@ -237,7 +237,9 @@ def test_bad_bodies_are_400_in_openai_format(http, body, param):
 
 def test_all_models_failing_is_503():
     app, deps = make_app({"groq-small": FakeBehavior(fail_before="server"),
-                          "gemini-flash": FakeBehavior(fail_before="server")}, predictor=FakePredictor(0.4, 0.95))
+                          "gemini-flash": FakeBehavior(fail_before="server"),
+                          "gemini-flash-lite": FakeBehavior(fail_before="server")},   # medium's last fallback
+                         predictor=FakePredictor(0.4, 0.95))
     r = post(TestClient(app))
     assert r.status_code == 503 and r.json()["error"]["code"] == "all_models_failed"
     assert deps.log.rows()[-1].status == "error"

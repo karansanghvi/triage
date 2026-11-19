@@ -26,7 +26,8 @@ PROVIDER_BREAKER_KINDS = {"connection", "auth"}
 # one overloaded or slow model (a long groq-large answer timing out says nothing about groq-small), and rate
 # limits are per model on Groq. Before Phase 4 Step 7 these tripped the whole provider, so one bad model could
 # take every Groq tier down for the cooldown.
-MODEL_BREAKER_KINDS = {"server", "timeout", "rate_limit"}
+# "overloaded" (the provider says this model is too busy) is about one model too, and is never retried on it.
+MODEL_BREAKER_KINDS = {"server", "timeout", "rate_limit", "overloaded"}
 # Client errors (like a bad request) are usually our fault, so they don't count. Neither do config errors.
 
 
@@ -111,13 +112,15 @@ def filter_chain(names, registry: dict, providers: Optional[frozenset]) -> list:
 
 
 def prefer_chain(names, registry: dict, prefer: Optional[str]) -> list:
-    """`names` with the models on provider `prefer` moved to the front; both groups keep their order.
-    None = unchanged. Only reorders: never adds or removes a model."""
+    """`names` with the FIRST model on provider `prefer` moved to the front; the rest keep their order. None (or no
+    model on that provider) = unchanged. Only reorders: never adds or removes a model. Only the first one moves, so
+    a last-resort model of that provider (gemini-flash-lite at the end of medium and high) stays last: preferring
+    Gemini tries Gemini Flash first, not Flash-Lite before every other provider."""
     names = list(names)
-    if prefer is None:
+    first = next((n for n in names if registry[n].provider == prefer), None) if prefer is not None else None
+    if first is None:
         return names
-    return ([n for n in names if registry[n].provider == prefer]
-            + [n for n in names if registry[n].provider != prefer])
+    return [first] + [n for n in names if n != first]
 
 
 def is_byok(keys) -> bool:

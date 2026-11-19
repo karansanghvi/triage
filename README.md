@@ -268,8 +268,9 @@ Streaming (`stream: true`) works the same way.
 
 Set a default with `PATCH /v1/account {"preferred_provider": "anthropic"}` (`null` clears it), or per request with
 `X-Triage-Prefer-Provider`, which overrides it. It applies only to `model: "auto"` and only to a provider you
-have a key for (otherwise it's ignored). The tier decision doesn't change: within each tier, that provider's
-models are tried first. Savings are then measured against that provider's strongest model.
+have a key for (otherwise it's ignored). The tier decision doesn't change: within each tier, that provider's model
+is tried first (its first model in the chain; a last-resort model such as `gemini-flash-lite` at the end of medium
+and high stays last). Savings are then measured against that provider's strongest model.
 
 ### Headers
 
@@ -339,6 +340,7 @@ Errors use OpenAI's shape, `{"error": {"message", "type", "param", "code"}}`.
 | 502 | `model_error` | The model failed while answering |
 | 503 | `all_models_failed` | No model could answer; try again |
 | 503 | `email_unavailable` | Password reset: the server has no email settings |
+| 503 | `provider_overloaded` | Every model that was tried was too busy (e.g. Gemini's "high demand" 503); the message names the provider |
 | 504 | `provider_timeout` | Every model that was tried ran out of time (its timeout in `config/routing.yaml`); the message names the provider |
 | (in a stream) | `stream_interrupted` | The model failed after text was sent |
 

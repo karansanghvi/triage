@@ -147,7 +147,8 @@ def test_an_error_after_the_first_token_propagates_with_no_fallback():
 
 def test_every_model_failing_raises_before_returning():
     deps = make_deps({"groq-small": FakeBehavior(fail_before="server"),
-                      "gemini-flash": FakeBehavior(fail_before="timeout")})
+                      "gemini-flash": FakeBehavior(fail_before="timeout"),
+                      "gemini-flash-lite": FakeBehavior(fail_before="server")})     # medium's last resort
     with pytest.raises(AllModelsFailed):
         call(deps, tau=0.92)
 

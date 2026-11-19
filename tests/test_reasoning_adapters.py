@@ -396,16 +396,20 @@ def test_api_named_model_truncated_is_a_400_that_suggests_more_max_tokens():
 
 
 def test_api_auto_where_every_model_truncates_is_503_with_the_cost_logged():
-    http, deps = byok_style_app({"groq-large": DOWN, "gemini-flash": DOWN, "openai-sol": TRUNC, "claude-opus": TRUNC})
+    http, deps = byok_style_app({"groq-large": DOWN, "gemini-flash": DOWN, "openai-sol": TRUNC, "claude-opus": TRUNC,
+                                 "gemini-flash-lite": DOWN})
     r = chat(http, {"model": "auto", "messages": ASK})
     assert r.status_code == 503
     (row,) = deps.log.rows()
-    assert row.cost > 0 and [a["error_kind"] for a in row.attempts][-2:] == ["truncated", "truncated"]
+    kinds = [(a["model"], a["error_kind"]) for a in row.attempts]
+    assert row.cost > 0 and ("openai-sol", "truncated") in kinds and ("claude-opus", "truncated") in kinds
 
 
 def test_api_503_without_truncation_logs_its_attempts_and_no_cost():
-    http, deps = byok_style_app({"groq-large": DOWN, "gemini-flash": DOWN, "openai-sol": DOWN, "claude-opus": DOWN})
+    http, deps = byok_style_app({"groq-large": DOWN, "gemini-flash": DOWN, "openai-sol": DOWN, "claude-opus": DOWN,
+                                 "gemini-flash-lite": DOWN})
     chat(http, {"model": "auto", "messages": ASK})
     (row,) = deps.log.rows()
     tried = list(dict.fromkeys(a["model"] for a in row.attempts))           # in order, retries collapsed
-    assert tried == ["groq-large", "gemini-flash", "openai-sol", "claude-opus"] and row.cost is None
+    assert tried == ["groq-large", "gemini-flash", "openai-sol", "claude-opus", "gemini-flash-lite"]
+    assert row.cost is None

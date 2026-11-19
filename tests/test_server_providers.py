@@ -28,6 +28,11 @@ BYOK_PROVIDERS = {"openai", "anthropic"}
 PHASE4_CHAINS = {"low": ["groq-allam", "ollama-llama", "gemini-flash-lite"],
                  "medium": ["groq-small", "gemini-flash"],
                  "high": ["groq-large", "gemini-flash"]}
+# Requests without keys today: the Phase 4 chains plus gemini-flash-lite as the LAST fallback of medium and high
+# (Phase 5). Nothing else changed: same models, same order.
+NO_KEY_CHAINS = {"low": PHASE4_CHAINS["low"],
+                 "medium": PHASE4_CHAINS["medium"] + ["gemini-flash-lite"],
+                 "high": PHASE4_CHAINS["high"] + ["gemini-flash-lite"]}
 DOWN = FakeBehavior(fail_before="server")
 
 
@@ -58,13 +63,24 @@ def test_server_providers_are_groq_gemini_ollama(routing):
     assert routing.server_providers == frozenset({"groq", "gemini", "ollama"})
 
 
-def test_requests_without_keys_get_exactly_the_phase4_chains(routing, registry):
-    for tier, chain in PHASE4_CHAINS.items():
+def test_requests_without_keys_get_exactly_the_phase4_chains_plus_the_last_resort(routing, registry):
+    for tier, chain in NO_KEY_CHAINS.items():
         assert routing.chain_for(tier, registry) == chain, tier
+        # the only change from Phase 4: one model appended at the end, the Phase 4 order kept in front of it
+        assert chain[:len(PHASE4_CHAINS[tier])] == PHASE4_CHAINS[tier]
+        assert chain[len(PHASE4_CHAINS[tier]):] == ([] if tier == "low" else ["gemini-flash-lite"])
+
+
+# Server models allowed after the BYOK ones: the last-resort fallback at the end of medium and high, so a
+# Gemini-only account still gets an answer when Gemini Flash is overloaded
+LAST_RESORT = {"medium": "gemini-flash-lite", "high": "gemini-flash-lite"}
 
 
 def test_byok_models_come_after_every_server_model(routing, registry):
     for tier, names in routing.chains.items():
+        if tier in LAST_RESORT:
+            assert names[-1] == LAST_RESORT[tier], tier
+            names = names[:-1]
         providers = [registry[n].provider for n in names]
         first_byok = next(i for i, p in enumerate(providers) if p in BYOK_PROVIDERS)
         assert not set(providers[first_byok:]) - BYOK_PROVIDERS, f"{tier}: a server model after a BYOK one"
@@ -88,7 +104,8 @@ def test_gemini_flash_lite_is_the_low_tiers_backup_after_ollama(routing, registr
     assert registry["gemini-flash-lite"].model_id == "models/gemini-3.5-flash-lite"
     low = routing.chains["low"]
     assert low.index("gemini-flash-lite") == low.index("ollama-llama") + 1
-    assert all("gemini-flash-lite" not in routing.chains[t] for t in ("medium", "high"))
+    # medium and high: only as the very last fallback, after every other provider
+    assert all(routing.chains[t].index("gemini-flash-lite") == len(routing.chains[t]) - 1 for t in ("medium", "high"))
 
 
 # ---------- strong baseline ----------
@@ -221,11 +238,11 @@ def test_real_routing_yaml_sets_server_providers_explicitly():
 
 @pytest.mark.parametrize("tau, tier", [(0.5, "low"), (0.92, "medium"), (0.99, "high")])
 def test_auto_without_keys_never_tries_a_byok_model_even_when_every_server_model_fails(tau, tier):
-    deps = make_deps({name: DOWN for name in PHASE4_CHAINS[tier]})
+    deps = make_deps({name: DOWN for name in NO_KEY_CHAINS[tier]})
     with pytest.raises(AllModelsFailed):
         route(deps, tau=tau)
     called = set(models_called(deps))
-    assert called == set(PHASE4_CHAINS[tier]), called
+    assert called == set(NO_KEY_CHAINS[tier]), called
 
 
 def test_auto_without_keys_still_answers_from_the_phase4_backup():

@@ -143,6 +143,16 @@ function describe(error: ChatError): ErrorDetails {
         tone: "warning",
         icon: Clock,
       }
+    // Every model tried was too busy. The backend names the provider: "Gemini is very busy right now. Try again
+    // in a moment, or add another provider key so Triage can fall back." (just "Try again in a moment" on the demo)
+    case "provider_overloaded":
+      return {
+        title: "Very busy right now",
+        body: error.message || "The model is very busy right now. Try again in a moment.",
+        action: "retry",
+        tone: "warning",
+        icon: Clock,
+      }
     case "network_error":
       return {
         title: "Couldn't reach Triage",

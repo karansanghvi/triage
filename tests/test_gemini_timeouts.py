@@ -124,9 +124,11 @@ def test_a_deadline_while_streaming_is_a_timeout(monkeypatch):
     assert info.value.kind == "timeout"
 
 
-@pytest.mark.parametrize("status, kind", [(503, "server"), (500, "server"), (429, "rate_limit"), (403, "auth")])
-def test_other_errors_keep_their_kind(monkeypatch, status, kind):
-    gemini_wire(monkeypatch, status, {"error": {"code": status, "message": "nope", "status": "UNAVAILABLE"}})
+@pytest.mark.parametrize("status, google_status, kind", [(500, "INTERNAL", "server"),
+                                                         (429, "RESOURCE_EXHAUSTED", "rate_limit"),
+                                                         (403, "PERMISSION_DENIED", "auth")])
+def test_other_errors_keep_their_kind(monkeypatch, status, google_status, kind):
+    gemini_wire(monkeypatch, status, {"error": {"code": status, "message": "nope", "status": google_status}})
     with pytest.raises(ProviderError) as info:
         send_request(MESSAGES, REGISTRY["gemini-flash"], max_tokens=100, timeout=30)
     assert info.value.kind == kind

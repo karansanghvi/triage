@@ -91,5 +91,5 @@ def test_deployed_low_chain_is_groq_allam_then_gemini_flash_lite(monkeypatch):
     monkeypatch.setenv("TRIAGE_SERVER_PROVIDERS", "groq,gemini")
     routing = load_config(REGISTRY).snapshot().routing
     assert routing.chain_for("low", REGISTRY) == ["groq-allam", "gemini-flash-lite"]
-    assert routing.chain_for("medium", REGISTRY) == ["groq-small", "gemini-flash"]
-    assert routing.chain_for("high", REGISTRY) == ["groq-large", "gemini-flash"]
+    assert routing.chain_for("medium", REGISTRY) == ["groq-small", "gemini-flash", "gemini-flash-lite"]
+    assert routing.chain_for("high", REGISTRY) == ["groq-large", "gemini-flash", "gemini-flash-lite"]

@@ -20,6 +20,9 @@ def _convert_error(error: openai.APIError, provider: str) -> ProviderError:
         # Waiting never fixes that, so treat it as a client error: no retries.
         if kind == "rate_limit" and "request too large" in str(error.message).lower():
             kind = "client"
+        # OpenAI's 503: "The engine is currently overloaded" / slow down. Groq and the others keep 503 = server.
+        if provider == "openai" and error.status_code == 503:
+            kind = "overloaded"
         return ProviderError(provider, kind, error.message, error.status_code)
     return ProviderError(provider, "client", str(error))
 

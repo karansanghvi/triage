@@ -20,10 +20,20 @@ def _is_deadline(error: errors.APIError) -> bool:
             or "deadline expired" in (error.message or "").lower())
 
 
+def _is_overloaded(error: errors.APIError) -> bool:
+    """503 UNAVAILABLE: "This model is currently experiencing high demand" (Google's overload answer)."""
+    return error.code == 503 or (error.status or "").upper() == "UNAVAILABLE"
+
+
 def _convert_error(error) -> ProviderError:
     if isinstance(error, errors.APIError):
         code = error.code or 0
-        kind = "timeout" if _is_deadline(error) else kind_from_status(code)
+        if _is_deadline(error):
+            kind = "timeout"
+        elif _is_overloaded(error):
+            kind = "overloaded"
+        else:
+            kind = kind_from_status(code)
         return ProviderError(PROVIDER, kind, error.message or str(error), code or None)
     if isinstance(error, httpx.TimeoutException):
         return ProviderError(PROVIDER, "timeout", "request timed out")
@@ -49,7 +59,10 @@ def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_ke
     model's default level)."""
     # HttpOptions.timeout is in MILLISECONDS (our timeouts are seconds). The SDK turns it back into seconds for
     # httpx and also sends it to Google as X-Server-Timeout, so the server stops the call at the same limit.
-    http_options = {"timeout": int(timeout * 1000)}
+    # retry_options attempts=1: no SDK retries (google-genai retries with tenacity when retry_options is set; 2.29's
+    # default is none, pinned here so a new SDK default can't add hidden retries). Triage's reliability layer
+    # decides when to retry or fall back, as max_retries=0 does for the openai and anthropic SDKs.
+    http_options = {"timeout": int(timeout * 1000), "retry_options": types.HttpRetryOptions(attempts=1)}
     if HTTP_CLIENT is not None:
         http_options["httpx_client"] = HTTP_CLIENT
     client = genai.Client(
