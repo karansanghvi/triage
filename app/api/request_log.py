@@ -26,6 +26,7 @@ import numpy as np
 
 LOG_KIND_ENV, HASH_SECRET_ENV = "TRIAGE_LOG", "TRIAGE_HASH_SECRET"
 VECTOR_FIELDS = ("features", "embedding")          # skipped by reads that don't need them (stats, lookups)
+PRIVATE_FIELDS = ("prompt_hmac",)                  # never returned by an endpoint
 
 
 @dataclass
@@ -97,8 +98,9 @@ class RequestRow:
         return asdict(self)
 
     def public_dict(self) -> dict:
-        """For GET /v1/requests/{id}: everything except the raw vectors; vectors_stored says if they exist."""
-        out = {k: v for k, v in asdict(self).items() if k not in VECTOR_FIELDS}
+        """For GET /v1/requests/{id}: everything except the raw vectors (vectors_stored says if they exist) and
+        prompt_hmac (a fingerprint of the prompt: it's for matching repeats inside Triage, not for callers)."""
+        out = {k: v for k, v in asdict(self).items() if k not in VECTOR_FIELDS and k not in PRIVATE_FIELDS}
         out["vectors_stored"] = self.feature_version is not None or self.embedding_model is not None
         return out
 

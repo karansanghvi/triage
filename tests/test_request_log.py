@@ -448,6 +448,14 @@ def test_reads_without_vectors_still_return_everything_else(tmp_path):
 
 # ---------- preferred_provider and user_id ----------
 
+def test_request_lookup_never_returns_the_prompt_hmac(tmp_path):
+    http, deps, log = app_with(tmp_path)
+    rid = post(http).headers["x-triage-request-id"]
+    assert log.get(rid).prompt_hmac                                          # stored, for matching repeats
+    body = http.get(f"/v1/requests/{rid}", headers=auth()).json()
+    assert body["request_id"] == rid and "prompt_hmac" not in body and log.get(rid).prompt_hmac not in str(body)
+
+
 def test_preferred_provider_round_trips_and_is_in_public_dict(tmp_path):
     log = SQLiteRequestLog(tmp_path / "r.sqlite3")
     log.write(row(request_id="a", preferred_provider="gemini"))
