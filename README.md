@@ -94,7 +94,7 @@ that model directly.
 ```bash
 pip install -r requirements.txt
 TRIAGE_API_KEYS=dev-key TRIAGE_ADMIN_KEYS=admin-key TRIAGE_HASH_SECRET="$(openssl rand -hex 32)" \
-  uvicorn app.api.main:app --port 8000
+  uvicorn app.api.main:app --port 8000 --no-access-log
 # TRIAGE_FAKE_MODELS=1 answers with fake models (no provider keys, no API calls); TRIAGE_CACHE=off disables the cache
 # Fake mode keeps its own cache and database (data/cache/fake_responses.sqlite3, data/fake.sqlite3), never uses
 # DATABASE_URL, and refuses the real cache, so a fake answer can never be served or logged as real
@@ -490,11 +490,14 @@ Keep them in your host's secret settings (e.g. Render's environment), never in t
 1. Install exactly the tested versions: `pip install -r requirements.txt`. Every dependency is pinned; to upgrade
    one, change its pin, run the tests (including `pytest -m postgres`), then commit.
 2. **Migrate before the new code starts:** `DATABASE_URL=... venv/bin/alembic upgrade head`, as your host's
-   pre-deploy step if it has one, or at the front of the start command (`alembic upgrade head && uvicorn ...`).
+   pre-deploy step if it has one, or at the front of the start command (`alembic upgrade head && uvicorn ... --no-access-log`).
    The server never migrates Postgres itself, and refuses to start if the database isn't at the latest
    migration. A local SQLite file is migrated automatically when opened.
-3. Start: `uvicorn app.api.main:app --host 0.0.0.0 --port $PORT`. With `TRIAGE_ACCOUNTS=on` it refuses to start
-   without valid `TRIAGE_ENCRYPTION_KEYS`.
+3. Start: `uvicorn app.api.main:app --host 0.0.0.0 --port $PORT --no-access-log`. `--no-access-log` is required:
+   uvicorn's access log prints each client's IP address, and the privacy policy says Triage logs none (its own
+   request lines carry no IP). With `TRIAGE_ACCOUNTS=on` it refuses to start without valid `TRIAGE_ENCRYPTION_KEYS`.
+4. Housekeeping runs by itself, at startup and then hourly: expired cache answers (older than 24 hours) are deleted,
+   and so are request log rows older than `TRIAGE_REQUEST_LOG_RETENTION_DAYS` (default 365) with their labels.
 
 Request logs from before the database layer (`data/logs/requests.sqlite3`) aren't opened any more; copy them in
 with `venv/bin/python scripts/import_sqlite_log.py <file>` (safe to re-run; the file is only read).

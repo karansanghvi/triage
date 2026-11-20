@@ -21,6 +21,8 @@ exists, so model, tier and fallback are real; its cost isn't known yet, so -Cost
 out (never faked).
 The real figures are in GET /v1/requests/{id} once the stream ends, and in /v1/stats.
 """
+import asyncio
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -53,6 +55,7 @@ from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_pre
 from app.accounts.limits import AccountLimitError
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.router.small_talk import is_small_talk
+from app.api import maintenance
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
@@ -545,6 +548,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        retention_days = maintenance.retention_days_from_env()      # refuses a bad value before loading anything
         if app.state.auth is None:
             app.state.auth = Auth(keys_from_env(API_KEYS_ENV), keys_from_env(ADMIN_KEYS_ENV))
         if app.state.public:
@@ -557,7 +561,14 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         if app.state.accounts:
             set_up_keyring(app.state.deps)        # refuses to start without valid TRIAGE_ENCRYPTION_KEYS
             set_up_email(app.state.deps)          # refuses TRIAGE_DEV_EMAIL_LOG=on outside local development
-        yield
+        # Housekeeping (the privacy policy's retention): now, then hourly; stopped at shutdown
+        housekeeping = asyncio.create_task(maintenance.run_forever(app.state.deps, retention_days))
+        try:
+            yield
+        finally:
+            housekeeping.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await housekeeping
 
     _ensure_json_handler()
     app = FastAPI(title="Triage", version="0.5", lifespan=lifespan)

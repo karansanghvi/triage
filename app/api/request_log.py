@@ -172,6 +172,8 @@ class RequestLog(Protocol):
     def write_label(self, label: LabelRow) -> None: ...
     def labels(self, request_id: Optional[str] = None) -> list: ...
     def label_usage_since(self, created_at: str) -> tuple: ...      # (calls, tokens) of labels since then
+    # retention: delete request rows older than `cutoff` (and their labels); returns how many request rows went
+    def delete_older_than(self, cutoff: str, batch_size: int = 1000) -> int: ...
 
 
 class InMemoryRequestLog:
@@ -196,6 +198,15 @@ class InMemoryRequestLog:
         with self._lock:
             self._rows.append(row)
             self._by_id[row.request_id] = row
+
+    def delete_older_than(self, cutoff: str, batch_size: int = 1000) -> int:
+        with self._lock:
+            old = {r.request_id for r in self._rows if r.timestamp < cutoff}
+            self._rows = [r for r in self._rows if r.request_id not in old]
+            for request_id in old:
+                self._by_id.pop(request_id, None)
+            self._labels = [l for l in self._labels if l.request_id not in old]
+        return len(old)
 
     @staticmethod
     def _view(r: RequestRow, include_vectors: bool) -> RequestRow:
@@ -249,6 +260,26 @@ class SQLRequestLog:
         values = {n: _to_sql(n, getattr(row, n)) for n in _REQUEST_NAMES}
         with self.engine.begin() as connection:
             connection.execute(self._requests.insert(), values)
+
+    def delete_older_than(self, cutoff: str, batch_size: int = 1000) -> int:
+        """Retention: delete request rows whose timestamp (UTC ISO 8601, so text order is time order) is before
+        `cutoff`, and their labels. In batches of `batch_size`, each its own short transaction, oldest first
+        (idx_requests_timestamp), so the table is never locked for long and a crash keeps every finished batch."""
+        from sqlalchemy import delete, select
+        requests, labels = self._requests, self._labels
+        removed = 0
+        while True:
+            with self.engine.begin() as connection:
+                batch = connection.execute(
+                    select(requests.c.id, requests.c.request_id).where(requests.c.timestamp < cutoff)
+                    .order_by(requests.c.timestamp).limit(batch_size)).fetchall()
+                if not batch:
+                    return removed
+                connection.execute(delete(labels).where(labels.c.request_id.in_([r.request_id for r in batch])))
+                connection.execute(delete(requests).where(requests.c.id.in_([r.id for r in batch])))
+            removed += len(batch)
+            if len(batch) < batch_size:
+                return removed
 
     def _select(self, where=None, include_vectors: bool = True) -> list:
         from sqlalchemy import select
