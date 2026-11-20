@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom"
+import { Link, NavLink } from "react-router-dom"
 import { Split } from "lucide-react"
 
 // Replace with your repository's address
@@ -18,9 +18,15 @@ export default function Footer() {
           <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="text-[#A7ACBA] hover:text-foreground">
             GitHub
           </a>
-          <Link to="/privacy" className="text-[#A7ACBA] hover:text-foreground">
+          {/* NavLink: aria-current="page" on /privacy */}
+          <NavLink
+            to="/privacy"
+            className={({ isActive }) =>
+              isActive ? "font-medium text-foreground" : "text-[#A7ACBA] hover:text-foreground"
+            }
+          >
             Privacy
-          </Link>
+          </NavLink>
           <Link to="/dashboard" className="text-[#A7ACBA] hover:text-foreground">
             Dashboard
           </Link>

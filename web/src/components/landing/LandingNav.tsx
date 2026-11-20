@@ -2,9 +2,10 @@ import { Link } from "react-router-dom"
 import { Split } from "lucide-react"
 
 const links = [
-  { href: "#how", label: "How it works" },
-  { href: "#integrate", label: "Integrate" },
-  { href: "#results", label: "Results" },
+  // "/#..." so they also work from other public pages (e.g. /privacy); on the landing page they just scroll
+  { href: "/#how", label: "How it works" },
+  { href: "/#integrate", label: "Integrate" },
+  { href: "/#results", label: "Results" },
 ]
 
 export default function LandingNav() {

@@ -7,6 +7,7 @@ import SignupPage from "./pages/SignupPage";
 import LoginPage from "./pages/LoginPage";
 import RequireAuth from "./components/auth/RequireAuth";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
+import PrivacyPage from "./pages/PrivacyPage";
 import SettingsLayout from "./components/settings/SettingsLayout";
 import GetStartedPage from "./components/settings/GetStartedPage";
 import ApiKeysPage from "./components/settings/ApiKeysPage";
@@ -21,6 +22,7 @@ export default function App() {
       <Route path="/signup" element={<SignupPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/privacy" element={<PrivacyPage />} />
 
       {/* The app: sidebar + pages */}
       <Route element={<AppLayout />}>
