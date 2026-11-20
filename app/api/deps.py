@@ -46,6 +46,7 @@ class RouterDeps:
     account_limiter: Optional[object] = None             # app.accounts.limits.AccountLimiter (account chat)
     password_resets: Optional[object] = None             # app.accounts.password_reset.ResetStore
     email_sender: Optional[object] = field(default=None, repr=False)   # app.accounts.email (chosen at startup)
+    fake_mode: bool = False                              # TRIAGE_FAKE_MODELS=1 (load_deps); public stats refuse it
 
     def strong_model(self, providers=None, prefer=None) -> str:
         """The savings baseline: the first model of the high chain after filtering by provider, and reordering
@@ -179,7 +180,9 @@ def load_deps() -> RouterDeps:
     demo_limiter = DemoLimiter(demo_settings, engine=engine)   # survives restarts and redeploys
     trusted_proxy_hops = trusted_hops_from_env()
     predictor, classifier = load_predictor_checked()
-    return build_deps(predictor, send_fn, registry=registry, config=config, cache=cache, classifier=classifier,
+    deps = build_deps(predictor, send_fn, registry=registry, config=config, cache=cache, classifier=classifier,
                       log=log, fake_models=send_fn if fake else None, hash_secret=hash_secret,
                       demo_settings=demo_settings, demo_limiter=demo_limiter, trusted_proxy_hops=trusted_proxy_hops,
                       engine=engine, key_verifier=fake_verify_key if fake else None)
+    deps.fake_mode = fake
+    return deps

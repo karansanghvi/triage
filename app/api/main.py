@@ -10,6 +10,7 @@ Endpoints
     POST /v1/chat/completions     OpenAI chat completions, stream or not; model "auto" or a models.yaml name
     GET  /v1/models               "auto" plus every model, with prices
     GET  /v1/stats                savings summary (your key's requests; an admin key sees all)
+    GET  /v1/stats/public         no auth: live aggregates of auto-routed requests (app/api/public_stats.py)
     GET  /v1/requests/{id}        one logged request, only for the key that made it
     GET  /v1/routing-config       the config in use (admin)
     PUT  /v1/routing-config       update quality presets/default and backup models live (admin; not persisted)
@@ -57,7 +58,7 @@ from app.accounts.limits import AccountLimitError
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.router.small_talk import is_small_talk
 from app.api import maintenance
-from app.api import usage_sql
+from app.api import public_stats, usage_sql
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
@@ -584,6 +585,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app.state.deps, app.state.auth = deps, auth
     app.state.public = public_from_env() if public is None else public
     app.state.accounts = accounts_from_env() if accounts is None else accounts
+    app.state.public_stats = public_stats.PublicStatsCache()
     origins = cors_origins_from_env() if cors_origins is None else list(cors_origins)
     app.add_middleware(InternalErrorMiddleware)       # first, so it sits inside CORSMiddleware
     if origins:
@@ -1025,6 +1027,21 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             scope, where = "your key", c.key_id == who.key_id
         summary = await anyio.to_thread.run_sync(lambda: log.run(lambda connection: summarize(connection, where)))
         return {"scope": scope, **summary}
+
+    @app.get("/v1/stats/public")
+    async def stats_public(range: Optional[str] = None):
+        """No auth: the Overview tab's live aggregates (app/api/public_stats.py), cached for 5 minutes."""
+        deps = app.state.deps
+        if deps.fake_mode:
+            raise APIError(404, "Public stats aren't served in fake-model mode.", code="not_found")
+        try:
+            range_name = usage_sql.parse_range(range)
+        except usage_sql.RangeError as error:
+            raise bad_request(str(error), "range", "invalid_value") from None
+        now = datetime.now(timezone.utc)
+        result = await anyio.to_thread.run_sync(lambda: app.state.public_stats.get(
+            range_name, lambda: public_stats.compute(deps.log, deps.registry, range_name, now)))
+        return JSONResponse(result, headers={"Cache-Control": f"public, max-age={public_stats.TTL_SECONDS}"})
 
     @app.get("/v1/requests/{request_id}")
     async def get_request(request_id: str, who: Caller = Depends(caller)):
