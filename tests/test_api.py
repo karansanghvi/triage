@@ -347,16 +347,36 @@ def test_models_lists_auto_and_prices(http):
 
 
 def test_stats_summarize_savings_per_key(http):
-    post(http)
-    post(http, {"model": "groq-large", "messages": ASK})
+    auto = post(http).headers
+    named = post(http, {"model": "groq-large", "messages": ASK}).headers
     post(http, key=OTHER_KEY)
     mine = http.get("/v1/stats", headers=auth()).json()
     assert mine["scope"] == "your key" and mine["requests"] == 2 and mine["ok"] == 2
     assert mine["tier_mix"] == {"high": 0.5, "medium": 0.5}
-    assert mine["strong_model_cost_usd"] >= mine["cost_usd"] > 0
-    assert mine["saved_usd"] == pytest.approx(mine["strong_model_cost_usd"] - mine["cost_usd"])
+    # both requests' costs count; only the auto one is credited with a saving
+    assert mine["cost_usd"] == pytest.approx(float(auto["x-triage-cost"]) + float(named["x-triage-cost"]))
+    assert mine["credited_requests"] == 1
+    assert mine["strong_model_cost_usd"] == pytest.approx(float(auto["x-triage-strong-cost"]))
+    assert mine["saved_usd"] == pytest.approx(float(auto["x-triage-saved"]))
     everyone = http.get("/v1/stats", headers=auth(ADMIN_KEY)).json()
     assert everyone["scope"] == "all keys" and everyone["requests"] == 3
+
+
+def test_a_named_model_is_never_credited_with_a_saving(http, app_deps):
+    log = app_deps[1].log
+    from app.api.auth import key_id
+    from app.api.request_log import RequestRow
+    r = post(http, {"model": "groq-small", "messages": ASK})
+    assert "x-triage-saved" not in r.headers and "x-triage-strong-cost" in r.headers
+    row = log.get(r.headers["x-triage-request-id"])
+    assert row.saved is None and row.strong_cost is not None
+    # a row logged before the rule, with `saved` filled in for a named model, still counts as no saving
+    log.write(RequestRow(request_id="legacy", timestamp="2026-11-01T00:00:00+00:00", key_id=key_id(API_KEY),
+                                  requested_model="groq-large", stream=False, tier="high", served_model="groq-large",
+                                  price_as_cost=1.0, strong_cost=5.0, saved=4.0))
+    stats = http.get("/v1/stats", headers=auth()).json()
+    assert stats["requests"] == 2 and stats["credited_requests"] == 0
+    assert stats["saved_usd"] == 0 and stats["saved_share"] is None and stats["cost_usd"] > 1.0
 
 
 def test_request_lookup_is_scoped_to_the_callers_key(http):

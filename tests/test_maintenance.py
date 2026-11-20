@@ -154,9 +154,12 @@ def test_a_bad_retention_value_refuses_to_start(value, monkeypatch):
 
 
 def test_stats_work_with_no_rows_or_only_recent_ones():
-    empty = summarize([])
+    from sqlalchemy import true
+    log = InMemoryRequestLog()
+    empty = log.run(lambda connection: summarize(connection, true()))
     assert empty["requests"] == 0 and empty["saved_share"] is None and empty["tier_mix"] == {}
-    assert summarize([row("new", 1)])["requests"] == 1
+    log.write(row("new", 1))
+    assert log.run(lambda connection: summarize(connection, true()))["requests"] == 1
 
 
 # ---------- the job never crashes the server ----------

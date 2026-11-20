@@ -421,10 +421,13 @@ def test_stats_and_request_lookup_never_select_the_vector_columns(tmp_path):
     event.listen(log.engine, "before_cursor_execute", record)
     assert http.get("/v1/stats", headers=auth()).status_code == 200
     assert http.get("/v1/stats", headers=auth(ADMIN_KEY)).status_code == 200
+    stats = list(statements)
     assert http.get(f"/v1/requests/{rid}", headers=auth()).status_code == 200
     event.remove(log.engine, "before_cursor_execute", record)
-    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT") and "FROM requests" in s]
-    assert len(selects) == 3
+    # stats are aggregates in SQL: no statement mentions the vectors at all
+    assert stats and not [s for s in stats if "embedding" in s or "features" in s]
+    selects = [s for s in statements[len(stats):] if s.lstrip().upper().startswith("SELECT") and "FROM requests" in s]
+    assert len(selects) == 1
     for s in selects:
         columns = {c.strip().removeprefix("requests.") for c in
                    s.split("FROM")[0].replace("SELECT", "", 1).split(",")}
@@ -492,6 +495,10 @@ class ThreadRecordingLog(InMemoryRequestLog):
         self._record("get")
         return super().get(*args, **kwargs)
 
+    def run(self, fn):
+        self._record("run")
+        return super().run(fn)
+
     def write_label(self, label):
         self._record("write_label")
         super().write_label(label)
@@ -510,10 +517,10 @@ def test_every_log_call_from_the_api_runs_in_a_worker_thread():
                      json={"model": "auto", "messages": ASK, "stream": True}) as r:
         "".join(r.iter_text())                                                      # a stream's write
     post(http, {"model": "no-such-model", "messages": ASK})                          # an error's write
-    http.get("/v1/stats", headers=auth())                                           # rows
+    http.get("/v1/stats", headers=auth())                                           # run (stats in SQL)
     http.get(f"/v1/requests/{rid}", headers=auth())                                 # get
     calls = {name for name, _ in log.threads}
-    assert {"write", "rows", "get", "write_label", "label_usage_since"} <= calls
+    assert {"write", "run", "get", "write_label", "label_usage_since"} <= calls
     on_loop = [(name, thread) for name, thread in log.threads if not thread.startswith("AnyIO worker thread")]
     assert on_loop == []
 
