@@ -145,7 +145,7 @@ function markdownComponents(idByLine: Map<number, string>): Components {
     h2: ({ node, children }) => {
       const id = idByLine.get(node?.position?.start.line ?? -1)
       return (
-        <h2 id={id} className="mt-12 scroll-mt-8 text-[22px] font-semibold tracking-[-0.01em] text-[#F5F7FA] first:mt-0">
+        <h2 id={id} className="mt-12 scroll-mt-[72px] text-[22px] font-semibold tracking-[-0.01em] text-[#F5F7FA] first:mt-0">
           {children}
         </h2>
       )
@@ -241,7 +241,8 @@ export default function PrivacyPage() {
         </header>
 
         <div className="mt-10 grid gap-10 lg:mt-14 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-16">
-          <aside className="min-w-0 lg:self-start lg:sticky lg:top-8">
+          {/* Sticks below the 64px sticky nav, with the same 24px gap it had from the top before */}
+          <aside className="min-w-0 lg:self-start lg:sticky lg:top-[88px]">
             <OnThisPage headings={headings} active={active} />
           </aside>
 

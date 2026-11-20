@@ -1,3 +1,4 @@
+import { useEffect } from "react"
 import Features from "@/components/landing/Features";
 import FinalCTA from "@/components/landing/FinalCTA";
 import Footer from "@/components/landing/Footer";
@@ -12,9 +13,17 @@ import Results from "@/components/landing/Results";
 import Security from "@/components/landing/Security";
 
 export default function LandingPage() {
+  // Arriving from another page at /#how etc.: the browser looks for the section before React has drawn it, so
+  // jump there once it exists (scroll-margin keeps it clear of the sticky nav)
+  useEffect(() => {
+    const id = decodeURIComponent(window.location.hash.slice(1))
+    if (id) document.getElementById(id)?.scrollIntoView()
+  }, [])
+
   return (
     <>
-      <div className="min-h-screen overflow-x-hidden bg-[#07070B] text-foreground">
+      {/* overflow-x-clip, not hidden: hidden would make this a scroll container and stop the nav from sticking */}
+      <div className="min-h-screen overflow-x-clip bg-[#07070B] text-foreground">
         <LandingNav />
         <main>
             <Hero />

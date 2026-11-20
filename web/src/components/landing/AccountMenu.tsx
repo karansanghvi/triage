@@ -22,7 +22,7 @@ export default function AccountMenu() {
     <DropdownMenu>
       <DropdownMenuTrigger
         aria-label={`Account menu for ${name}`}
-        className="inline-flex h-10 max-w-[220px] items-center gap-2 rounded-[10px] border border-[#2A2D3D] bg-[#12131A]/60 pl-1.5 pr-2.5 text-sm font-medium transition-colors outline-none hover:border-[#3B4058] hover:bg-[#12131A] focus-visible:ring-2 focus-visible:ring-[#60A5FA] focus-visible:ring-offset-2 focus-visible:ring-offset-[#07070B] data-popup-open:border-[#3B4058]"
+        className="inline-flex h-10 max-w-[min(220px,55vw)] items-center gap-2 rounded-[10px] border border-[#2A2D3D] bg-[#12131A]/60 pl-1.5 pr-2.5 text-sm font-medium transition-colors outline-none hover:border-[#3B4058] hover:bg-[#12131A] focus-visible:ring-2 focus-visible:ring-[#60A5FA] focus-visible:ring-offset-2 focus-visible:ring-offset-[#07070B] data-popup-open:border-[#3B4058]"
       >
         <span
           aria-hidden="true"
