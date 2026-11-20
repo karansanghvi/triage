@@ -2,7 +2,6 @@ import { Navigate, Route, Routes } from "react-router-dom"
 import AppLayout from "@/components/layout/AppLayout"
 import LandingPage from "@/pages/LandingPage"
 import ChatPage from "@/pages/ChatPage"
-import DashboardPage from "@/pages/DashboardPage"
 import SignupPage from "./pages/SignupPage";
 import LoginPage from "./pages/LoginPage";
 import RequireAuth from "./components/auth/RequireAuth";
@@ -13,6 +12,10 @@ import GetStartedPage from "./components/settings/GetStartedPage";
 import ApiKeysPage from "./components/settings/ApiKeysPage";
 import ProviderKeysPage from "./components/settings/ProviderKeysPage";
 import AccountPage from "./components/settings/AccountPage";
+import DashboardLayout from "./components/dashboard/DashboardLayout";
+import BenchmarkPage from "./pages/dashboard/BenchmarkPage";
+import OverviewPage from "./pages/dashboard/OverviewPage";
+import UsagePage from "./pages/dashboard/UsagePage";
 
 export default function App() {
   return (
@@ -27,7 +30,12 @@ export default function App() {
       {/* The app: sidebar + pages */}
       <Route element={<AppLayout />}>
         <Route path="/chat" element={<ChatPage />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/dashboard" element={<DashboardLayout />}>
+          <Route index element={<Navigate to="benchmark" replace />} />
+          <Route path="benchmark" element={<BenchmarkPage />} />
+          <Route path="overview" element={<OverviewPage />} />
+          <Route path="usage" element={<UsagePage />} />
+        </Route>
         <Route 
           path="/settings" 
           element={
