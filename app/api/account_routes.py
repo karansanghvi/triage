@@ -21,6 +21,9 @@
                                             full key is shown
     DELETE /v1/account/api-keys/{id}     -> 204 (revokes it; unknown or someone else's: 404)
 
+    GET    /v1/account/usage, /v1/account/requests   -> the account's own usage (app/api/usage_routes.py; a
+                                            session or one of the account's trk_ keys)
+
     POST   /v1/auth/password-reset/request  {email}                   -> 202, always the same answer
     POST   /v1/auth/password-reset/verify   {email, code}             -> {reset_token, expires_at}
     POST   /v1/auth/password-reset/complete {reset_token, new_password}

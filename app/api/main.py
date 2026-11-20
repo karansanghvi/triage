@@ -975,7 +975,9 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
 
     if app.state.accounts:
         from app.api.account_routes import account_router
+        from app.api.usage_routes import usage_router
         app.include_router(account_router())
+        app.include_router(usage_router(account_caller))
 
     # ----- the free demo -----
 
