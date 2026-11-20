@@ -59,6 +59,10 @@ def _tables():
     Index("idx_requests_key_id", requests.c.key_id)
     Index("idx_requests_timestamp", requests.c.timestamp)
     Index("idx_requests_user_id", requests.c.user_id)
+    # the dashboard's stats queries (migration 0009)
+    Index("idx_requests_model_ts", requests.c.requested_model, requests.c.timestamp)
+    Index("idx_requests_user_ts", requests.c.user_id, requests.c.timestamp)
+    Index("idx_requests_user_id_id", requests.c.user_id, requests.c.id)
     labels = Table("labels", metadata, Column("id", Integer, primary_key=True, autoincrement=True),
                    *_columns(LabelRow))
     Index("idx_labels_request_id", labels.c.request_id)
