@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom"
 import { Split } from "lucide-react"
+import { useAuth } from "@/context/AuthContext"
+import AccountMenu from "./AccountMenu"
 
 const links = [
   // "/#..." so they also work from other public pages (e.g. /privacy); on the landing page they just scroll
@@ -9,6 +11,8 @@ const links = [
 ]
 
 export default function LandingNav() {
+  const { user, loading } = useAuth()
+
   return (
     <header className="relative z-10 mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-6">
       <Link to="/" className="flex items-center gap-2.5">
@@ -26,6 +30,12 @@ export default function LandingNav() {
         ))}
       </nav>
 
+      {loading ? (
+        // Checking a saved session: hold the account button's space, so the logged-out buttons never flash
+        <div aria-hidden="true" className="h-10 w-[160px] animate-pulse rounded-[10px] bg-white/5" />
+      ) : user ? (
+        <AccountMenu />
+      ) : (
       <div className="flex items-center gap-2.5">
         <Link
           to="/login"
@@ -40,6 +50,7 @@ export default function LandingNav() {
           Get started
         </Link>
       </div>
+      )}
     </header>
   )
 }

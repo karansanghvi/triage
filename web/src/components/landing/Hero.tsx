@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom"
 import { ArrowRight } from "lucide-react"
+import { useAuth } from "@/context/AuthContext"
+import { cn } from "@/lib/utils"
 import RoutingCard from "./RoutingCard";
 
 function RouteLines() {
@@ -42,6 +44,7 @@ function RouteLines() {
 }
 
 export default function Hero() {
+  const { user, loading } = useAuth()
   return (
     <section className="relative px-6 pb-24 pt-14">
       <RouteLines />
@@ -73,23 +76,29 @@ export default function Hero() {
             costs, same quality.
           </p>
 
-          <div className="mt-9 flex flex-wrap gap-3">
+          {/* Logged in: back to work. While a saved session is checked, the space is kept but nothing shows, so
+              the logged-out buttons never flash for a returning user */}
+          <div className={cn("mt-9 flex flex-wrap gap-3", loading && "invisible")}>
             <Link
               to="/chat"
               className="group inline-flex min-h-[52px] items-center gap-2.5 rounded-[14px] bg-[#2563EB] px-[26px] text-base font-semibold text-white shadow-[0_10px_40px_rgba(37,99,235,0.4)] transition-colors hover:bg-[#1D4ED8]"
             >
-              Try the demo
+              {user ? "Open chat" : "Try the demo"}
               <ArrowRight className="h-[18px] w-[18px] transition-transform group-hover:translate-x-1" />
             </Link>
             <Link
-              to="/signup"
+              to={user ? "/settings/get-started" : "/signup"}
               className="inline-flex min-h-[52px] items-center rounded-[14px] border border-[#2A2D3D] bg-[#12131A]/60 px-[26px] text-base font-medium transition-colors hover:border-[#3B4058] hover:bg-[#12131A]"
             >
-              Create an account
+              {user ? "Connect your app" : "Create an account"}
             </Link>
           </div>
 
-          <p className="mt-[18px] text-[13px] text-[#8B90A0]">No signup for the demo · 10 free requests a day</p>
+          {!user && (
+            <p className={cn("mt-[18px] text-[13px] text-[#8B90A0]", loading && "invisible")}>
+              No signup for the demo · 10 free requests a day
+            </p>
+          )}
         </div>
 
         {/* Routing card: built in the next step */}
