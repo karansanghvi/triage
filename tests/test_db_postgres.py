@@ -591,3 +591,122 @@ def test_reset_expiry_with_postgres_timestamps(migrated_url):
     now[0] += timedelta(minutes=15)
     assert store.complete(token, "$argon2id$fake2") is None
     engine.dispose()
+
+
+# ---------- dashboard stats (usage_sql) on Postgres: the same answers as SQLite ----------
+
+def _stats_rows(now, user_id=None, n=60):
+    import random as _random
+    rng = _random.Random(7)
+    out = []
+    for i in range(n):
+        kind = i % 6
+        out.append(RequestRow(
+            request_id=f"s{i}", timestamp=(now - timedelta(days=rng.choice([0, 1, 3, 9, 40, 120]),
+                                                           minutes=rng.randint(0, 600))).isoformat(),
+            key_id=rng.choice(["session", "trk_aaaaaaaa", "trk_bbbbbbbb"]),
+            requested_model="groq-small" if kind == 1 else "auto", stream=bool(i % 2),
+            status="error" if kind == 2 else "ok", error_kind=rng.choice(["timeout", "rate_limit", None]) if kind == 2 else None,
+            routed_by={0: "classifier", 1: "requested_model", 3: "small_talk", 4: None}.get(kind, "classifier"),
+            tier=rng.choice(["low", "medium", "high"]) if kind != 2 else None,
+            served_model=rng.choice(["groq-small", "groq-large", "retired-model"]) if kind != 2 else None,
+            fell_back=None if kind == 2 else bool(i % 5 == 0), cache_hit=bool(i % 7 == 0),
+            price_as_cost=None if kind == 2 else rng.uniform(1e-6, 1e-3),
+            strong_cost=None if kind == 2 else rng.uniform(1e-3, 2e-3),
+            latency_ms=None if kind == 2 else round(rng.uniform(50, 5000), 1), user_id=user_id))
+    return out
+
+
+def test_usage_sql_gives_the_same_answers_on_postgres_and_sqlite(migrated_url):
+    from sqlalchemy import true
+    from app.api import usage_sql
+    from app.api.request_log import InMemoryRequestLog
+    now = datetime(2026, 11, 19, 15, tzinfo=timezone.utc)
+    engine = db.open_engine(migrated_url)
+    pg, lite = SQLRequestLog(engine), InMemoryRequestLog()
+    for r in _stats_rows(now):
+        pg.write(r)
+        lite.write(r)
+
+    def everything(connection):
+        out = {}
+        for range_name in ("7d", "30d", "all"):
+            where = usage_sql.in_range(range_name, now)
+            bucket, first, last = usage_sql.bucketing(connection, where, range_name, now)
+            out[range_name] = {
+                "bucket": (bucket, first, last), "series": usage_sql.series(connection, where, bucket, first, last),
+                "totals": usage_sql.totals(connection, where),
+                "auto": usage_sql.count(connection, usage_sql.auto_routed()),
+                "tiers": usage_sql.shares(connection, where, usage_sql.c.tier),
+                "errors": usage_sql.errors_by_kind(connection, where),
+                "latency": usage_sql.latency_by_model(connection, where),
+                "by_key": usage_sql.grouped(connection, where, usage_sql.c.key_id),
+                "by_model": usage_sql.grouped(connection, where, usage_sql.c.served_model)}
+        pages, before = [], None
+        while True:
+            items, before = usage_sql.page(connection, true(), before, 7)
+            pages += items
+            if before is None:
+                break
+        out["pages"] = pages
+        return out
+    on_pg, on_lite = pg.run(everything), lite.run(everything)
+    assert on_pg["all"]["bucket"][0] == "month" and on_pg["all"]["totals"]["requests"] == 60
+    assert on_pg == on_lite
+    engine.dispose()
+
+
+def test_public_stats_on_postgres(pg_app):
+    http, deps, log = pg_app
+    now = datetime.now(timezone.utc)
+    for i in range(100):
+        log.write(RequestRow(request_id=f"p{i}", timestamp=(now - timedelta(hours=i)).isoformat(), key_id="k",
+                             requested_model="auto", stream=False, routed_by="classifier", tier="medium",
+                             served_model="groq-small", fell_back=False, cache_hit=False, price_as_cost=1.0,
+                             strong_cost=3.0, latency_ms=float(i + 1)))
+    log.write(RequestRow(request_id="named", timestamp=now.isoformat(), key_id="k", requested_model="groq-large",
+                         stream=False, price_as_cost=1.0, strong_cost=3.0))
+    body = http.get("/v1/stats/public?range=7d").json()
+    assert body["enough"] is True and body["totals"]["requests"] == 100 and body["totals"]["saved_usd"] == 200.0
+    assert body["latency_by_model"][0]["p50_ms"] == 50.0 and body["latency_by_model"][0]["p95_ms"] == 95.0
+
+
+def test_account_usage_and_requests_on_postgres(pg_app):
+    http, deps, log = pg_app
+    r = http.post("/v1/auth/signup", json={"email": "ada@example.com", "password": PASSWORD},
+                  headers={"X-Forwarded-For": "203.0.113.1"}).json()
+    ada, ada_id = bearer(r["session_token"]), r["user"]["id"]
+    key = http.post("/v1/account/api-keys", json={"name": "laptop"}, headers=ada).json()
+    now = datetime.now(timezone.utc)
+    for row in _stats_rows(now, user_id=ada_id, n=30):
+        log.write(row)
+    log.write(RequestRow(request_id="mine", timestamp=now.isoformat(), key_id=key["public_id"], requested_model="auto",
+                         stream=False, user_id=ada_id, price_as_cost=1.0, strong_cost=3.0, prompt_hmac="hidden"))
+    for credential in (ada, bearer(key["key"])):
+        usage = http.get("/v1/account/usage?range=all", headers=credential).json()
+        assert usage["totals"]["requests"] == 31
+        labels = {k["label"] for k in usage["by_key"]}
+        assert {"laptop", "Website chat"} <= labels
+    seen, cursor = [], None
+    while True:
+        page = http.get("/v1/account/requests", params={"limit": 8, **({"cursor": cursor} if cursor else {})},
+                        headers=ada)
+        assert "hidden" not in page.text
+        seen += page.json()["data"]
+        cursor = page.json()["next_cursor"]
+        if cursor is None:
+            break
+    assert len(seen) == len({i["request_id"] for i in seen}) == 31 and seen[0]["request_id"] == "mine"
+    assert seen[0]["key_label"] == "laptop" and seen[0]["saved_usd"] == 2.0
+
+
+def test_the_stats_indexes_exist_on_postgres(migrated_url):
+    engine = create_engine(migrated_url)
+    with engine.connect() as connection:
+        found = {r[0]: r[1] for r in connection.execute(text(
+            "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'requests' "
+            "AND schemaname = current_schema()"))}
+    assert "(requested_model, \"timestamp\")" in found["idx_requests_model_ts"]
+    assert "(user_id, \"timestamp\")" in found["idx_requests_user_ts"]
+    assert "(user_id, id)" in found["idx_requests_user_id_id"]
+    engine.dispose()
