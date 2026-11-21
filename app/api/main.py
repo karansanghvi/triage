@@ -586,6 +586,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app.state.public = public_from_env() if public is None else public
     app.state.accounts = accounts_from_env() if accounts is None else accounts
     app.state.public_stats = public_stats.PublicStatsCache()
+    app.state.public_stats_threshold = public_stats.threshold_from_env()   # refuses a bad value
     origins = cors_origins_from_env() if cors_origins is None else list(cors_origins)
     app.add_middleware(InternalErrorMiddleware)       # first, so it sits inside CORSMiddleware
     if origins:
@@ -1042,7 +1043,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             raise bad_request(str(error), "range", "invalid_value") from None
         now = datetime.now(timezone.utc)
         result = await anyio.to_thread.run_sync(lambda: app.state.public_stats.get(
-            range_name, lambda: public_stats.compute(deps.log, deps.registry, range_name, now)))
+            range_name, lambda: public_stats.compute(deps.log, deps.registry, range_name, now,
+                                                     app.state.public_stats_threshold)))
         return JSONResponse(result, headers={"Cache-Control": f"public, max-age={public_stats.TTL_SECONDS}"})
 
     @app.get("/v1/requests/{request_id}")

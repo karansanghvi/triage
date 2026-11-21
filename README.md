@@ -143,6 +143,7 @@ strong model would have used the same number of tokens, so it's an estimate. It'
 when you name a model, the choice was yours, so Triage claims no saving for it (here or in any stats).
 
 **Other endpoints:** `GET /v1/models` (with prices), `GET /v1/stats` (savings for your key),
+`GET /v1/stats/public` (no key: live totals across everyone's routed requests, once a range has 100 of them),
 `GET /v1/requests/{id}` (one of your own requests), and for admin keys `GET`/`PUT /v1/routing-config`, which
 changes the quality presets and backup models without a restart. Those changes are kept in memory only. The
 first model of each tier can't be changed, because the classifier predicts for that exact model.
@@ -471,6 +472,7 @@ there on purpose: the server refuses to start rather than run with a guessable v
 | `TRIAGE_FAKE_DB` | no | `data/fake.sqlite3` | Fake mode's own database (it never uses `DATABASE_URL`) |
 | `TRIAGE_CACHE`, `TRIAGE_CACHE_PATH` | no | `on`, `data/cache/responses.sqlite3` | The response cache (local to each instance) |
 | `TRIAGE_LOG` | no | `sql` | `memory`: keep the request log in memory |
+| `TRIAGE_PUBLIC_STATS_MIN_REQUESTS` | no | `100` | Routed requests a range needs before `GET /v1/stats/public` shows figures. Keep 100 in production; lower it locally (e.g. `1`) to see the full Overview tab |
 | `TRIAGE_TEST_DATABASE_URL` | tests only | none | A throwaway Postgres for `pytest -m postgres` |
 | `HF_HUB_OFFLINE` | no | `1` (set by the server) | The embedding model must already be in the local Hugging Face cache |
 

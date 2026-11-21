@@ -170,3 +170,47 @@ def test_bad_limits_and_cursors_are_400(params, param):
 def test_cursors_round_trip():
     for n in (1, 42, 10**12):
         assert usage_routes.decode_cursor(usage_routes.encode_cursor(n)) == n
+
+
+# ---------- total ----------
+
+def test_every_page_carries_the_accounts_total_request_count():
+    http, deps = app()
+    ada, ada_id = signup(http)
+    bob, bob_id = signup(http, "bob@example.com", 2)
+    for i in range(23):
+        deps.log.write(row(ada_id, request_id=f"t{i}"))
+    deps.log.write(row(bob_id, request_id="bobs"))                     # another account's: not counted
+    seen, cursor, totals = [], None, []
+    while True:
+        body = http.get("/v1/account/requests", params={"limit": 10, **({"cursor": cursor} if cursor else {})},
+                        headers=ada).json()
+        totals.append(body["total"])
+        seen += body["data"]
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+    assert totals == [23, 23, 23] and len(seen) == 23
+    assert http.get("/v1/account/requests", headers=bob).json()["total"] == 1
+
+
+def test_the_total_grows_with_new_requests_and_old_cursors_keep_their_pages():
+    http, deps = app()
+    ada, ada_id = signup(http)
+    for i in range(12):
+        deps.log.write(row(ada_id, request_id=f"old{i}"))
+    first = http.get("/v1/account/requests", params={"limit": 10}, headers=ada).json()
+    second = http.get("/v1/account/requests", params={"limit": 10, "cursor": first["next_cursor"]}, headers=ada).json()
+    assert first["total"] == second["total"] == 12 and [i["request_id"] for i in second["data"]] == ["old1", "old0"]
+    for i in range(3):
+        deps.log.write(row(ada_id, request_id=f"new{i}"))
+    again = http.get("/v1/account/requests", params={"limit": 10, "cursor": first["next_cursor"]}, headers=ada).json()
+    assert again["total"] == 15 and again["data"] == second["data"]               # the keyset page didn't move
+    newest = http.get("/v1/account/requests", params={"limit": 10}, headers=ada).json()
+    assert newest["total"] == 15 and newest["data"][0]["request_id"] == "new2"
+
+
+def test_an_account_without_requests_has_a_total_of_zero():
+    http, _ = app()
+    ada, _ = signup(http)
+    assert http.get("/v1/account/requests", headers=ada).json() == {"data": [], "next_cursor": None, "total": 0}

@@ -1,4 +1,6 @@
-import { formatCost, formatPercent } from "@/lib/format"
+import type { ReactNode } from "react"
+import { formatPercent } from "@/lib/format"
+import Usd from "@/components/common/Usd"
 import { cn } from "@/lib/utils"
 import type { Message, RequestMode, RoutingInfo, Tier } from "@/types/chat"
 import { Database, LifeBuoy } from "lucide-react"
@@ -112,7 +114,15 @@ function SelectedDetails({ routing }: { routing: RoutingInfo }) {
         {share !== null && share > 0 ? (
           <>
             <p className="text-2xl font-semibold text-success">You saved {formatPercent(share)}</p>
-            <p className="mt-1 text-xs text-muted-foreground">compared to always using the most powerful model</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {routing.saved !== null && routing.saved > 0 ? (
+                <>
+                  <Usd value={routing.saved} /> less than always using the most powerful model
+                </>
+              ) : (
+                "compared to always using the most powerful model"
+              )}
+            </p>
           </>
         ) : (
           <>
@@ -122,10 +132,10 @@ function SelectedDetails({ routing }: { routing: RoutingInfo }) {
         )}
 
         <div className="mt-4 space-y-3">
-          <CostBar label="This answer" value={formatCost(routing.cost)} width={costWidth} barClass="bg-primary" />
+          <CostBar label="This answer" value={<Usd value={routing.cost} />} width={costWidth} barClass="bg-primary" />
           <CostBar
             label="With the most powerful model"
-            value={formatCost(routing.strongCost)}
+            value={<Usd value={routing.strongCost} />}
             width={100}
             barClass="bg-muted-foreground/40"
           />
@@ -172,7 +182,7 @@ function SelectedDetails({ routing }: { routing: RoutingInfo }) {
   )
 }
 
-function CostBar({ label, value, width, barClass }: { label: string; value: string; width: number; barClass: string }) {
+function CostBar({ label, value, width, barClass }: { label: string; value: ReactNode; width: number; barClass: string }) {
   return (
     <div>
       <div className="flex justify-between text-xs">
@@ -243,8 +253,8 @@ function SessionTotals({ messages }: { messages: Message[] }) {
         <>
           <div className="mt-3 flex items-end justify-between gap-3">
             <div>
-              <p className="text-sm font-semibold">Cost {formatCost(totalCost)}</p>
-              <p className="text-xs text-muted-foreground">instead of {formatCost(totalStrong)}</p>
+              <p className="text-sm font-semibold">Cost <Usd value={totalCost} /></p>
+              <p className="text-xs text-muted-foreground">instead of <Usd value={totalStrong} /></p>
             </div>
             {share !== null && share >= 0.01 && (
               <p className="text-lg font-semibold text-success">{formatPercent(share)} saved</p>
