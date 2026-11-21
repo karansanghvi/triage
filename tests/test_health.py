@@ -1,4 +1,4 @@
-"""GET /healthz and its cached database check."""
+"""GET /healthz (liveness, never the database) and GET /readyz (plus a cached database check)."""
 import time
 
 import pytest
@@ -68,21 +68,44 @@ def _client(deps):
     return TestClient(create_app(deps=deps, public=False, accounts=False))
 
 
-def test_healthz_is_200_when_everything_is_ready(monkeypatch):
+class NoDatabase:
+    """An engine that fails the test if anything connects to it"""
+    url = "postgresql+psycopg://nowhere"
+
+    def connect(self):
+        raise AssertionError("/healthz touched the database")
+
+    begin = connect
+
+
+def test_healthz_is_200_when_the_models_are_loaded_and_never_touches_the_database(monkeypatch):
     monkeypatch.setattr("app.router.embeddings.is_loaded", lambda: True)
     deps = make_deps(predictor=LoadedPredictor())
-    with _client(deps) as client:
-        response = client.get("/healthz")
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok", "classifier": "ready", "embedding_model": "ready", "database": "ok"}
-    assert response.headers["cache-control"] == "no-store"
+    deps.engine = NoDatabase()
+    app = create_app(deps=deps, public=False, accounts=False)
+    with TestClient(app) as client:
+        responses = [client.get("/healthz") for _ in range(3)]
+    for response in responses:
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "classifier": "ready", "embedding_model": "ready"}
+        assert response.headers["cache-control"] == "no-store"
+    assert app.state.db_health is None                     # no database check was even built
 
 
-def test_healthz_needs_no_key_and_shows_no_details(monkeypatch):
+def test_healthz_stays_200_when_the_database_is_down(monkeypatch):
+    monkeypatch.setattr("app.router.embeddings.is_loaded", lambda: True)
+    app = create_app(deps=make_deps(predictor=LoadedPredictor()), public=False, accounts=False)
+    app.state.db_health = health.DbHealthCache(lambda: False)
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/readyz").status_code == 503
+
+
+def test_health_endpoints_need_no_key_and_show_no_details(monkeypatch):
     monkeypatch.setattr("app.router.embeddings.is_loaded", lambda: True)
     with _client(make_deps(predictor=LoadedPredictor())) as client:
-        body = client.get("/healthz").text
-    assert "sqlite" not in body and "classifier_c" not in body and "Traceback" not in body
+        bodies = client.get("/healthz").text + client.get("/readyz").text
+    assert "sqlite" not in bodies and "classifier_c" not in bodies and "Traceback" not in bodies
 
 
 def test_healthz_is_503_when_the_embedding_model_isnt_loaded(monkeypatch):
@@ -92,22 +115,37 @@ def test_healthz_is_503_when_the_embedding_model_isnt_loaded(monkeypatch):
     assert response.status_code == 503 and response.json()["embedding_model"] == "not loaded"
 
 
-def test_healthz_is_503_without_a_classifier():
+def test_healthz_and_readyz_are_503_without_a_classifier():
     with _client(make_deps()) as client:                    # the API tests' fake predictor has no models
-        response = client.get("/healthz")
-    assert response.status_code == 503 and response.json()["classifier"] == "not loaded"
+        for path in ("/healthz", "/readyz"):
+            response = client.get(path)
+            assert response.status_code == 503 and response.json()["classifier"] == "not loaded"
 
 
-def test_healthz_is_503_when_the_database_is_down_and_caches_it(monkeypatch):
+def test_readyz_is_200_when_everything_is_ready(monkeypatch):
+    monkeypatch.setattr("app.router.embeddings.is_loaded", lambda: True)
+    with _client(make_deps(predictor=LoadedPredictor())) as client:
+        response = client.get("/readyz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "classifier": "ready", "embedding_model": "ready", "database": "ok"}
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_readyz_is_503_when_the_database_is_down_and_reuses_the_result(monkeypatch):
     monkeypatch.setattr("app.router.embeddings.is_loaded", lambda: True)
     calls = []
     app = create_app(deps=make_deps(predictor=LoadedPredictor()), public=False, accounts=False)
-    app.state.db_health = health.DbHealthCache(lambda: calls.append(1) or False, ttl=60)
+    app.state.db_health = health.DbHealthCache(lambda: calls.append(1) or False)
     with TestClient(app) as client:
-        first, second = client.get("/healthz"), client.get("/healthz")
+        first, second = client.get("/readyz"), client.get("/readyz")
     assert first.status_code == second.status_code == 503
     assert first.json()["database"] == "unreachable"
     assert len(calls) == 1                                  # the second check reused the first result
+
+
+def test_readyz_gives_the_database_two_seconds_and_reuses_results_briefly():
+    assert health.DB_TIMEOUT == 2.0
+    assert health.DB_TTL <= 15                              # a burst shares one query; a later check is fresh
 
 
 @pytest.mark.parametrize("feature_set", ["features", "task_only"])

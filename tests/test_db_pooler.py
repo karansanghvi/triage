@@ -1,4 +1,4 @@
-"""Prepared statements behind Neon's connection pooler, and the migration URL."""
+"""Prepared statements behind Neon's connection pooler, the migration URL, and connecting to a waking database."""
 import os
 
 import pytest
@@ -18,19 +18,19 @@ def clean_env(monkeypatch):
 
 def test_a_pooler_host_turns_prepared_statements_off():
     assert db.is_pooler_host("ep-cool-name-123456-pooler.us-west-2.aws.neon.tech")
-    assert db.postgres_connect_args(POOLED) == {"prepare_threshold": None}
+    assert db.postgres_connect_args(POOLED) == {"prepare_threshold": None, "connect_timeout": 10}
 
 
 def test_a_direct_host_keeps_them():
     assert not db.is_pooler_host("ep-cool-name-123456.us-west-2.aws.neon.tech")
-    assert db.postgres_connect_args(DIRECT) == {}
+    assert db.postgres_connect_args(DIRECT) == {"connect_timeout": 10}
 
 
 def test_the_setting_overrides_detection(monkeypatch):
     monkeypatch.setenv(db.PREPARED_ENV, "off")
-    assert db.postgres_connect_args(DIRECT) == {"prepare_threshold": None}
+    assert db.postgres_connect_args(DIRECT)["prepare_threshold"] is None
     monkeypatch.setenv(db.PREPARED_ENV, "on")
-    assert db.postgres_connect_args(POOLED) == {}
+    assert "prepare_threshold" not in db.postgres_connect_args(POOLED)
     monkeypatch.setenv(db.PREPARED_ENV, "sometimes")
     with pytest.raises(RuntimeError, match="auto, on or off"):
         db.postgres_connect_args(POOLED)
@@ -39,6 +39,86 @@ def test_the_setting_overrides_detection(monkeypatch):
 def test_sqlite_is_never_affected(monkeypatch):
     monkeypatch.setenv(db.PREPARED_ENV, "off")
     assert db.postgres_connect_args("sqlite:///x.sqlite3") == {}
+
+
+def test_postgres_gets_a_connect_timeout_unless_the_url_sets_one():
+    assert db.CONNECT_TIMEOUT == 10
+    assert db.postgres_connect_args(DIRECT + "&connect_timeout=3") == {}
+
+
+class FakeDbapi:
+    class OperationalError(Exception):
+        pass
+
+
+class FakeDialect:
+    loaded_dbapi = FakeDbapi
+
+    def __init__(self, failures):
+        self.failures, self.calls = failures, []
+
+    def connect(self, *cargs, **cparams):
+        self.calls.append((cargs, cparams))
+        if len(self.calls) <= self.failures:
+            raise FakeDbapi.OperationalError("connection refused: compute is waking")
+        return "connection"
+
+
+def test_a_connect_that_fails_once_is_retried_after_a_second(caplog):
+    dialect, slept = FakeDialect(failures=1), []
+    with caplog.at_level("WARNING"):
+        assert db.connect_with_one_retry(dialect, ("dsn",), {"connect_timeout": 10}, sleep=slept.append) \
+            == "connection"
+    assert slept == [db.CONNECT_RETRY_DELAY] and len(dialect.calls) == 2
+    assert dialect.calls[0] == dialect.calls[1] == (("dsn",), {"connect_timeout": 10})
+    assert "retrying once" in caplog.text and "dsn" not in caplog.text and "waking" not in caplog.text
+
+
+def test_a_connect_that_fails_twice_raises():
+    dialect = FakeDialect(failures=2)
+    with pytest.raises(FakeDbapi.OperationalError):
+        db.connect_with_one_retry(dialect, (), {}, sleep=lambda _: None)
+    assert len(dialect.calls) == 2
+
+
+def test_other_errors_are_not_retried():
+    class Broken(FakeDialect):
+        def connect(self, *cargs, **cparams):
+            self.calls.append(1)
+            raise ValueError("bad argument")
+    dialect = Broken(0)
+    with pytest.raises(ValueError):
+        db.connect_with_one_retry(dialect, (), {}, sleep=lambda _: None)
+    assert dialect.calls == [1]
+
+
+def test_the_engine_retries_through_sqlalchemy(monkeypatch):
+    """The do_connect hook is wired up on a Postgres engine: a first connect that fails is retried"""
+    import psycopg
+    from sqlalchemy.engine import default
+    attempts = []
+
+    def flaky_connect(self, *cargs, **cparams):
+        attempts.append(cparams.get("connect_timeout"))
+        raise psycopg.OperationalError("still waking")
+    monkeypatch.setattr(default.DefaultDialect, "connect", flaky_connect)
+    monkeypatch.setattr(db, "CONNECT_RETRY_DELAY", 0.0)
+    monkeypatch.setattr(db, "migrate_or_check", lambda engine: None)
+    engine = db.open_engine(DIRECT)
+    try:
+        with pytest.raises(Exception):
+            engine.connect()
+        assert attempts == [10, 10]                              # tried twice, each with the timeout
+    finally:
+        engine.dispose()
+
+
+def test_sqlite_engines_get_no_retry_hook():
+    engine = db.open_engine("sqlite://")
+    try:
+        assert not engine.dialect.dispatch.do_connect
+    finally:
+        engine.dispose()
 
 
 def test_migrations_use_the_unpooled_url_when_set(monkeypatch):

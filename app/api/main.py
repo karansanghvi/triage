@@ -628,7 +628,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         if app.state.accounts:
             set_up_keyring(app.state.deps)        # refuses to start without valid TRIAGE_ENCRYPTION_KEYS
             set_up_email(app.state.deps)          # refuses TRIAGE_DEV_EMAIL_LOG=on outside local development
-        # Housekeeping (the privacy policy's retention): now, then hourly; stopped at shutdown
+        # Housekeeping (privacy policy retention): now, then cache hourly, database daily; stopped at shutdown
         housekeeping = asyncio.create_task(maintenance.run_forever(app.state.deps, retention_days))
         try:
             yield
@@ -640,7 +640,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     _ensure_json_handler()
     app = FastAPI(title="Triage", version="0.5", lifespan=lifespan)
     app.state.deps, app.state.auth = deps, auth
-    app.state.db_health = None                       # /healthz's cached database check (built on first use)
+    app.state.db_health = None                       # /readyz's database check (built on first use)
     app.state.public = public_from_env() if public is None else public
     app.state.accounts = accounts_from_env() if accounts is None else accounts
     app.state.public_stats = public_stats.PublicStatsCache()
@@ -1050,12 +1050,20 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
 
     @app.get("/healthz", include_in_schema=False)
     async def healthz():
-        """For the host's health checks: 200 once the classifier, the embedding model and the database are ready,
-        else 503. No key needed; the body holds only status words. The database check is cached (health.DB_TTL)."""
+        """Liveness, for Docker's healthcheck and uptime monitors: 200 once the classifier and the embedding model
+        are loaded, else 503. Never touches the database (so it can't keep Neon awake). No key needed."""
+        code, body = health.liveness_report(app.state.deps)
+        return JSONResponse(body, status_code=code, headers={"Cache-Control": "no-store"})
+
+    @app.get("/readyz", include_in_schema=False)
+    async def readyz():
+        """Readiness, for the deploy smoke test and manual checks: /healthz plus `SELECT 1` on the database within
+        health.DB_TIMEOUT seconds. Can wake a sleeping database: don't point monitors here. No key needed."""
         deps = app.state.deps
         if getattr(app.state, "db_health", None) is None and deps is not None and deps.engine is not None:
             app.state.db_health = health.DbHealthCache(health.select_one_probe(deps.engine))
-        code, body = await anyio.to_thread.run_sync(health.health_report, deps, getattr(app.state, "db_health", None))
+        code, body = await anyio.to_thread.run_sync(health.readiness_report, deps,
+                                                    getattr(app.state, "db_health", None))
         return JSONResponse(body, status_code=code, headers={"Cache-Control": "no-store"})
 
     # ----- the free demo -----

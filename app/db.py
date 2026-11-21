@@ -10,6 +10,11 @@
                       pooler (PgBouncer, Neon's "-pooler" host), which can hand each transaction a different server
                       connection, where psycopg's prepared statements don't exist. "auto": off for a "-pooler" host.
 
+Neon scales an idle database to zero after 5 minutes; the next connection wakes it (usually a few hundred ms).
+Postgres connections get a CONNECT_TIMEOUT-second connect timeout (unless the URL sets connect_timeout), and the
+app's engine retries a failed connect once after CONNECT_RETRY_DELAY seconds, so the first request after a sleep
+waits for the wake instead of failing.
+
 The schema is owned by Alembic (migrations/). A SQLite database is upgraded to the latest revision when it is
 opened (local files and tests need no extra step); any other database must already be at the latest revision
 (run `alembic upgrade head` as a deploy step) or Triage refuses to start.
@@ -17,7 +22,9 @@ opened (local files and tests need no extra step); any other database must alrea
 Tables here are what the code reads and writes (the request log and labels; the demo counters);
 migrations/versions/ is what creates them. A test checks that the two match.
 """
+import logging
 import os
+import time
 from contextlib import contextmanager
 from dataclasses import fields
 from pathlib import Path
@@ -35,6 +42,10 @@ UNPOOLED_URL_ENV, PREPARED_ENV = "DATABASE_URL_UNPOOLED", "TRIAGE_DB_PREPARED_ST
 DEFAULT_DB = PROJECT_ROOT / "data" / "triage.sqlite3"
 FAKE_DB = PROJECT_ROOT / "data" / "fake.sqlite3"
 MIGRATIONS_DIR = PROJECT_ROOT / "migrations"
+CONNECT_TIMEOUT = 10            # seconds per connection attempt (Neon suggests about 10 for a waking compute)
+CONNECT_RETRY_DELAY = 1.0       # seconds before the one retry
+
+logger = logging.getLogger("triage.db")
 
 metadata = MetaData()
 
@@ -211,8 +222,32 @@ def prepared_statements_off(url: str) -> bool:
 
 
 def postgres_connect_args(url: str) -> dict:
-    """psycopg connection arguments: prepare_threshold=None turns prepared statements off entirely"""
-    return {"prepare_threshold": None} if prepared_statements_off(url) else {}
+    """psycopg connection arguments for a Postgres URL ({} for anything else): connect_timeout (CONNECT_TIMEOUT
+    unless the URL sets its own), and prepare_threshold=None (prepared statements off) behind a pooler"""
+    parsed = make_url(url)
+    if not parsed.get_backend_name().startswith("postgresql"):
+        return {}
+    args = {} if "connect_timeout" in parsed.query else {"connect_timeout": CONNECT_TIMEOUT}
+    if prepared_statements_off(url):
+        args["prepare_threshold"] = None
+    return args
+
+
+def connect_with_one_retry(dialect, cargs, cparams, sleep=time.sleep):
+    """Open a DB-API connection; on a connection error (e.g. Neon still waking), wait CONNECT_RETRY_DELAY seconds
+    and try once more. A second failure raises as usual."""
+    try:
+        return dialect.connect(*cargs, **cparams)
+    except dialect.loaded_dbapi.OperationalError as error:
+        logger.warning("database connect failed (%s); retrying once", type(error).__name__)
+        sleep(CONNECT_RETRY_DELAY)
+        return dialect.connect(*cargs, **cparams)
+
+
+def _retry_connects(engine: Engine) -> None:
+    @event.listens_for(engine, "do_connect")
+    def _do_connect(dialect, _record, cargs, cparams):
+        return connect_with_one_retry(dialect, cargs, cparams)
 
 
 def sqlite_url(path: Union[str, Path]) -> str:
@@ -230,7 +265,8 @@ def _sqlite_pragmas(dbapi_connection, _record):
 
 def open_engine(url: str) -> Engine:
     """An engine for `url`, schema checked (see migrate_or_check). SQLite files get WAL, a busy timeout and
-    foreign keys; Postgres gets pre-ping, since Neon suspends idle databases and drops their connections."""
+    foreign keys; Postgres gets pre-ping (Neon suspends idle databases and drops their connections), a connect
+    timeout and one connect retry (see the module docstring)."""
     parsed = make_url(url)
     if parsed.get_backend_name() == "sqlite":
         if parsed.database and parsed.database != ":memory:":
@@ -243,6 +279,7 @@ def open_engine(url: str) -> Engine:
     else:
         engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5, pool_recycle=300,
                                connect_args=postgres_connect_args(url))
+        _retry_connects(engine)
     try:
         migrate_or_check(engine)
     except Exception:
