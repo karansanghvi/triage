@@ -2,8 +2,9 @@
 
 Run it:
     TRIAGE_API_KEYS=dev-key TRIAGE_ADMIN_KEYS=admin-key TRIAGE_HASH_SECRET=<random> TRIAGE_FAKE_MODELS=1 \
-        uvicorn app.api.main:app
-(drop TRIAGE_FAKE_MODELS for real models; TRIAGE_CACHE=off disables the response cache. Fake mode uses its own
+        uvicorn app.api.main:app --no-access-log
+(--no-access-log always: uvicorn's access log prints client IPs, and the privacy policy says Triage logs none.
+Drop TRIAGE_FAKE_MODELS for real models; TRIAGE_CACHE=off disables the response cache. Fake mode uses its own
 cache and log, data/cache/fake_responses.sqlite3 and data/logs/fake_requests.sqlite3, never the real ones)
 
 Endpoints

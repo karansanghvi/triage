@@ -429,7 +429,7 @@ changes nothing except the candidate's model files.
 
 **A new version is only used after a restart.** The API server loads the classifier once at startup. When
 retraining points `config/routing.yaml` at a new version, restart the server (for example, stop and rerun
-`uvicorn app.api.main:app`) to start routing with it. Until then, the running server keeps the old model.
+`uvicorn app.api.main:app --no-access-log`) to start routing with it. Until then, the running server keeps the old model.
 
 ## Database
 
