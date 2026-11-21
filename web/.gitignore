@@ -26,3 +26,6 @@ dist-ssr
 
 # Environment Variables
 .env.local
+
+# Case-study images, copied from the repo root before dev and build (scripts/copy-case-study-media.mjs)
+public/case-study-media/

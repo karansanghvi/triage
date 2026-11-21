@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react"
 import { Navigate, Route, Routes } from "react-router-dom"
 import AppLayout from "@/components/layout/AppLayout"
 import LandingPage from "@/pages/LandingPage"
@@ -17,6 +18,9 @@ import BenchmarkPage from "./pages/dashboard/BenchmarkPage";
 import OverviewPage from "./pages/dashboard/OverviewPage";
 import UsagePage from "./pages/dashboard/UsagePage";
 
+// Loaded on its own: it carries the whole case study (and lazily, mermaid), which no other page needs
+const CaseStudyPage = lazy(() => import("./pages/CaseStudyPage"))
+
 export default function App() {
   return (
     <Routes>
@@ -26,6 +30,14 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/privacy" element={<PrivacyPage />} />
+      <Route
+        path="/case-study"
+        element={
+          <Suspense fallback={<div className="min-h-screen bg-[#07070B]" />}>
+            <CaseStudyPage />
+          </Suspense>
+        }
+      />
 
       {/* The app: sidebar + pages */}
       <Route element={<AppLayout />}>

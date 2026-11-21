@@ -13,7 +13,11 @@ const links = [
   { href: "/#how", label: "How it works" },
   { href: "/#integrate", label: "Integrate" },
   { href: "/#results", label: "Results" },
+  { href: "/case-study", label: "Case study" },
 ]
+
+const navLinkClass =
+  "text-[#A7ACBA] transition-colors hover:text-foreground pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center"
 
 // True once the page has scrolled past `offset` px. A passive scroll listener; React skips the re-render when the
 // value doesn't change, so scrolling only re-renders when the state flips.
@@ -54,11 +58,18 @@ export default function LandingNav() {
           </Link>
 
           <nav aria-label="Main" className="hidden items-center gap-7 text-sm md:flex">
-            {links.map((link) => (
-              <a key={link.href} href={link.href} className="text-[#A7ACBA] transition-colors hover:text-foreground pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center">
-                {link.label}
-              </a>
-            ))}
+            {links.map((link) =>
+              // Section links need a real anchor (they scroll on the landing page); pages use the router
+              link.href.startsWith("/#") ? (
+                <a key={link.href} href={link.href} className={navLinkClass}>
+                  {link.label}
+                </a>
+              ) : (
+                <Link key={link.href} to={link.href} className={navLinkClass}>
+                  {link.label}
+                </Link>
+              )
+            )}
           </nav>
 
           {loading ? (

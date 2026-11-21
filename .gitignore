@@ -62,3 +62,6 @@ data/checker_val/*.pid
 data/checker_test/*.pid
 # Demo usage counters (Phase 5)
 data/demo/
+
+# Design mock-ups used while building the web app (kept locally, not published)
+web/design-refs/

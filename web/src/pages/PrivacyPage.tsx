@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from "react"
+import { useEffect, useMemo, type ComponentProps, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -6,118 +6,15 @@ import { Info } from "lucide-react"
 import LandingNav from "@/components/landing/LandingNav"
 import Footer from "@/components/landing/Footer"
 import { cn } from "@/lib/utils"
+import { headingsOf } from "@/lib/markdownHeadings"
+import OnThisPage, { docFocusRing, useActiveHeading } from "@/components/docs/OnThisPage"
 import policy from "@/content/privacy.md?raw"
 
 // The date shown under the title. Change it together with the policy text.
 const LAST_UPDATED = "November 19, 2026"
 const PAGE_TITLE = "Privacy Policy – Triage"
 
-const focusRing =
-  "rounded-[4px] outline-none focus-visible:ring-2 focus-visible:ring-[#60A5FA] focus-visible:ring-offset-2 focus-visible:ring-offset-[#07070B]"
-
-// ---------- the "On this page" menu, from the markdown's h2 headings ----------
-
-type Heading = { id: string; text: string; line: number }
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9\s-]/g, "")
-    .trim()
-    .replace(/\s+/g, "-")
-}
-
-// Inline markdown to plain text: links keep their label, emphasis and code marks go
-function plain(markdown: string): string {
-  return markdown
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/[*_`~]/g, "")
-    .trim()
-}
-
-// Every "## " heading outside code fences, with the source line react-markdown reports for it, so a heading's id
-// is found by its line (exact even if two headings share a name)
-function headingsOf(markdown: string): Heading[] {
-  const used = new Map<string, number>()
-  const out: Heading[] = []
-  let fenced = false
-  markdown.split("\n").forEach((raw, index) => {
-    if (/^\s*(```|~~~)/.test(raw)) fenced = !fenced
-    const match = !fenced && /^##\s+(.+?)\s*#*\s*$/.exec(raw)
-    if (!match) return
-    const text = plain(match[1])
-    const base = slugify(text) || "section"
-    const count = used.get(base) ?? 0
-    used.set(base, count + 1)
-    out.push({ id: count ? `${base}-${count + 1}` : base, text, line: index + 1 })
-  })
-  return out
-}
-
-// The heading currently being read: the last one that has passed the top fifth of the screen
-function useActiveHeading(ids: string[]): string | null {
-  const [active, setActive] = useState<string | null>(ids[0] ?? null)
-
-  useEffect(() => {
-    const elements = ids.map((id) => document.getElementById(id)).filter((el): el is HTMLElement => !!el)
-    if (!elements.length || typeof IntersectionObserver === "undefined") return
-
-    const pick = () => {
-      const line = window.innerHeight * 0.2
-      let current = elements[0].id
-      for (const el of elements) {
-        if (el.getBoundingClientRect().top <= line) current = el.id
-      }
-      // At the very bottom, the last section is the one in view even if its heading can't reach the line
-      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
-        current = elements[elements.length - 1].id
-      }
-      setActive(current)
-    }
-
-    const observer = new IntersectionObserver(pick, { rootMargin: "0px 0px -80% 0px", threshold: [0, 1] })
-    elements.forEach((el) => observer.observe(el))
-    window.addEventListener("scroll", pick, { passive: true })
-    return () => {
-      observer.disconnect()
-      window.removeEventListener("scroll", pick)
-    }
-  }, [ids])
-
-  return active
-}
-
-function OnThisPage({ headings, active }: { headings: Heading[]; active: string | null }) {
-  return (
-    <nav aria-label="On this page">
-      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#8B90A0]">On this page</p>
-      <ul className="mt-4 space-y-1 border-l border-[#1F2130]">
-        {headings.map((h) => {
-          const current = h.id === active
-          return (
-            <li key={h.id}>
-              <a
-                href={`#${h.id}`}
-                aria-current={current ? "location" : undefined}
-                className={cn(
-                  "-ml-px block border-l-2 py-1.5 pl-4 text-[13px] leading-snug transition-colors max-md:flex max-md:min-h-11 max-md:items-center pointer-coarse:flex pointer-coarse:min-h-11 pointer-coarse:items-center",
-                  focusRing,
-                  current
-                    ? "border-[#60A5FA] font-medium text-[#F5F7FA]"
-                    : "border-transparent text-[#8B90A0] hover:border-[#3B4058] hover:text-[#C9CDD8]"
-                )}
-              >
-                {h.text}
-              </a>
-            </li>
-          )
-        })}
-      </ul>
-    </nav>
-  )
-}
+const focusRing = docFocusRing
 
 // ---------- the policy's markdown, styled ----------
 
