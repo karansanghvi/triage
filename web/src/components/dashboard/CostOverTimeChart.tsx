@@ -1,4 +1,5 @@
 import { Area, AreaChart, CartesianGrid, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
+import type { DotItemDotProps } from "recharts/types/util/types"
 import type { SeriesPoint } from "@/lib/dashboard"
 import { formatBucket, formatUsd } from "@/lib/format"
 
@@ -6,6 +7,15 @@ type Props = {
   series: SeriesPoint[]
   bucket: "day" | "month"
   ownLabel: string // e.g. "Triage" or "You, with Triage"
+}
+
+// A small dot only where the bucket had requests, so a single busy day reads as one point, not a hill
+function dotWhenBusy(color: string) {
+  return function BusyDot({ cx, cy, index, payload, dataKey }: DotItemDotProps) {
+    const key = `${String(dataKey)}-${index}`
+    if (!payload?.requests || cx == null || cy == null) return <g key={key} />
+    return <circle key={key} cx={cx} cy={cy} r={3} fill={color} stroke="#12131A" strokeWidth={1.5} />
+  }
 }
 
 export default function CostOverTimeChart({ series, bucket, ownLabel }: Props) {
@@ -49,8 +59,24 @@ export default function CostOverTimeChart({ series, bucket, ownLabel }: Props) {
                 name === "cost_usd" ? ownLabel : "Always strongest",
               ]}
             />
-            <Area type="monotone" dataKey="cost_usd" stroke="#60A5FA" strokeWidth={2.5} fill="url(#costArea)" />
-            <Line type="monotone" dataKey="strong_model_cost_usd" stroke="#8B90A0" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+            <Area
+              type="linear"
+              dataKey="cost_usd"
+              stroke="#60A5FA"
+              strokeWidth={2.5}
+              fill="url(#costArea)"
+              dot={dotWhenBusy("#60A5FA")}
+              activeDot={{ r: 4 }}
+            />
+            <Line
+              type="linear"
+              dataKey="strong_model_cost_usd"
+              stroke="#8B90A0"
+              strokeWidth={2}
+              strokeDasharray="5 5"
+              dot={dotWhenBusy("#8B90A0")}
+              activeDot={{ r: 4 }}
+            />
           </AreaChart>
         </ResponsiveContainer>
       </div>

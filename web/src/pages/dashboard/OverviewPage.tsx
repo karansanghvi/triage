@@ -18,11 +18,17 @@ const BOX = "rounded-xl border border-[#1F2130] bg-[#0A0A0F] px-3.5 py-3"
 const PRIMARY =
   "inline-flex h-10 items-center gap-1.5 rounded-[10px] bg-[#2563EB] px-4 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
 
-// Error kinds from the request log, in words; anything else is summed as "Other"
+// Every error code the API can log, in words; anything else is summed as "Other"
 const ERROR_LABELS: Record<string, string> = {
-  overloaded: "Provider busy",
+  provider_timeout: "Too slow (timeout)",
   timeout: "Too slow (timeout)",
+  provider_overloaded: "Provider busy",
+  overloaded: "Provider busy",
+  provider_unavailable: "Busy or too slow",
+  all_models_failed: "No model could answer",
   rate_limit: "Rate limited",
+  account_rate_limited: "Rate limited",
+  invalid_provider_key: "Key rejected",
 }
 
 export default function OverviewPage() {
@@ -177,7 +183,7 @@ function errorRows(byKind: Record<string, number>): { label: string; count: numb
   return [...totals.entries()]
     .map(([label, count]) => ({ label, count }))
     .filter((r) => r.count > 0)
-    .sort((a, b) => b.count - a.count || (a.label === "Other" ? 1 : b.label === "Other" ? -1 : 0))
+    .sort((a, b) => b.count - a.count) // largest first
 }
 
 function LiveView({ stats }: { stats: Live }) {
