@@ -130,3 +130,31 @@ def test_compute_uses_the_given_time():
         log.write(row(days_ago=6.4, now=now))
     body = public_stats.compute(log, load_registry(), "7d", now)
     assert body["generated_at"] == now.isoformat() and [p["requests"] for p in body["series"]][0] == 100
+
+
+# ---------- TRIAGE_PUBLIC_STATS_MIN_REQUESTS ----------
+
+def test_the_threshold_setting_defaults_to_100_and_refuses_bad_values():
+    assert public_stats.threshold_from_env({}) == public_stats.threshold_from_env({public_stats.THRESHOLD_ENV: " "}) == 100
+    assert public_stats.threshold_from_env({public_stats.THRESHOLD_ENV: "3"}) == 3
+    for bad in ("0", "-5", "ten", "2.5"):
+        with pytest.raises(RuntimeError, match=public_stats.THRESHOLD_ENV):
+            public_stats.threshold_from_env({public_stats.THRESHOLD_ENV: bad})
+
+
+def test_a_lowered_threshold_shows_the_figures_sooner(monkeypatch):
+    monkeypatch.setenv(public_stats.THRESHOLD_ENV, "3")
+    http, _ = client(row(), row(), row())
+    body = http.get("/v1/stats/public").json()
+    assert body["enough"] is True and body["threshold"] == 3 and body["totals"]["requests"] == 3
+    monkeypatch.setenv(public_stats.THRESHOLD_ENV, "4")
+    http, _ = client(row(), row(), row())
+    body = http.get("/v1/stats/public").json()
+    assert body == {"enough": False, "range": "30d", "threshold": 4, "qualifying_requests": 3,
+                    "generated_at": body["generated_at"]}
+
+
+def test_a_bad_threshold_refuses_to_start(monkeypatch):
+    monkeypatch.setenv(public_stats.THRESHOLD_ENV, "zero")
+    with pytest.raises(RuntimeError, match=public_stats.THRESHOLD_ENV):
+        client()
