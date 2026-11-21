@@ -1,9 +1,10 @@
+import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
 
 type StatCardProps = {
   label: string
-  value: string
-  note?: string
+  value: ReactNode
+  note?: ReactNode
   tone?: "default" | "good"
 }
 

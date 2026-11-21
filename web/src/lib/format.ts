@@ -1,12 +1,3 @@
-// Costs per request are tiny, so show enough digits to be meaningful (used by the chat)
-export function formatCost(dollars: number | null): string {
-  if (dollars === null) return "-"
-  if (dollars === 0) return "$0"
-  if (dollars < 0.0001) return `$${dollars.toFixed(6)}`
-  if (dollars < 0.01) return `$${dollars.toFixed(5)}`
-  return `$${dollars.toFixed(2)}`
-}
-
 // Shares (0-1) as percentages.
 // Default rounds to whole numbers (0.857 -> "86%"), as the chat expects.
 // Pass digits for more detail (0.124, 1 -> "12.4%"), as the dashboard uses.
@@ -18,15 +9,29 @@ export function formatPercent(share: number | null | undefined, digits = 0): str
   return `${fixed}%`
 }
 
-// Money: tiny amounts keep their significant digits ($0.00039), bigger ones look normal ($12.40)
+// Money, one rule everywhere (dashboard, charts, tables, chat):
+//   under $0.01: 2 significant digits ($0.0015, $0.00004); $0.01 and above: 2 decimals ($0.42, $1,234.50).
+// Intl never switches to scientific notation, and a non-zero amount never shows as "$0.00".
+// exactUsd is the unrounded amount for hover titles (up to 6 significant digits: $0.001527).
+const SMALL = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 2 })
+const NORMAL = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const EXACT = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 6 })
+
+function withSign(value: number, digits: string): string {
+  return `${value < 0 ? "-" : ""}$${digits}`
+}
+
 export function formatUsd(value: number | null | undefined): string {
-  if (value == null) return "—"
+  if (value == null || !Number.isFinite(value)) return "—"
   if (value === 0) return "$0"
   const abs = Math.abs(value)
-  const sign = value < 0 ? "-" : ""
-  if (abs < 0.01) return `${sign}$${Number(abs.toPrecision(2))}`
-  if (abs < 1) return `${sign}$${abs.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`
-  return `${sign}$${abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  return withSign(value, abs < 0.01 ? SMALL.format(abs) : NORMAL.format(abs))
+}
+
+export function exactUsd(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—"
+  if (value === 0) return "$0"
+  return withSign(value, EXACT.format(Math.abs(value)))
 }
 
 export function formatCount(n: number | null | undefined): string {

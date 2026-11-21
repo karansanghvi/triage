@@ -1,7 +1,7 @@
 import { Area, AreaChart, CartesianGrid, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import type { DotItemDotProps } from "recharts/types/util/types"
 import type { SeriesPoint } from "@/lib/dashboard"
-import { formatBucket, formatUsd } from "@/lib/format"
+import { exactUsd, formatBucket, formatUsd } from "@/lib/format"
 
 type Props = {
   series: SeriesPoint[]
@@ -55,7 +55,7 @@ export default function CostOverTimeChart({ series, bucket, ownLabel }: Props) {
               contentStyle={{ background: "#12131A", border: "1px solid #2A2D3D", borderRadius: 12, fontSize: 12 }}
               labelStyle={{ color: "#F5F7FA" }}
               formatter={(value, name) => [
-                formatUsd(typeof value === "number" ? value : Number(value)),
+                exactUsd(typeof value === "number" ? value : Number(value)),
                 name === "cost_usd" ? ownLabel : "Always strongest",
               ]}
             />

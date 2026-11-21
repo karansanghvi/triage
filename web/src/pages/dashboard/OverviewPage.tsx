@@ -4,9 +4,10 @@ import { ChartNoAxesColumn } from "lucide-react"
 import { useRange } from "@/hooks/useRange"
 import { getPublicStats, type PublicStats } from "@/lib/dashboard"
 import { errorRows } from "@/lib/errorKinds"
-import { formatCount, formatMs, formatPercent, formatUsd } from "@/lib/format"
+import { formatCount, formatMs, formatPercent } from "@/lib/format"
 import DashCard from "@/components/dashboard/DashCard"
 import StatCard from "@/components/dashboard/StatCard"
+import { SavedCard, SpentCard } from "@/components/dashboard/MoneyCards"
 import TierMixBar from "@/components/dashboard/TierMixBar"
 import CostOverTimeChart from "@/components/dashboard/CostOverTimeChart"
 import { TierPill } from "@/components/dashboard/Pills"
@@ -124,8 +125,8 @@ function LiveView({ stats }: { stats: Live }) {
     <>
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Requests routed" value={formatCount(t.requests)} note="Small talk not counted" />
-        <StatCard label="Money saved" value={formatUsd(t.saved_usd)} tone="good" note="vs always the strongest model" />
-        <StatCard label="Saved" value={formatPercent(t.saved_share, 1)} tone="good" note="of the strongest model's cost" />
+        <SpentCard label="Spent" cost={t.cost_usd} requests={t.requests} />
+        <SavedCard label="Saved" share={t.saved_share} saved={t.saved_usd} />
         <StatCard label="Success rate" value={formatPercent(share(t.ok), 1)} note="Requests answered" />
       </div>
 

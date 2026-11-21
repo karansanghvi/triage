@@ -2,7 +2,8 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { ChevronRight, Split, Scissors } from "lucide-react"
 import type { AssistantMessage as AssistantMessageType, Tier } from "@/types/chat"
-import { formatCost, formatPercent } from "@/lib/format"
+import { formatPercent } from "@/lib/format"
+import Usd from "@/components/common/Usd"
 import { cn } from "@/lib/utils"
 import ErrorCard from "./ErrorCard"
 
@@ -77,7 +78,7 @@ export default function AssistantMessage({ message, selected, onSelect, onRetry 
                 <span className="text-muted-foreground/40">·</span>
                 <span>{routing.model}</span>
                 <span className="text-muted-foreground/40">·</span>
-                <span>{formatCost(routing.cost)}</span>
+                <Usd value={routing.cost} />
                 {savedShare !== null && savedShare > 0 && (
                   <>
                     <span className="text-muted-foreground/40">·</span>

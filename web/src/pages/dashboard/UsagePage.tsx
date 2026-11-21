@@ -6,11 +6,13 @@ import { useAccountApi } from "@/hooks/useAccountApi"
 import { useRange } from "@/hooks/useRange"
 import type { AccountUsage, KeyUsage, RequestItem } from "@/lib/dashboard"
 import { errorLabel } from "@/lib/errorKinds"
-import { formatCount, formatMs, formatPercent, formatUsd } from "@/lib/format"
+import { formatCount, formatMs, formatPercent } from "@/lib/format"
+import Usd from "@/components/common/Usd"
 import { relativeTime } from "@/lib/time"
 import { cn } from "@/lib/utils"
 import DashCard from "@/components/dashboard/DashCard"
 import StatCard from "@/components/dashboard/StatCard"
+import { SavedCard, SpentCard } from "@/components/dashboard/MoneyCards"
 import TierMixBar from "@/components/dashboard/TierMixBar"
 import CostOverTimeChart from "@/components/dashboard/CostOverTimeChart"
 import { StatusPill, TierPill } from "@/components/dashboard/Pills"
@@ -149,10 +151,6 @@ function UsageView({ usage }: { usage: AccountUsage }) {
   // Account requests always run on the account's own saved provider keys (no keys: the API refuses them);
   // the free demo is never linked to an account, so it can't appear here.
   const spentNote = "on your own provider keys"
-  const savedNote =
-    t.saved_share == null
-      ? "vs always the strongest model"
-      : `${formatPercent(t.saved_share, 1)} vs always the strongest model`
 
   return (
     <>
@@ -162,8 +160,8 @@ function UsageView({ usage }: { usage: AccountUsage }) {
           value={formatCount(t.requests)}
           note={t.small_talk_requests > 0 ? `${formatCount(t.small_talk_requests)} small talk, not credited` : undefined}
         />
-        <StatCard label="You spent" value={formatUsd(t.cost_usd)} note={spentNote} />
-        <StatCard label="You saved" value={formatUsd(t.saved_usd)} tone="good" note={savedNote} />
+        <SpentCard label="You spent" cost={t.cost_usd} requests={t.requests} note={spentNote} />
+        <SavedCard label="You saved" share={t.saved_share} saved={t.saved_usd} />
         <StatCard label="Success rate" value={formatPercent(successRate, 1)} note="Requests answered" />
       </div>
 
@@ -196,7 +194,9 @@ function UsageView({ usage }: { usage: AccountUsage }) {
                       {m.model ?? "No model (failed)"}
                     </td>
                     <td className={cn(TD, NUM, "text-[#C9CDD8]")}>{formatCount(m.requests)}</td>
-                    <td className={cn(TD, NUM, "text-[#C9CDD8]")}>{formatUsd(m.cost_usd)}</td>
+                    <td className={cn(TD, NUM, "text-[#C9CDD8]")}>
+                      <Usd value={m.cost_usd} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -240,9 +240,11 @@ function KeyRow({ k }: { k: KeyUsage }) {
         {revoked && <span className="ml-1.5 text-xs text-muted-foreground">(revoked)</span>}
       </td>
       <td className={cn(TD, NUM, cell)}>{formatCount(k.requests)}</td>
-      <td className={cn(TD, NUM, cell)}>{formatUsd(k.cost_usd)}</td>
+      <td className={cn(TD, NUM, cell)}>
+        <Usd value={k.cost_usd} />
+      </td>
       <td className={cn(TD, NUM, revoked ? cell : k.saved_usd > 0 ? "text-[#4ADE80]" : cell)}>
-        {formatUsd(k.saved_usd)}
+        <Usd value={k.saved_usd} />
       </td>
       <td className={cn(TD, "text-right text-[13px]", cell)}>
         {k.last_used ? (
@@ -453,7 +455,7 @@ function RequestRow({ r }: { r: RequestItem }) {
   let saved
   if (r.routed_by === "small_talk") saved = <span className="text-muted-foreground">Small talk</span>
   else if (r.saved_usd == null) saved = <span className="text-muted-foreground">—</span>
-  else saved = <span className={r.saved_usd > 0 ? "text-[#4ADE80]" : undefined}>{formatUsd(r.saved_usd)}</span>
+  else saved = <Usd value={r.saved_usd} className={r.saved_usd > 0 ? "text-[#4ADE80]" : undefined} />
 
   return (
     <tr className="h-14 border-t border-[#1A1C26] text-sm">
@@ -468,7 +470,9 @@ function RequestRow({ r }: { r: RequestItem }) {
       <td className={RTD}>
         <TierPill tier={r.tier} />
       </td>
-      <td className={cn(RTD, NUM, "text-[#C9CDD8]")}>{formatUsd(r.cost_usd)}</td>
+      <td className={cn(RTD, NUM, "text-[#C9CDD8]")}>
+        <Usd value={r.cost_usd} />
+      </td>
       <td className={cn(RTD, NUM, "text-[#C9CDD8]")}>{saved}</td>
       <td className={cn(RTD, NUM, "text-[#C9CDD8]")}>{formatMs(r.latency_ms)}</td>
       <td className={cn(RTD, "max-w-[140px] truncate text-[13px] text-[#C9CDD8]")} title={r.key_label}>
