@@ -20,8 +20,9 @@ Response headers: X-Triage-Request-Id, -Model, -Tier, -Reason, -Fallback, -Cache
 -Check, -P-Low, -P-Medium and -Tau (model "auto" only, 6 decimals), and on non-streaming responses -Cost,
 -Strong-Cost and -Saved (including any checks and escalation; -Saved for model "auto" only). A stream's headers are sent once its first token
 exists, so model, tier and fallback are real; its cost isn't known yet, so -Cost, -Strong-Cost and -Saved are left
-out (never faked).
-The real figures are in GET /v1/requests/{id} once the stream ends, and in /v1/stats.
+out (never faked). The stream itself carries the same "triage" object as a non-streaming response: routing only on
+its first chunk, complete (with cost and savings) on its finish_reason chunk. The figures are also in
+GET /v1/requests/{id} once the stream ends, and in /v1/stats.
 """
 import asyncio
 import contextlib
@@ -279,6 +280,19 @@ def _verified_reason(d: core.RouteDecision, outcome) -> str:
     return f"{d.reason}; verified: kept {d.tier} ({outcome.decided_by}: {outcome.checker_verdict})"
 
 
+def _cost_headers(row: RequestRow) -> dict:
+    """X-Triage-Cost, -Strong-Cost and -Saved for a finished request; each is left out when unknown, never faked
+    (strong cost: no baseline model reachable; saved: a named model, see _credit_saving)."""
+    headers = {}
+    if row.price_as_cost is not None:
+        headers["X-Triage-Cost"] = _money(row.price_as_cost)
+    if row.strong_cost is not None:
+        headers["X-Triage-Strong-Cost"] = _money(row.strong_cost)
+    if row.saved is not None:
+        headers["X-Triage-Saved"] = _money(row.saved)
+    return headers
+
+
 def triage_body(headers: dict) -> dict:
     """The top-level "triage" object of a non-streaming response: the same values as its X-Triage-* headers (built
     from them, so the two can't disagree), numbers as JSON numbers. A header that was left out is null.
@@ -304,11 +318,16 @@ def _usage(response) -> dict:
             "total_tokens": response.input_tokens + response.output_tokens}
 
 
-def _chunk(request_id: str, created: int, model: str, delta: dict, finish=None, usage=None, choices=True) -> str:
+def _chunk(request_id: str, created: int, model: str, delta: dict, finish=None, usage=None, choices=True,
+           triage=None) -> str:
+    """One SSE chunk. triage: the same object as a non-streaming response's "triage", on chunks that keep their
+    choices[0], so clients that read chunk.choices[0] never meet an empty list (the SDKs keep unknown fields)."""
     body = {"id": request_id, "object": "chat.completion.chunk", "created": created, "model": model,
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}] if choices else []}
     if usage is not None:
         body["usage"] = usage
+    if triage is not None:
+        body["triage"] = triage
     return f"data: {json.dumps(body, ensure_ascii=False)}\n\n"
 
 
@@ -920,12 +939,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             await finish()
             cache = "hit" if response.cached else ("miss" if is_cacheable(temperature, False) else "bypass")
             headers = _triage_headers(decision, cache, model=served_model, tier=served_tier, reason=reason,
-                                      verified=verify, escalated=escalated, check=check) | {
-                "X-Triage-Cost": _money(row.price_as_cost)}
-            if row.strong_cost is not None:    # unknown when no baseline model is reachable: left out, not faked
-                headers["X-Triage-Strong-Cost"] = _money(row.strong_cost)
-            if row.saved is not None:
-                headers["X-Triage-Saved"] = _money(row.saved)
+                                      verified=verify, escalated=escalated, check=check) | _cost_headers(row)
             headers |= request.state.triage_headers
             completion = {"id": request_id, "object": "chat.completion", "created": created, "model": served_model,
                           "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
@@ -935,6 +949,9 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
 
         include_usage = bool(body.stream_options and body.stream_options.include_usage)
         streamed = []                                         # the answer, in memory only, for a background label
+        # The routing is known now (the first token exists); cost only at the end. The first chunk carries the
+        # "triage" object without cost, the finish_reason chunk the complete one, as a non-streaming response has
+        start_headers = _triage_headers(decision, "bypass") | request.state.triage_headers
 
         async def events():
             try:
@@ -945,7 +962,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                     await finish("error", 499, "client_disconnected")    # no-op if the row was already written
 
         async def stream_events():
-            yield _chunk(request_id, created, decision.model, {"role": "assistant", "content": ""})
+            yield _chunk(request_id, created, decision.model, {"role": "assistant", "content": ""},
+                         triage=triage_body(start_headers))
             try:
                 async for piece in routed.pieces:
                     streamed.append(piece)
@@ -961,7 +979,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             _apply_costs(row, response, deps, baseline_providers, prefer)
             _add_truncated_costs(row, decision.attempts)
             await finish()
-            yield _chunk(request_id, created, decision.model, {}, finish=(response and response.finish_reason) or "stop")
+            yield _chunk(request_id, created, decision.model, {}, finish=(response and response.finish_reason) or "stop",
+                         triage=triage_body(start_headers | _cost_headers(row)))
             if include_usage and response is not None:
                 yield _chunk(request_id, created, decision.model, None, usage=_usage(response), choices=False)
             yield "data: [DONE]\n\n"
@@ -971,8 +990,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 await deps.labeler.run(deps, row, messages, "".join(streamed) if row.status == "ok" else None)
 
         return StreamingResponse(events(), media_type="text/event-stream",
-                                 headers=_triage_headers(decision, "bypass") | {"Cache-Control": "no-cache"}
-                                 | request.state.triage_headers,
+                                 headers=start_headers | {"Cache-Control": "no-cache"},
                                  background=BackgroundTask(stream_background))
 
     if app.state.accounts:

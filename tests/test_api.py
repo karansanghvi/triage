@@ -5,6 +5,7 @@ the async client an httpx.AsyncClient on an ASGITransport. route_and_stream is s
 version in tests/api_helpers.py, so these tests cover the API around it.
 """
 import asyncio
+import json
 
 import httpx
 import openai
@@ -170,6 +171,54 @@ def test_streaming_headers_leave_out_cost_and_report_it_by_request_id(http):
     assert body.rstrip().endswith("data: [DONE]")
     row = http.get(f"/v1/requests/{h['x-triage-request-id']}", headers=auth()).json()
     assert row["status"] == "ok" and row["price_as_cost"] > 0 and row["saved"] > 0 and row["stream"] is True
+
+
+def stream_chunks(http, body=None, headers=None):
+    """The JSON chunks of a stream (without [DONE]), and its headers."""
+    with http.stream("POST", "/v1/chat/completions", headers=auth() | (headers or {}),
+                     json=body or {"model": "auto", "messages": ASK, "stream": True}) as r:
+        text = "".join(r.iter_text())
+        h = r.headers
+    chunks = [json.loads(line[6:]) for line in text.split("\n") if line.startswith("data: {")]
+    return chunks, h
+
+
+def test_a_stream_carries_the_triage_object_routing_first_cost_at_the_end(http, app_deps):
+    chunks, h = stream_chunks(http)
+    first, last = chunks[0], [c for c in chunks if c["choices"] and c["choices"][0]["finish_reason"]][-1]
+    assert first["choices"][0]["delta"]["role"] == "assistant" and first["triage"]["model"] == "groq-small"
+    assert first["triage"]["tier"] == "medium" and first["triage"]["request_id"] == h["x-triage-request-id"]
+    assert first["triage"]["cost"] is None and first["triage"]["saved"] is None
+    assert first["triage"]["tau"] == pytest.approx(0.86) and first["triage"]["p_low"] == pytest.approx(0.4)
+    assert last["triage"]["cost"] > 0 and last["triage"]["strong_cost"] > last["triage"]["cost"]
+    assert last["triage"]["saved"] == pytest.approx(last["triage"]["strong_cost"] - last["triage"]["cost"])
+    assert [c for c in chunks if "triage" in c] == [first, last]           # only those two
+    # the same figures as the request log and as a non-streaming answer to the same question
+    row = app_deps[1].log.get(h["x-triage-request-id"])
+    assert last["triage"]["cost"] == pytest.approx(row.price_as_cost, abs=1e-8)
+    plain = post(http).json()["triage"]
+    assert set(plain) == set(last["triage"])
+    assert {k: last["triage"][k] for k in ("model", "tier", "cost", "strong_cost", "saved")} == \
+        {k: plain[k] for k in ("model", "tier", "cost", "strong_cost", "saved")}
+
+
+def test_the_sdk_streams_unchanged_and_exposes_triage(app_deps):
+    chunks = list(sdk(app_deps[0]).chat.completions.create(model="auto", messages=ASK, stream=True))
+    assert "".join(c.choices[0].delta.content or "" for c in chunks) == fake_text("groq-small")   # choices[0] always there
+    assert chunks[0].triage["tier"] == "medium" and chunks[-1].triage["cost"] > 0
+    assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def test_a_named_models_stream_reports_no_saving(http):
+    chunks, _ = stream_chunks(http, {"model": "groq-large", "messages": ASK, "stream": True})
+    assert chunks[-1]["triage"]["cost"] > 0 and chunks[-1]["triage"]["saved"] is None
+
+
+def test_a_stream_that_fails_part_way_sends_no_final_triage(tmp_path):
+    app, _ = make_app({"groq-small": FakeBehavior(fail_after=2)}, predictor=FakePredictor(0.4, 0.95))
+    chunks, _ = stream_chunks(TestClient(app))
+    assert "triage" in chunks[0] and "error" in chunks[-1]
+    assert not [c for c in chunks[1:] if "triage" in c]
 
 
 def test_fallback_header_and_model(tmp_path):

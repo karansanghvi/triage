@@ -5,6 +5,7 @@ system prompt (app/api/fake_models.py), so a test can make the checker say "bad"
 """
 import copy
 import random
+import re
 from datetime import datetime, timedelta, timezone
 
 import openai
@@ -414,8 +415,9 @@ def test_the_users_response_is_identical_with_and_without_sampling():
         with http.stream("POST", "/v1/chat/completions", headers={"Authorization": f"Bearer {API_KEY}"},
                          json={"model": "auto", "messages": RAIN, "stream": True}) as r:
             text = "".join(r.iter_text())
-        return [line.split('"created"')[1].split(",", 1)[1] if '"created"' in line else line
-                for line in text.splitlines()]
+        lines = [line.split('"created"')[1].split(",", 1)[1] if '"created"' in line else line
+                 for line in text.splitlines()]
+        return [re.sub(r'"request_id": "[^"]+"', '"request_id": "…"', line) for line in lines]   # each request's own
     assert streamed(off) == streamed(on)
     assert len(deps_on.log.labels()) == 2                                  # streams get labels too
 
