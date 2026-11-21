@@ -628,7 +628,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         if app.state.accounts:
             set_up_keyring(app.state.deps)        # refuses to start without valid TRIAGE_ENCRYPTION_KEYS
             set_up_email(app.state.deps)          # refuses TRIAGE_DEV_EMAIL_LOG=on outside local development
-        # Housekeeping (the privacy policy's retention): now, then hourly; stopped at shutdown
+        # Housekeeping (privacy policy retention): now, then cache hourly, database daily; stopped at shutdown
         housekeeping = asyncio.create_task(maintenance.run_forever(app.state.deps, retention_days))
         try:
             yield

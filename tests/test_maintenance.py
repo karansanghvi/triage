@@ -195,7 +195,7 @@ def test_without_a_cache_only_retention_runs():
 def test_the_hourly_loop_survives_a_pass_that_raises(monkeypatch):
     calls, sleeps = [], []
 
-    def flaky(deps, days):
+    def flaky(deps, days, steps=maintenance.STEPS):
         calls.append(days)
         if len(calls) == 2:
             raise RuntimeError("unexpected")
@@ -207,6 +207,70 @@ def test_the_hourly_loop_survives_a_pass_that_raises(monkeypatch):
     monkeypatch.setattr(maintenance, "run_once", flaky)
     asyncio.run(maintenance.run_forever(object(), 365, sleep=fake_sleep, passes=3))
     assert calls == [365, 365, 365] and sleeps == [3600, 3600]        # kept going after the failure
+
+
+class FakeTime:
+    """monotonic() for the loop; sleep() moves it forward"""
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    async def sleep(self, seconds):
+        self.now += seconds
+
+
+def _record_steps(monkeypatch, results=None):
+    seen = []
+
+    def fake(deps, days, steps=maintenance.STEPS):
+        seen.append(tuple(steps))
+        return (results or {}).get(len(seen), {"request_rows_deleted": 0} if "retention" in steps else {})
+    monkeypatch.setattr(maintenance, "run_once", fake)
+    return seen
+
+
+def test_the_cache_is_purged_hourly_but_the_database_only_daily(monkeypatch):
+    seen, clock = _record_steps(monkeypatch), FakeTime()
+    asyncio.run(maintenance.run_forever(object(), 365, sleep=clock.sleep, monotonic=clock, passes=49))
+    with_retention = [i for i, steps in enumerate(seen) if "retention" in steps]
+    assert all("cache" in steps for steps in seen)                     # every hour
+    assert with_retention == [0, 24, 48]                               # at startup, then once a day
+
+
+def test_a_failed_retention_run_is_tried_again_next_hour(monkeypatch):
+    seen, clock = _record_steps(monkeypatch, {1: {"request_rows_deleted": "error:OperationalError"}}), FakeTime()
+    asyncio.run(maintenance.run_forever(object(), 365, sleep=clock.sleep, monotonic=clock, passes=3))
+    assert ["retention" in steps for steps in seen] == [True, True, False]
+
+
+def test_without_retention_the_database_isnt_touched():
+    result = maintenance.run_once(SimpleNamespace(cached_sender=None, log=Broken()), 365, clock=lambda: NOW,
+                                  steps=("cache",))
+    assert result == {}
+
+
+def test_a_row_past_the_retention_period_is_gone_within_a_day_and_an_hour(monkeypatch):
+    """The 12-month promise with the daily schedule: a row that turns 365 days old just after a retention run is
+    deleted by the next one, at most 24 hours later (plus the hourly pass's granularity)."""
+    assert maintenance.RETENTION_INTERVAL_SECONDS + maintenance.INTERVAL_SECONDS <= 25 * 3600
+    log = InMemoryRequestLog()
+    log.write(row("turns-old", 365 - 60 / 86400))           # 365 days old a minute after startup
+    clock, present = FakeTime(), []
+    wall = lambda: NOW + timedelta(seconds=clock.now)
+    real = maintenance.run_once
+
+    def run_once(deps, days, steps=maintenance.STEPS):
+        out = real(deps, days, clock=wall, steps=steps)
+        present.append(log.get("turns-old") is not None)
+        return out
+    monkeypatch.setattr(maintenance, "run_once", run_once)
+    deps = SimpleNamespace(cached_sender=None, log=log)
+    asyncio.run(maintenance.run_forever(deps, 365, sleep=clock.sleep, monotonic=clock, passes=26))
+    assert present[0] is True                                # not old yet at startup's run
+    assert present[23] is True                               # no database pass in between
+    assert present[24] is False                              # the next day's run deleted it
 
 
 def test_the_server_runs_it_at_startup_and_stops_it_at_shutdown(tmp_path):

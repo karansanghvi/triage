@@ -515,8 +515,9 @@ variable, updates and rollback are in [DEPLOY.md](DEPLOY.md). What any host need
 3. Start: `uvicorn app.api.main:app --host 0.0.0.0 --port $PORT --no-access-log`. `--no-access-log` is required:
    uvicorn's access log prints each client's IP address, and the privacy policy says Triage logs none (its own
    request lines carry no IP). With `TRIAGE_ACCOUNTS=on` it refuses to start without valid `TRIAGE_ENCRYPTION_KEYS`.
-4. Housekeeping runs by itself, at startup and then hourly: expired cache answers (older than 24 hours) are deleted,
-   and so are request log rows older than `TRIAGE_REQUEST_LOG_RETENTION_DAYS` (default 365) with their labels.
+4. Housekeeping runs by itself, at startup and then on a timer: expired cache answers (older than 24 hours) are
+   deleted hourly, and request log rows older than `TRIAGE_REQUEST_LOG_RETENTION_DAYS` (default 365) are deleted with
+   their labels once a day (each run wakes a serverless database, so not more often).
 
 Request logs from before the database layer (`data/logs/requests.sqlite3`) aren't opened any more; copy them in
 with `venv/bin/python scripts/import_sqlite_log.py <file>` (safe to re-run; the file is only read).
