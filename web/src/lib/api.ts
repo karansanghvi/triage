@@ -2,6 +2,7 @@ import type { DemoStatus, Message, RoutingInfo, Tier, RequestMode, RoutedBy } fr
 import { TriageError } from "@/lib/errors"
 import { qualityToTau } from "@/lib/quality"
 import { LANGUAGE_INSTRUCTION, withLanguageInstruction, type ApiMessage } from "@/lib/chatMessages"
+import { readChatStream, StreamFormatError } from "@/lib/sse"
 
 const BASE_URL = import.meta.env.VITE_TRIAGE_URL ?? "http://localhost:8000"
 const DEFAULT_MAX_PROMPT_CHARS = 8000
@@ -23,14 +24,6 @@ type ApiTriage = {
   fallback: string
   mode: RequestMode
   routed_by?: RoutedBy | null
-}
-
-// One chunk of a streamed answer (OpenAI's chat.completion.chunk). Triage adds "triage" on the first chunk
-// (routing, cost null) and on the finish_reason chunk (complete); a failure part-way arrives as {"error": ...}
-type ApiChunk = {
-  choices?: { delta?: { content?: string | null }; finish_reason?: string | null }[]
-  triage?: ApiTriage
-  error?: { code?: string; message?: string }
 }
 
 // What GET /v1/requests/{id} says about a finished (or stopped) request
@@ -124,6 +117,35 @@ function toRoutingInfo(t: ApiTriage): RoutingInfo {
   }
 }
 
+// The routing from the response headers: for a stream whose chunks carried no "triage" object (a server from
+// before streamed responses had one). Cost isn't in the headers of a stream, so it stays unknown.
+function routingFromHeaders(headers: Headers): RoutingInfo | null {
+  const requestId = headers.get("X-Triage-Request-Id")
+  const model = headers.get("X-Triage-Model")
+  const tier = headers.get("X-Triage-Tier") as Tier | null
+  if (!requestId || !model || !tier) return null
+  const num = (name: string) => {
+    const value = headers.get(name)
+    return value === null || value === "" ? null : Number(value)
+  }
+  return {
+    requestId,
+    model,
+    tier,
+    pLow: num("X-Triage-P-Low"),
+    pMedium: num("X-Triage-P-Medium"),
+    tau: num("X-Triage-Tau"),
+    reason: headers.get("X-Triage-Reason") ?? "",
+    cost: null,
+    strongCost: null,
+    saved: null,
+    cacheHit: headers.get("X-Triage-Cache") === "hit",
+    fellBack: (headers.get("X-Triage-Fallback") ?? "none") !== "none",
+    mode: (headers.get("X-Triage-Mode") ?? "demo") as RequestMode,
+    routedBy: (headers.get("X-Triage-Routed-By") as RoutedBy | null) ?? undefined,
+  }
+}
+
 // ---------- Public functions ----------
 
 export type SendChatOptions = {
@@ -192,65 +214,55 @@ export async function streamChat(
   }
 
   const demo = readDemoHeaders(response.headers)
-  let content = ""
-  let finalTriage: ApiTriage | null = null
-  let finishReason: string | null = null
-  let done = false
+  if (!response.body) throw new TriageError("network_error", "Couldn't read the answer. Please try again.")
 
-  // Server-sent events: "data: {...}" lines, events separated by a blank line, "data: [DONE]" at the end
-  const handle = (data: string) => {
-    if (data === "[DONE]") {
-      done = true
-      return
-    }
-    const chunk = JSON.parse(data) as ApiChunk
-    if (chunk.error) {
-      throw new TriageError(chunk.error.code ?? "stream_interrupted", chunk.error.message ?? "The answer stopped part-way.")
-    }
-    const choice = chunk.choices?.[0]
-    if (chunk.triage) {
-      if (choice?.finish_reason) finalTriage = chunk.triage
-      else onStart?.(toRoutingInfo(chunk.triage), demo)
-    }
-    const piece = choice?.delta?.content
-    if (piece) {
-      content += piece
-      onDelta?.(piece)
-    }
-    if (choice?.finish_reason) finishReason = choice.finish_reason
-  }
-
-  const reader = response.body?.getReader()
-  if (!reader) throw new TriageError("network_error", "Couldn't read the answer. Please try again.")
-  const decoder = new TextDecoder()
-  let buffer = ""
+  let outcome
+  let startSent = false
   try {
-    while (!done) {
-      const { value, done: ended } = await reader.read()
-      if (ended) break
-      buffer += decoder.decode(value, { stream: true })
-      let end: number
-      while ((end = buffer.indexOf("\n\n")) !== -1) {
-        const event = buffer.slice(0, end)
-        buffer = buffer.slice(end + 2)
-        for (const line of event.split("\n")) {
-          if (line.startsWith("data: ")) handle(line.slice(6))
+    outcome = await readChatStream(response.body, {
+      onStartTriage: (triage) => {
+        startSent = true
+        onStart?.(toRoutingInfo(triage as ApiTriage), demo)
+      },
+      onDelta: (piece) => {
+        // No "triage" on the first chunk (an older server): the headers have the routing, so Stop still works
+        if (!startSent) {
+          startSent = true
+          const routing = routingFromHeaders(response.headers)
+          if (routing) onStart?.(routing, demo)
         }
-      }
-    }
+        onDelta?.(piece)
+      },
+    })
   } catch (err) {
-    if (signal?.aborted || err instanceof TriageError) throw err
+    if (signal?.aborted) throw err
+    if (err instanceof StreamFormatError) throw new TriageError("stream_unreadable", err.message)
     throw new TriageError("network_error", "The connection dropped while the answer was arriving. Please try again.")
   }
 
-  if (!done || finalTriage === null) {
+  if (outcome.kind === "error") {
+    throw new TriageError(outcome.code ?? "stream_interrupted", outcome.message ?? "The answer stopped part-way.")
+  }
+  // Only a connection that closed before the server finished the answer (no finish_reason chunk, no [DONE])
+  if (outcome.kind === "interrupted") {
     throw new TriageError("stream_interrupted", "The answer stopped part-way. Please try again.")
   }
+
+  // Finished. The finish chunk's "triage" has the cost; without it, keep the answer with the routing known
+  // from the first chunk or the headers, and the cost unknown
+  const routing = outcome.finalTriage
+    ? toRoutingInfo(outcome.finalTriage as ApiTriage)
+    : outcome.startTriage
+      ? { ...toRoutingInfo(outcome.startTriage as ApiTriage), cost: null, strongCost: null, saved: null }
+      : routingFromHeaders(response.headers)
+  if (!routing) {
+    throw new TriageError("stream_unreadable", "The answer arrived without its routing details. Please try again.")
+  }
   return {
-    content,
-    routing: toRoutingInfo(finalTriage),
+    content: outcome.content,
+    routing,
     demo,
-    truncated: finishReason === "length",
+    truncated: outcome.finishReason === "length",
   }
 }
 

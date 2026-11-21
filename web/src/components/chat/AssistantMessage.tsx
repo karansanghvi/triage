@@ -5,6 +5,7 @@ import type { AssistantMessage as AssistantMessageType, Tier } from "@/types/cha
 import { formatPercent } from "@/lib/format"
 import Usd from "@/components/common/Usd"
 import { cn } from "@/lib/utils"
+import { remarkHtmlBreaks } from "@/lib/remarkHtmlBreaks"
 import ErrorCard from "./ErrorCard"
 
 type AssistantMessageProps = {
@@ -37,7 +38,7 @@ function displayable(text: string): string {
 function Markdown({ text }: { text: string }) {
   return (
     <div className="prose prose-sm prose-invert max-w-none pt-1">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]}>{text}</ReactMarkdown>
     </div>
   )
 }
