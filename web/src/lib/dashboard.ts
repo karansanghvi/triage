@@ -26,13 +26,22 @@ export type BenchmarkPoint = {
 export type Benchmark = {
   schema: number
   classifier: string
-  split: { name: string; n: number }
+  split: { name: string; n: number; scored: string }
   headline: {
     tau: number
     quality_kept: number
-    cost_saved_vs_strongest: number
+    cost_saved: number
+    cost_per_1k_usd: number
     correct: number
+    n: number
+    mix: TierMix
+    baseline: string
     provenance: string
+  }
+  vs_always_cheapest: {
+    cost_multiple: number
+    quality_kept_points_gained: number
+    note: string
   }
   references: {
     always_cheapest: BenchmarkPoint
@@ -41,27 +50,45 @@ export type Benchmark = {
     oracle: BenchmarkPoint
   }
   presets: { cheap: BenchmarkPoint; balanced: BenchmarkPoint; high: BenchmarkPoint }
+  tier_mix_default: TierMix
   curve: {
     provenance: string
-    points: { tau: number; quality_kept: number; cost_saved: number; mix: TierMix }[]
+    points: { tau: number; quality_kept: number; cost_saved: number; mix?: TierMix }[]
   }
-  tier_mix_default: TierMix
   classifiers: {
-    name: string
-    auc_cheap: number
-    auc_medium: number
-    brier_cheap?: number
-    brier_medium?: number
-    chosen: boolean
-  }[]
-  judge: { n: number; agreement: number; too_lenient: number; too_strict: number }
+    method: string
+    source: string
+    rows: {
+      name: string
+      auc_cheap: number
+      auc_medium: number
+      brier_cheap?: number
+      brier_medium?: number
+      chosen: boolean
+    }[]
+  }
+  judge: {
+    n: number
+    agreement: number
+    passed_wrong_answers: number
+    failed_correct_answers: number
+    pass_means_right?: number
+    passed_wrong_answers_when_reference_right?: number
+    split: string
+    source: string
+  }
   dataset: {
     prompts: number
     labeled: number
-    train: number
-    test: number
-    collected: [string, string]
-    judged_until: string
+    train_labeled: number
+    fit: number
+    validation: number
+    test_labeled: number
+    answers_collected: Record<string, string>
+    answers_judged: Record<string, string>
+    sources: Record<string, unknown>
+    lineup: Record<string, unknown>
+    prices: string
   }
   caveats: string[]
 }

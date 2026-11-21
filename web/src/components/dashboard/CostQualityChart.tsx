@@ -34,7 +34,7 @@ export default function CostQualityChart({ benchmark }: { benchmark: Benchmark }
   ]
   const triage: Dot[] = [
     toDot(
-      { cost_saved: benchmark.headline.cost_saved_vs_strongest, quality_kept: benchmark.headline.quality_kept },
+      { cost_saved: benchmark.headline.cost_saved, quality_kept: benchmark.headline.quality_kept },
       "Triage · Balanced",
       "#3B82F6"
     ),
@@ -42,7 +42,7 @@ export default function CostQualityChart({ benchmark }: { benchmark: Benchmark }
   ]
 
   const h = benchmark.headline
-  const aria = `Cost versus quality on ${benchmark.split.n} test questions. On the Balanced setting Triage keeps ${(h.quality_kept * 100).toFixed(1)}% of the strongest model's quality at ${(h.cost_saved_vs_strongest * 100).toFixed(1)}% lower cost; always using the cheapest model keeps ${(benchmark.references.always_cheapest.quality_kept * 100).toFixed(0)}%.`
+  const aria = `Cost versus quality on ${benchmark.split.n} test questions. On the Balanced setting Triage keeps ${(h.quality_kept * 100).toFixed(1)}% of the strongest model's quality at ${(h.cost_saved * 100).toFixed(1)}% lower cost; always using the cheapest model keeps ${(benchmark.references.always_cheapest.quality_kept * 100).toFixed(0)}%.`
 
   return (
     <div className="mt-3 h-[380px]" role="img" aria-label={aria}>
