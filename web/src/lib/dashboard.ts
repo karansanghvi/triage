@@ -95,6 +95,7 @@ export type Benchmark = {
 
 /* ---------- Live stats (Overview and My usage) ---------- */
 
+// GET /v1/stats/public's totals (app/api/public_stats.py TOTAL_FIELDS)
 export type Totals = {
   requests: number
   ok: number
@@ -103,10 +104,10 @@ export type Totals = {
   cost_usd: number
   strong_model_cost_usd: number
   saved_usd: number
-  saved_share: number
+  saved_share: number | null // null when no request was priced against the strongest model
   cache_hits: number
   fallbacks: number
-  fallback_rate: number
+  fallback_rate: number | null // null when no request reached a model
 }
 
 export type SeriesPoint = {
@@ -132,17 +133,23 @@ type LiveStats = {
   generated_at: string
   totals: Totals
   series: SeriesPoint[]
-  tier_mix: TierMix
+  tier_mix: Partial<TierMix> // shares of answered requests; a tier nobody reached is left out
   errors_by_kind: Record<string, number>
   latency_by_model: LatencyRow[]
   saved_is_estimate: boolean
   baseline: string
 }
 
-// Public Overview: either "not enough traffic yet" or the full numbers
+// Public Overview: either "not enough traffic yet" (only the count) or the full numbers
 export type PublicStats =
-  | { enough: false; range: Range; threshold: number; qualifying_requests: number }
-  | ({ enough: true } & LiveStats)
+  | { enough: false; range: Range; threshold: number; qualifying_requests: number; generated_at: string }
+  | ({
+      enough: true
+      threshold: number
+      qualifying_requests: number
+      latency_min_requests: number // models with fewer answered requests are left out of latency_by_model
+      small_talk_excluded: true
+    } & LiveStats)
 
 export type ModelUsage = {
   model: string
