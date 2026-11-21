@@ -5,14 +5,10 @@ import { type Chat, type ChatStore, clearStore, createChat, emptyStore, loadStor
 type MessagesUpdater = (messages: Message[]) => Message[]
 
 type ChatsContextValue = {
-  chats: Chat[]                 // newest first
-  activeId: string | null       // null = a fresh, unsaved chat
-  activeMessages: Message[]
+  chats: Chat[]                 // newest first; which one is open is in the URL (/chat/:id)
   busy: boolean                 // an answer is loading: switching chats is blocked
   setBusy: (busy: boolean) => void
   updateMessages: (chatId: string | null, updater: MessagesUpdater) => string
-  openChat: (id: string) => void
-  newChat: () => void
   renameChat: (id: string, title: string) => void
   deleteChat: (id: string) => void
   clearAll: () => void
@@ -41,7 +37,7 @@ export function ChatsProvider({ children }: { children: ReactNode }) {
         if (chatId !== null) return prev // the chat was deleted meanwhile: drop the update
         const messages = updater([])
         if (messages.length === 0) return prev
-        return { ...prev, activeId: id, chats: [createChat(messages, id), ...prev.chats] }
+        return { ...prev, chats: [createChat(messages, id), ...prev.chats] }
       }
 
       const now = new Date().toISOString()
@@ -54,14 +50,6 @@ export function ChatsProvider({ children }: { children: ReactNode }) {
     return id
   }, [])
 
-  const openChat = useCallback((id: string) => {
-    setStore((prev) => (prev.chats.some((c) => c.id === id) ? { ...prev, activeId: id } : prev))
-  }, [])
-
-  const newChat = useCallback(() => {
-    setStore((prev) => ({ ...prev, activeId: null }))
-  }, [])
-
   const renameChat = useCallback((id: string, title: string) => {
     const clean = title.replace(/\s+/g, " ").trim()
     if (!clean) return
@@ -72,11 +60,7 @@ export function ChatsProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const deleteChat = useCallback((id: string) => {
-    setStore((prev) => ({
-      ...prev,
-      activeId: prev.activeId === id ? null : prev.activeId,
-      chats: prev.chats.filter((c) => c.id !== id),
-    }))
+    setStore((prev) => ({ ...prev, chats: prev.chats.filter((c) => c.id !== id) }))
   }, [])
 
   const clearAll = useCallback(() => {
@@ -88,19 +72,14 @@ export function ChatsProvider({ children }: { children: ReactNode }) {
     () => [...store.chats].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     [store.chats]
   )
-  const activeMessages = store.chats.find((c) => c.id === store.activeId)?.messages ?? []
 
   return (
     <ChatsContext.Provider
       value={{
         chats,
-        activeId: store.activeId,
-        activeMessages,
         busy,
         setBusy,
         updateMessages,
-        openChat,
-        newChat,
         renameChat,
         deleteChat,
         clearAll,

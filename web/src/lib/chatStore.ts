@@ -14,14 +14,15 @@ export type Chat = {
     messages: Message[]
 }
 
+// Which chat is open lives in the address (/chat or /chat/:id), not here. Older saves also kept an
+// activeId (the last chat opened); it's ignored on load and dropped by the next save.
 export type ChatStore = {
     version: 1
-    activeId: string | null
     chats: Chat[]
 }
 
 export function emptyStore(): ChatStore {
-  return { version: 1, activeId: null, chats: [] }
+  return { version: 1, chats: [] }
 }
 
 // ------------ Titles -------------
@@ -73,9 +74,7 @@ export function loadStore(): ChatStore {
         if (data.version !== 1 || !Array.isArray(data.chats)) return emptyStore()
 
         const chats = data.chats.filter(isChat).map((c) => ({ ...c, messages: repairMessages(c.messages) }))
-        const activeId = typeof data.activeId === "string" && chats.some((c) => c.id === data.activeId) ? data.activeId : null
-
-        return { version: 1, activeId, chats }
+        return { version: 1, chats }
     } catch {
         return emptyStore() // broken data: start fresh instead of crashing 
     }
@@ -94,9 +93,8 @@ export function saveStore(store: ChatStore): boolean {
   let chats = newestFirst(store.chats.filter((c) => c.messages.length > 0)).slice(0, MAX_CHATS)
 
   while (true) {
-    const activeId = chats.some((c) => c.id === store.activeId) ? store.activeId : null
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, activeId, chats }))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, chats }))
       return true
     } catch {
       if (chats.length <= 1) return false
