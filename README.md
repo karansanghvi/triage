@@ -2,6 +2,9 @@
 
 An LLM router that sends each request to the cheapest model that can handle it.
 
+**[Case study](CASE_STUDY.md):** the problem, architecture, routing model, evaluation results (including what didn't
+work), reliability engineering, and lessons learned.
+
 **Status:** Phases 1–4 complete: providers and reliability, data collection, the routing classifier, and an
 OpenAI-compatible API with verification, logging and retraining. The sections below describe each part in more detail.
 
