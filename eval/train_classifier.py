@@ -238,7 +238,9 @@ def train_tier(tier: str, rows: list, feature_set: str, kind: str, name: str, sa
         stem = MODELS_DIR / f"{name}_{tier}_v{version}"
         joblib.dump(model, stem.with_suffix(".joblib"))
         stem.with_suffix(".json").write_text(json.dumps({**record, "version": version}, indent=2))
-        print(f"saved {stem.relative_to(PROJECT_ROOT)}.joblib/.json")
+        from app.router.predictor import export_numpy
+        exported = export_numpy(stem)                 # lets the server run it without scikit-learn
+        print(f"saved {stem.relative_to(PROJECT_ROOT)}.joblib/.json" + ("/.npz" if exported else ""))
     return record
 
 def main():

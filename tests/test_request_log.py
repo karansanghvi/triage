@@ -243,7 +243,7 @@ def test_real_predictor_vectors_are_reused_not_recomputed(tmp_path, monkeypatch)
     predictor, _ = load_predictor_checked()
     calls = []
     real = embeddings.embed_texts
-    monkeypatch.setattr(embeddings, "embed_texts", lambda texts, model=None: calls.append(texts) or real(texts, model))
+    monkeypatch.setattr(embeddings, "embed_texts", lambda texts, model=None, **kw: calls.append(texts) or real(texts, model, **kw))
     http, deps, log = app_with(tmp_path, predictor=predictor)
     rid = post(http, headers={"X-Triage-Task": "reasoning"}).headers["x-triage-request-id"]
     assert len(calls) == 1                                                # one embedding for the whole request

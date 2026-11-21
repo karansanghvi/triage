@@ -115,13 +115,17 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
 def load_predictor_checked():
     """The classifier named in routing.yaml, loaded and warmed once. Refuses to start if its checks fail."""
     os.environ.setdefault("HF_HUB_OFFLINE", "1")      # the embedding model must already be cached
+    from app.router.embeddings import EmbeddingModelMissing, set_torch_threads
     from app.router.predictor import Predictor, PredictorError, load_classifier_config
+    set_torch_threads()                               # TRIAGE_TORCH_THREADS, default 1 (memory; see embeddings.py)
     name, version = load_classifier_config()
     try:
         predictor = Predictor(name, version)          # checks the version inside the file and feature columns
         predictor.predict_text("warm up the embedding model", None)
     except PredictorError as error:
         raise RuntimeError(f"refusing to start: the predictor failed its safety checks: {error}") from None
+    except EmbeddingModelMissing as error:
+        raise RuntimeError(f"refusing to start: {error}") from None
     return predictor, f"{name} v{version}"
 
 

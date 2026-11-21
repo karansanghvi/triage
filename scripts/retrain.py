@@ -212,6 +212,8 @@ def train_candidate(original: dict, new: dict, *, name: str, models_dir: Path, k
             joblib.dump(model, f)
         with open(stem.with_suffix(".json"), "x", encoding="utf-8") as f:
             f.write(json.dumps(record, indent=2))
+        from app.router.predictor import export_numpy
+        export_numpy(stem)                            # the server runs it as numpy, without scikit-learn
         summary[tier] = {"rows": record["rows"], "cv_log_loss": record["cv"]["log_loss"],
                          "cv_roc_auc": record["cv"]["roc_auc"]}
     return {"version": version, "tiers": summary}

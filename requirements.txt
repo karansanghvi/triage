@@ -1,6 +1,9 @@
 # Exact versions: production installs what the test suite ran against. To upgrade, change a pin, reinstall,
 # run `venv/bin/python -m pytest` (and `-m postgres`), then commit. These are the packages Triage imports
 # directly; their own dependencies are resolved by pip.
+#
+# The server (Render) installs requirements.lock instead: every package, dependencies included, at an exact
+# version, with the CPU-only build of torch. Regenerate it after changing this file: see DEPLOY.md.
 
 # API server
 fastapi==0.162.2
@@ -17,11 +20,14 @@ openai==3.22.1
 anthropic==1.9.0
 google-genai==2.29.0
 
-# Router: the classifier and its embeddings
+# Router: the classifier and its embeddings. The server runs the classifier as numpy and the embedding model on
+# plain transformers (app/router/embeddings.py); scikit-learn trains and exports the classifier.
 numpy==2.5.4
 scikit-learn==1.9.1
 joblib==1.6.0
-sentence-transformers==6.2.0
+torch==2.15.0
+transformers==5.22.1
+huggingface_hub==2.2.0
 
 # Database and accounts
 SQLAlchemy==2.1.8
@@ -33,6 +39,7 @@ argon2-cffi==25.1.0
 # Data collection and evaluation
 datasets==5.1.0
 
-# Tests
+# Tests (sentence-transformers: the embedding parity test compares the server's model with it)
+sentence-transformers==6.2.0
 pytest==9.1.1
 httpx2==2.13.1

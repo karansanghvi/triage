@@ -47,6 +47,10 @@ data/judge_calibration/
 
 # Trained model files (rebuilt by eval.train_classifier); the .json metrics next to them are committed
 models/*.joblib
+# ...except the live classifier's (config/routing.yaml): the server needs them and they can't be rebuilt without
+# the git-ignored training data. Their .npz exports (numpy, used by the server) are committed too.
+!models/classifier_c_logreg_cv_low_v2.joblib
+!models/classifier_c_logreg_cv_medium_v2.joblib
 
 # Request logs from the API (SQLite; no keys or text, but per-request data)
 data/logs/
@@ -65,3 +69,6 @@ data/demo/
 
 # Design mock-ups used while building the web app (kept locally, not published)
 web/design-refs/
+
+# The embedding model, downloaded by the deploy build (scripts/fetch_embedding_model.py, HF_HOME=.hf-cache)
+.hf-cache/
