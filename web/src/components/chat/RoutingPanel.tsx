@@ -47,6 +47,16 @@ function savedShare(routing: RoutingInfo): number | null {
   return routing.saved / routing.strongCost
 }
 
+// A cost, marked when it's an estimate (a stopped answer): "≈ $0.00012 (stopped)"
+function CostText({ value, estimated }: { value: number | null; estimated?: boolean }) {
+  if (!estimated) return <Usd value={value} />
+  return (
+    <span>
+      ≈ <Usd value={value} /> (stopped)
+    </span>
+  )
+}
+
 // Probabilities next to the bar (tau). Whole percents normally; but when one is within 1 point of the bar, every
 // number compared with it gets one decimal, so 85.8% never shows as "86% likely" beside "Needed: 86%".
 const NEAR_BAR = 0.01
@@ -130,7 +140,8 @@ function EmptyState() {
 
 function SelectedDetails({ routing }: { routing: RoutingInfo }) {
   const share = savedShare(routing)
-  const costWidth = routing.strongCost ? Math.max((routing.cost / routing.strongCost) * 100, 2) : 100
+  const priced = routing.cost !== null
+  const costWidth = priced && routing.strongCost ? Math.max(((routing.cost ?? 0) / routing.strongCost) * 100, 2) : 100
 
   return (
     <>
@@ -148,7 +159,14 @@ function SelectedDetails({ routing }: { routing: RoutingInfo }) {
 
       {/* Savings */}
       <section>
-        {share !== null && share > 0 ? (
+        {!priced ? (
+          <>
+            <p className="text-base font-semibold">Stopped</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              You stopped this answer, and its cost couldn't be estimated, so it isn't in this chat's totals.
+            </p>
+          </>
+        ) : share !== null && share > 0 ? (
           <>
             <p className="text-2xl font-semibold text-success">You saved {formatPercent(share)}</p>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -168,15 +186,27 @@ function SelectedDetails({ routing }: { routing: RoutingInfo }) {
           </>
         )}
 
-        <div className="mt-4 space-y-3">
-          <CostBar label="This answer" value={<Usd value={routing.cost} />} width={costWidth} barClass="bg-primary" />
-          <CostBar
-            label="With the most powerful model"
-            value={<Usd value={routing.strongCost} />}
-            width={100}
-            barClass="bg-muted-foreground/40"
-          />
-        </div>
+        {priced && (
+          <div className="mt-4 space-y-3">
+            <CostBar
+              label="This answer"
+              value={<CostText value={routing.cost} estimated={routing.costEstimated} />}
+              width={costWidth}
+              barClass="bg-primary"
+            />
+            <CostBar
+              label="With the most powerful model"
+              value={<CostText value={routing.strongCost} estimated={routing.costEstimated} />}
+              width={100}
+              barClass="bg-muted-foreground/40"
+            />
+          </div>
+        )}
+        {priced && routing.costEstimated && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Estimated: you stopped this answer part-way, so Triage priced the text the model had written.
+          </p>
+        )}
       </section>
 
       {/* Could a cheaper model handle it? */}
@@ -274,8 +304,11 @@ function SessionTotals({ messages }: { messages: Message[] }) {
     if (m.role === "assistant" && m.routing) routed.push(m.routing)
   }
 
-  const totalCost = routed.reduce((sum, r) => sum + r.cost, 0)
-  const totalStrong = routed.reduce((sum, r) => sum + (r.strongCost ?? r.cost), 0)
+  // Stopped answers count with their estimated cost; one whose cost couldn't be estimated is left out
+  const priced = routed.filter((r): r is RoutingInfo & { cost: number } => r.cost !== null)
+  const estimated = priced.filter((r) => r.costEstimated).length
+  const totalCost = priced.reduce((sum, r) => sum + r.cost, 0)
+  const totalStrong = priced.reduce((sum, r) => sum + (r.strongCost ?? r.cost), 0)
   const share = totalStrong > 0 ? (totalStrong - totalCost) / totalStrong : null
   const counts: Record<Tier, number> = { low: 0, medium: 0, high: 0 }
   for (const r of routed) counts[r.tier]++
@@ -289,12 +322,19 @@ function SessionTotals({ messages }: { messages: Message[] }) {
         </p>
       </div>
 
-      {routed.length > 0 ? (
+      {routed.length > 0 && priced.length === 0 ? (
+        <p className="mt-2 text-xs text-muted-foreground">Cost not known: stopped before it could be priced.</p>
+      ) : routed.length > 0 ? (
         <>
           <div className="mt-3 flex items-end justify-between gap-3">
             <div>
               <p className="text-sm font-semibold">Cost <Usd value={totalCost} /></p>
               <p className="text-xs text-muted-foreground">instead of <Usd value={totalStrong} /></p>
+              {estimated > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  includes {estimated} stopped {estimated === 1 ? "answer" : "answers"}, estimated
+                </p>
+              )}
             </div>
             {share !== null && share >= 0.01 && (
               <p className="text-lg font-semibold text-success">{formatPercent(share)} saved</p>

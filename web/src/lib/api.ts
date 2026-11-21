@@ -16,7 +16,7 @@ type ApiTriage = {
   p_medium: number | null
   tau: number | null
   reason: string
-  cost: number
+  cost: number | null         // null on a stream's first chunk: known only at the end
   strong_cost: number | null
   saved: number | null
   cache: string
@@ -25,9 +25,21 @@ type ApiTriage = {
   routed_by?: RoutedBy | null
 }
 
-type ApiChatResponse = {
-  choices: { message: { content: string }; finish_reason?: string }[]
-  triage: ApiTriage
+// One chunk of a streamed answer (OpenAI's chat.completion.chunk). Triage adds "triage" on the first chunk
+// (routing, cost null) and on the finish_reason chunk (complete); a failure part-way arrives as {"error": ...}
+type ApiChunk = {
+  choices?: { delta?: { content?: string | null }; finish_reason?: string | null }[]
+  triage?: ApiTriage
+  error?: { code?: string; message?: string }
+}
+
+// What GET /v1/requests/{id} says about a finished (or stopped) request
+type ApiRequestCost = {
+  status?: string
+  price_as_cost?: number | null
+  strong_cost?: number | null
+  saved?: number | null
+  tokens_estimated?: boolean | null
 }
 
 type ApiError = {
@@ -122,16 +134,27 @@ export type SendChatOptions = {
 const TOO_LARGE_MESSAGE = "This conversation is too long to send. Start a new chat or shorten your message."
 
 
-export async function sendChat(
+export type StreamHandlers = {
+  signal?: AbortSignal
+  onStart?: (routing: RoutingInfo, demo: DemoHeaders | null) => void   // routing known; cost not yet
+  onDelta?: (text: string) => void                                    // the next piece of the answer
+}
+
+// Streams one answer. Resolves with the complete answer and its routing (cost included) once the stream ends.
+// Rejects with a TriageError before or during the stream (a failure part-way included), or, if the signal
+// aborts it, with the abort's DOMException: the caller keeps what onDelta delivered.
+export async function streamChat(
   messages: Message[],
   quality: number,
-  { maxPromptChars = DEFAULT_MAX_PROMPT_CHARS, sessionToken = null }: SendChatOptions = {}
+  { maxPromptChars = DEFAULT_MAX_PROMPT_CHARS, sessionToken = null }: SendChatOptions = {},
+  { signal, onStart, onDelta }: StreamHandlers = {}
 ): Promise<ChatResult> {
   // Only the demo has a prompt limit: account mode sends the whole conversation. The demo counts every message,
   // the language instruction too, so the history gets what is left.
   const history = toApiMessages(messages)
   const body = {
     model: "auto",
+    stream: true,
     messages: withLanguageInstruction(
       sessionToken ? history : trimToLimit(history, maxPromptChars - LANGUAGE_INSTRUCTION.length)
     ),
@@ -147,8 +170,10 @@ export async function sendChat(
         ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
       },
       body: JSON.stringify(body),
+      signal,
     })
-  } catch {
+  } catch (err) {
+    if (signal?.aborted) throw err
     throw new TriageError("network_error", "Couldn't reach Triage. Check your connection and try again.")
   }
 
@@ -166,14 +191,92 @@ export async function sendChat(
     )
   }
 
-  const data = (await response.json()) as ApiChatResponse
-  const choice = data.choices[0]
-  return {
-    content: data.choices[0]?.message.content ?? "",
-    routing: toRoutingInfo(data.triage),
-    demo: readDemoHeaders(response.headers),
-    truncated: choice?.finish_reason === "length",
+  const demo = readDemoHeaders(response.headers)
+  let content = ""
+  let finalTriage: ApiTriage | null = null
+  let finishReason: string | null = null
+  let done = false
+
+  // Server-sent events: "data: {...}" lines, events separated by a blank line, "data: [DONE]" at the end
+  const handle = (data: string) => {
+    if (data === "[DONE]") {
+      done = true
+      return
+    }
+    const chunk = JSON.parse(data) as ApiChunk
+    if (chunk.error) {
+      throw new TriageError(chunk.error.code ?? "stream_interrupted", chunk.error.message ?? "The answer stopped part-way.")
+    }
+    const choice = chunk.choices?.[0]
+    if (chunk.triage) {
+      if (choice?.finish_reason) finalTriage = chunk.triage
+      else onStart?.(toRoutingInfo(chunk.triage), demo)
+    }
+    const piece = choice?.delta?.content
+    if (piece) {
+      content += piece
+      onDelta?.(piece)
+    }
+    if (choice?.finish_reason) finishReason = choice.finish_reason
   }
+
+  const reader = response.body?.getReader()
+  if (!reader) throw new TriageError("network_error", "Couldn't read the answer. Please try again.")
+  const decoder = new TextDecoder()
+  let buffer = ""
+  try {
+    while (!done) {
+      const { value, done: ended } = await reader.read()
+      if (ended) break
+      buffer += decoder.decode(value, { stream: true })
+      let end: number
+      while ((end = buffer.indexOf("\n\n")) !== -1) {
+        const event = buffer.slice(0, end)
+        buffer = buffer.slice(end + 2)
+        for (const line of event.split("\n")) {
+          if (line.startsWith("data: ")) handle(line.slice(6))
+        }
+      }
+    }
+  } catch (err) {
+    if (signal?.aborted || err instanceof TriageError) throw err
+    throw new TriageError("network_error", "The connection dropped while the answer was arriving. Please try again.")
+  }
+
+  if (!done || finalTriage === null) {
+    throw new TriageError("stream_interrupted", "The answer stopped part-way. Please try again.")
+  }
+  return {
+    content,
+    routing: toRoutingInfo(finalTriage),
+    demo,
+    truncated: finishReason === "length",
+  }
+}
+
+// A stopped answer's estimated cost, which Triage logs once it has closed the model's stream: a moment after the
+// stop, so this asks a few times. The demo's requests can be read without a key; an account's with its session.
+// null: not available (the request was never logged, or nothing was priced).
+export async function fetchStoppedCost(
+  requestId: string,
+  sessionToken: string | null
+): Promise<{ cost: number; strongCost: number | null; saved: number | null } | null> {
+  for (const wait of [250, 500, 1000, 1500, 2500]) {
+    await new Promise((resolve) => setTimeout(resolve, wait))
+    try {
+      const response = await fetch(`${BASE_URL}/v1/requests/${encodeURIComponent(requestId)}`, {
+        headers: sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {},
+      })
+      if (response.status === 404) continue            // not logged yet
+      if (!response.ok) return null
+      const row = (await response.json()) as ApiRequestCost
+      if (row.price_as_cost == null) return null
+      return { cost: row.price_as_cost, strongCost: row.strong_cost ?? null, saved: row.saved ?? null }
+    } catch {
+      continue
+    }
+  }
+  return null
 }
 
 export async function getDemoStatus(): Promise<DemoStatus | null> {

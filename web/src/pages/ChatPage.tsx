@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Navigate, useNavigate, useParams } from "react-router-dom"
 import { Plus } from "lucide-react"
 import Welcome from "@/components/chat/Welcome"
@@ -12,11 +12,11 @@ import { useDemoStatus } from "@/context/DemoStatusContext"
 import { useChats } from "@/context/ChatsContext"
 import { useAuth } from "@/context/AuthContext"
 import { isUsableKey, useProviderKeys } from "@/context/ProviderKeysContext"
-import { sendChat } from "@/lib/api"
+import { fetchStoppedCost, streamChat } from "@/lib/api"
 import { TriageError } from "@/lib/errors"
 import { DEFAULT_QUALITY } from "@/lib/quality"
 import { PROVIDERS, type ProviderKey } from "@/lib/account"
-import type { AssistantMessage, ChatError, Message, UserMessage } from "@/types/chat"
+import type { AssistantMessage, ChatError, Message, RoutingInfo, UserMessage } from "@/types/chat"
 import LimitBanner from "@/components/chat/LimitBanner";
 import KeysRejectedBanner from "@/components/chat/KeysRejectedBanner"
 
@@ -59,6 +59,9 @@ export default function ChatPage() {
   const [quality, setQuality] = useState(DEFAULT_QUALITY)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false) // below lg: the routing details as a bottom sheet
+  // The answer arriving now: shown as it streams, saved to the chat only once it finishes, stops or fails
+  const [live, setLive] = useState<{ id: string; content: string } | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   const isEmpty = messages.length === 0
 
@@ -95,21 +98,61 @@ export default function ChatPage() {
     // A new chat is saved with its first message: give it its own address, replacing /chat in history
     if (chatId === null) navigate(`/chat/${id}`, { replace: true })
 
-    try {
-      const result = await sendChat(history, quality, { sessionToken: mode.kind === "account" ? mode.token : null })
-      if (mode.kind === "demo" && result.demo) demoStatus.update(result.demo)
+    const sessionToken = mode.kind === "account" ? mode.token : null
+    const controller = new AbortController()
+    abortRef.current = controller
+    let text = ""                                   // what has arrived, kept here so Stop and errors can save it
+    let started: RoutingInfo | null = null         // the routing, known once the first token exists
+    let frame = 0                                    // one screen update per animation frame, not per token
+    setLive({ id: pendingId, content: "" })
+    const show = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        setLive({ id: pendingId, content: text })
+      })
+    }
+    const finishAnswer = (patch: Partial<AssistantMessage>) =>
       updateMessages(id, (prev) =>
-        prev.map((m) =>
-          m.id === pendingId && m.role === "assistant"
-            ? { ...m, content: result.content, status: "done", routing: result.routing, truncated: result.truncated }
-            : m
-        )
+        prev.map((m) => (m.id === pendingId && m.role === "assistant" ? { ...m, ...patch } : m))
       )
+
+    try {
+      const result = await streamChat(history, quality, { sessionToken }, {
+        signal: controller.signal,
+        onStart: (routing, demo) => {
+          started = routing
+          if (mode.kind === "demo" && demo) demoStatus.update(demo)
+        },
+        onDelta: (piece) => {
+          text += piece
+          show()
+        },
+      })
+      if (mode.kind === "demo" && result.demo) demoStatus.update(result.demo)
+      finishAnswer({ content: result.content, status: "done", routing: result.routing, truncated: result.truncated })
       setSelectedId(pendingId)
       // A backup model answered: the backend may have just marked a saved key invalid, so reload them quietly
       if (mode.kind === "account" && result.routing.fellBack) void providerKeys.refresh()
     } catch (err) {
       if (mode.kind === "demo") demoStatus.refresh()
+
+      if (controller.signal.aborted) {
+        // Stopped: keep what arrived. Its cost isn't known yet: Triage estimates it once the model has stopped,
+        // so it's read back by request id and filled in; if that fails, the answer stays "Stopped" without one
+        const routing: RoutingInfo | undefined = started
+          ? { ...(started as RoutingInfo), cost: null, strongCost: null, saved: null }
+          : undefined
+        finishAnswer({ content: text, status: "done", stopped: true, routing })
+        if (routing) {
+          setSelectedId(pendingId)
+          void fetchStoppedCost(routing.requestId, sessionToken).then((cost) => {
+            if (!cost) return
+            finishAnswer({ routing: { ...routing, ...cost, costEstimated: true } })
+          })
+        }
+        return
+      }
 
       let error: ChatError =
         err instanceof TriageError
@@ -126,12 +169,17 @@ export default function ChatPage() {
         }
       }
 
-      updateMessages(id, (prev) =>
-        prev.map((m) => (m.id === pendingId && m.role === "assistant" ? { ...m, status: "error", error } : m))
-      )
+      finishAnswer({ status: "error", error, content: text })
     } finally {
+      if (frame) cancelAnimationFrame(frame)
+      abortRef.current = null
+      setLive(null)
       setBusy(false)
     }
+  }
+
+  function handleStop() {
+    abortRef.current?.abort()
   }
 
   function handleSend() {
@@ -180,6 +228,8 @@ export default function ChatPage() {
             onSend={handleSend}
             quality={quality}
             onQualityChange={setQuality}
+            streaming={busy && live !== null}
+            onStop={handleStop}
         />
     </>
   )
@@ -215,6 +265,7 @@ export default function ChatPage() {
                 selectedId={selectedMessage?.id ?? null}
                 onSelect={selectAnswer}
                 onRetry={handleRetry}
+                live={live}
               />
             </div>
             <div className="pt-4">{chatInput}</div>
