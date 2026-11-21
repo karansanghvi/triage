@@ -100,6 +100,7 @@ export type Totals = {
   requests: number
   ok: number
   errors: number
+  stopped: number // the client stopped them part-way: not errors; their estimated cost is in the money
   priced_requests: number
   cost_usd: number
   strong_model_cost_usd: number
@@ -204,7 +205,7 @@ export type RequestItem = {
   served_model: string | null
   tier: Tier | null
   routed_by: "classifier" | "small_talk" | "requested_model" | null // null on rows from before it was logged
-  status: "ok" | "error"
+  status: "ok" | "error" | "stopped"
   http_status: number
   error_kind: string | null
   stream: boolean

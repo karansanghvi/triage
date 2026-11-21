@@ -147,7 +147,13 @@ function EmptyPeriod() {
 
 function UsageView({ usage }: { usage: AccountUsage }) {
   const t = usage.totals
-  const successRate = t.requests > 0 ? t.ok / t.requests : null
+  // Answered out of the requests that ran to the end: a stopped one isn't a failure, so it's left out
+  const finished = t.requests - t.stopped
+  const successRate = finished > 0 ? t.ok / finished : null
+  const requestNotes = [
+    t.small_talk_requests > 0 ? `${formatCount(t.small_talk_requests)} small talk, not credited` : null,
+    t.stopped > 0 ? `${formatCount(t.stopped)} stopped` : null,
+  ].filter(Boolean)
   // Account requests always run on the account's own saved provider keys (no keys: the API refuses them);
   // the free demo is never linked to an account, so it can't appear here.
   const spentNote = "on your own provider keys"
@@ -158,7 +164,7 @@ function UsageView({ usage }: { usage: AccountUsage }) {
         <StatCard
           label="Your requests"
           value={formatCount(t.requests)}
-          note={t.small_talk_requests > 0 ? `${formatCount(t.small_talk_requests)} small talk, not credited` : undefined}
+          note={requestNotes.length ? requestNotes.join(" · ") : undefined}
         />
         <SpentCard label="You spent" cost={t.cost_usd} requests={t.requests} note={spentNote} />
         <SavedCard label="You saved" share={t.saved_share} saved={t.saved_usd} />
@@ -214,6 +220,7 @@ function UsageView({ usage }: { usage: AccountUsage }) {
                 <th scope="col" className={cn(TH, "text-right")}>Requests</th>
                 <th scope="col" className={cn(TH, "text-right")}>Cost</th>
                 <th scope="col" className={cn(TH, "text-right")}>Saved</th>
+                <th scope="col" className={cn(TH, "text-right")}>Saved %</th>
                 <th scope="col" className={cn(TH, "text-right")}>Last used</th>
               </tr>
             </thead>
@@ -231,6 +238,9 @@ function UsageView({ usage }: { usage: AccountUsage }) {
 
 function KeyRow({ k }: { k: KeyUsage }) {
   const revoked = k.revoked === true
+  // Of what these requests would have cost on the strongest model, the share saved. "—" when nothing was
+  // credited with a saving (named models and small talk only, or no requests)
+  const savedShare = k.saved_usd > 0 && k.cost_usd + k.saved_usd > 0 ? k.saved_usd / (k.cost_usd + k.saved_usd) : null
   const cell = revoked ? "text-muted-foreground" : "text-[#C9CDD8]"
   return (
     <tr className="border-t border-[#1A1C26] text-sm">
@@ -245,6 +255,9 @@ function KeyRow({ k }: { k: KeyUsage }) {
       </td>
       <td className={cn(TD, NUM, revoked ? cell : k.saved_usd > 0 ? "text-[#4ADE80]" : cell)}>
         <Usd value={k.saved_usd} />
+      </td>
+      <td className={cn(TD, NUM, revoked ? cell : savedShare !== null && savedShare > 0 ? "text-[#4ADE80]" : cell)}>
+        {savedShare === null ? "—" : formatPercent(savedShare, 1)}
       </td>
       <td className={cn(TD, "text-right text-[13px]", cell)}>
         {k.last_used ? (
