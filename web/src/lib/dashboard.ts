@@ -217,7 +217,11 @@ export type RequestItem = {
   key_label: string
 }
 
-export type RequestPage = { data: RequestItem[]; next_cursor: string | null }
+export type RequestPage = {
+  data: RequestItem[]
+  next_cursor: string | null // null on the last page
+  total: number // every request of the account, for "Showing 11–20 of 104"
+}
 
 /* ---------- Fetching ---------- */
 

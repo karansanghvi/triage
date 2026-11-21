@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
-import { Inbox, Loader2, UserRound } from "lucide-react"
+import { ChevronLeft, ChevronRight, Inbox, Loader2, UserRound } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { useAccountApi } from "@/hooks/useAccountApi"
 import { useRange } from "@/hooks/useRange"
@@ -31,9 +31,14 @@ type Result = { key: string; data?: AccountUsage; failed?: boolean }
 const TH = "whitespace-nowrap px-3.5 py-2.5 font-medium"
 const TD = "whitespace-nowrap px-3.5 py-3"
 const NUM = "text-right font-mono text-[13px]"
-// Recent requests has eight columns: a little less padding so it fits a desktop card without scrolling
+// Recent requests has eight columns: a little less padding so it fits a desktop card without scrolling.
+// Every row is the same height (h-14, room for a failed row's pill and label), so a page is always 10 rows tall.
 const RTH = "whitespace-nowrap px-2.5 py-2.5 font-medium"
-const RTD = "whitespace-nowrap px-2.5 py-3"
+const RTD = "whitespace-nowrap px-2.5 py-2"
+const PAGE_SIZE = 10
+const PAGE_BUTTON =
+  "inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-[10px] border border-[#1F2130] bg-[#0E0F15] px-2.5 text-[13px] font-medium text-[#C9CDD8] transition-colors hover:bg-[#1A1C26] hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+const PAGE_CURRENT = "border-[#2A2D3D] bg-[#1A1C26] text-foreground"
 
 export default function UsagePage() {
   const { user, loading } = useAuth()
@@ -254,23 +259,57 @@ function KeyRow({ k }: { k: KeyUsage }) {
 
 /* ---------- Recent requests (paged, not tied to the range) ---------- */
 
-type Recent = {
+type Pager = {
   status: "loading" | "ready" | "error"
-  items: RequestItem[]
-  next: string | null
-  more: "idle" | "loading" | "error"
+  page: number // the page shown, from 1
+  rows: RequestItem[]
+  total: number
+  cursors: (string | null)[] // cursors[i] opens page i + 1 (page 1: no cursor); its length = pages reachable
+  pending: number | null // the page being loaded
+  pageError: boolean
+}
+
+const START: Pager = { status: "loading", page: 1, rows: [], total: 0, cursors: [null], pending: null, pageError: false }
+
+// Cursors after loading page p: the next page's cursor is new information. If it differs from the one kept
+// (new requests moved page 1's boundary), the later cursors no longer line up, so they're dropped.
+function cursorsAfter(cursors: (string | null)[], p: number, next: string | null): (string | null)[] {
+  if (!next) return cursors.slice(0, p)
+  if (cursors[p] === next) return cursors
+  return [...cursors.slice(0, p), next]
+}
+
+// The page numbers to show: every reachable page (compressed around the current one when there are many),
+// then the last page from the total, with "gap" for the pages in between
+function pageItems(current: number, reachable: number, last: number): (number | "gap")[] {
+  const shown = new Set<number>()
+  if (reachable <= 7) for (let p = 1; p <= reachable; p++) shown.add(p)
+  else [1, current - 1, current, current + 1, reachable].forEach((p) => p >= 1 && p <= reachable && shown.add(p))
+  shown.add(last)
+  const sorted = [...shown].sort((x, y) => x - y)
+  const out: (number | "gap")[] = []
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - sorted[i - 1] > 1) out.push("gap")
+    out.push(p)
+  })
+  return out
 }
 
 function RecentRequests() {
   const api = useAccountApi()
   const [attempt, setAttempt] = useState(0)
-  const [state, setState] = useState<Recent>({ status: "loading", items: [], next: null, more: "idle" })
+  const [state, setState] = useState<Pager>(START)
+  const latest = useRef(0) // the newest page request; older answers are ignored
 
   useEffect(() => {
     let current = true
-    api.listRequests(null).then(
-      (page) => current && setState({ status: "ready", items: page.data, next: page.next_cursor, more: "idle" }),
-      () => current && setState((s) => ({ ...s, status: "error" }))
+    const id = ++latest.current
+    api.listRequests(null, PAGE_SIZE).then(
+      (res) =>
+        current &&
+        id === latest.current &&
+        setState({ ...START, status: "ready", rows: res.data, total: res.total, cursors: cursorsAfter([null], 1, res.next_cursor) }),
+      () => current && id === latest.current && setState((s) => ({ ...s, status: "error" }))
     )
     return () => {
       current = false
@@ -278,21 +317,27 @@ function RecentRequests() {
   }, [api, attempt])
 
   function retry() {
-    setState({ status: "loading", items: [], next: null, more: "idle" })
+    setState(START)
     setAttempt((a) => a + 1)
   }
 
-  function loadMore() {
-    if (!state.next || state.more === "loading") return
-    const cursor = state.next
-    setState((s) => ({ ...s, more: "loading" }))
-    api.listRequests(cursor).then(
-      (page) =>
-        // Append only if nothing reset the list meanwhile (the cursor is still the one this page followed)
-        setState((s) =>
-          s.next === cursor ? { ...s, items: [...s.items, ...page.data], next: page.next_cursor, more: "idle" } : s
-        ),
-      () => setState((s) => (s.next === cursor ? { ...s, more: "error" } : s))
+  function goTo(p: number) {
+    if (state.pending !== null || p === state.page || p < 1 || p > state.cursors.length) return
+    const id = ++latest.current
+    setState((s) => ({ ...s, pending: p, pageError: false }))
+    api.listRequests(state.cursors[p - 1], PAGE_SIZE).then(
+      (res) => {
+        if (id !== latest.current) return
+        setState((s) => ({
+          ...s,
+          page: p,
+          rows: res.data,
+          total: res.total,
+          cursors: cursorsAfter(s.cursors, p, res.next_cursor),
+          pending: null,
+        }))
+      },
+      () => id === latest.current && setState((s) => ({ ...s, pending: null, pageError: true }))
     )
   }
 
@@ -303,7 +348,15 @@ function RecentRequests() {
       </CardBones>
     )
   if (state.status === "error") return <ErrorCard message="Couldn't load your recent requests." onRetry={retry} />
-  if (state.items.length === 0) return null
+  if (state.rows.length === 0 && state.page === 1) return null
+
+  const busy = state.pending !== null
+  const paged = state.total > PAGE_SIZE
+  const reachable = state.cursors.length
+  const last = Math.max(reachable, Math.ceil(state.total / PAGE_SIZE), 1)
+  const hasNext = state.page < reachable
+  const first = (state.page - 1) * PAGE_SIZE + 1
+  const filler = paged ? Math.max(0, PAGE_SIZE - state.rows.length) : 0
 
   return (
     <DashCard
@@ -311,7 +364,7 @@ function RecentRequests() {
       description="Prompts and answers are never stored, so only routing details appear here."
     >
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full border-collapse">
+        <table className="w-full border-collapse" aria-busy={busy}>
           <thead>
             <tr className="text-xs text-muted-foreground">
               <th scope="col" className={cn(RTH, "text-left")}>Time</th>
@@ -324,33 +377,73 @@ function RecentRequests() {
               <th scope="col" className={cn(RTH, "text-left")}>Status</th>
             </tr>
           </thead>
-          <tbody>
-            {state.items.map((r) => (
+          <tbody className={cn("transition-opacity", busy && "opacity-50")}>
+            {state.rows.map((r) => (
               <RequestRow key={r.request_id} r={r} />
+            ))}
+            {/* A short last page keeps the table 10 rows tall */}
+            {Array.from({ length: filler }, (_, i) => (
+              <tr key={`filler-${i}`} aria-hidden="true" className="h-14 border-t border-transparent">
+                <td colSpan={8} />
+              </tr>
             ))}
           </tbody>
         </table>
       </div>
-      {(state.next || state.more === "error") && (
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          {state.next && (
+
+      {paged && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-[13px] text-muted-foreground" aria-live="polite">
+            Showing {formatCount(first)}–{formatCount(first + state.rows.length - 1)} of {formatCount(state.total)}
+          </p>
+          <nav aria-label="Recent requests pages" className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
-              onClick={loadMore}
-              disabled={state.more === "loading"}
-              aria-busy={state.more === "loading"}
-              className={SECONDARY_BUTTON}
+              aria-label="Previous page"
+              disabled={busy || state.page === 1}
+              onClick={() => goTo(state.page - 1)}
+              className={PAGE_BUTTON}
             >
-              {state.more === "loading" && <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />}
-              Load more
+              <ChevronLeft aria-hidden="true" className="h-4 w-4" />
+              <span className="hidden sm:inline">Previous</span>
             </button>
-          )}
-          {state.more === "error" && (
-            <p role="alert" className="text-[13px] text-[#F87171]">
-              Couldn't load more requests. Try again.
-            </p>
-          )}
+            {pageItems(state.page, reachable, last).map((item, i) =>
+              item === "gap" ? (
+                <span key={`gap-${i}`} aria-hidden="true" className="px-1 text-[13px] text-muted-foreground">
+                  …
+                </span>
+              ) : (
+                <button
+                  key={item}
+                  type="button"
+                  aria-label={`Page ${item}`}
+                  aria-current={item === state.page ? "page" : undefined}
+                  disabled={busy || item > reachable}
+                  title={item > reachable ? "Use Next to reach this page" : undefined}
+                  onClick={() => goTo(item)}
+                  className={cn(PAGE_BUTTON, item === state.page && PAGE_CURRENT)}
+                >
+                  {state.pending === item ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : item}
+                </button>
+              )
+            )}
+            <button
+              type="button"
+              aria-label="Next page"
+              disabled={busy || !hasNext}
+              onClick={() => goTo(state.page + 1)}
+              className={PAGE_BUTTON}
+            >
+              <span className="hidden sm:inline">Next</span>
+              <ChevronRight aria-hidden="true" className="h-4 w-4" />
+            </button>
+          </nav>
         </div>
+      )}
+      {state.pageError && (
+        <p role="alert" className="mt-3 text-[13px] text-[#F87171]">
+          Couldn't load that page. Try again.
+        </p>
       )}
     </DashCard>
   )
@@ -363,7 +456,7 @@ function RequestRow({ r }: { r: RequestItem }) {
   else saved = <span className={r.saved_usd > 0 ? "text-[#4ADE80]" : undefined}>{formatUsd(r.saved_usd)}</span>
 
   return (
-    <tr className="border-t border-[#1A1C26] text-sm">
+    <tr className="h-14 border-t border-[#1A1C26] text-sm">
       <td className={cn(RTD, "text-[13px] text-[#C9CDD8]")}>
         <time dateTime={r.timestamp} title={new Date(r.timestamp).toLocaleString()}>
           {relativeTime(r.timestamp)}
@@ -382,7 +475,7 @@ function RequestRow({ r }: { r: RequestItem }) {
         {r.key_label}
       </td>
       <td className={RTD}>
-        <div className="flex flex-col items-start gap-1">
+        <div className="flex flex-col items-start gap-0.5">
           <StatusPill status={r.status} fellBack={r.fell_back} />
           {r.status === "error" && <span className="text-xs text-muted-foreground">{errorLabel(r.error_kind)}</span>}
         </div>

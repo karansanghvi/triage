@@ -32,7 +32,8 @@ export function useAccountApi() {
       revokeApiKey: (id: string) => call((t) => account.revokeApiKey(t, id)),
 
       getUsage: (range: Range) => call((t) => dashboard.getAccountUsage(t, range)),
-      listRequests: (cursor?: string | null) => call((t) => dashboard.listAccountRequests(t, cursor)),
+      listRequests: (cursor?: string | null, limit?: number) =>
+        call((t) => dashboard.listAccountRequests(t, cursor, limit)),
 
       // After a change, update the user everywhere (sidebar, chat greeting)
       updateAccount: async (changes: AccountChanges) => {
