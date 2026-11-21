@@ -29,7 +29,7 @@ export default function SettingsLayout() {
                         to={to}
                         className={({ isActive }) =>
                             cn(
-                                "flex shrink-0 items-center gap-2.5 rounded-[10px] px-3 py-2.5 text-sm font-medium transition-colors",
+                                "flex shrink-0 items-center gap-2.5 rounded-[10px] px-3 py-2.5 text-sm font-medium transition-colors max-md:min-h-11 pointer-coarse:min-h-11",
                                 isActive ? "bg-[#1A1C26] text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                             )
                         }

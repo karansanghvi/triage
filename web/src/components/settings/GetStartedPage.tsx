@@ -146,7 +146,7 @@ function ChecklistItem({ step, done, title, body, to, cta }: ChecklistItemProps)
                 {!done && (
                     <Link
                         to={to}
-                        className="group inline-flex h-9 w-[136px] shrink-0 items-center justify-center gap-1.5 rounded-[10px] bg-[#2563EB] px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
+                        className="group inline-flex h-9 w-[136px] shrink-0 items-center justify-center max-md:min-h-11 pointer-coarse:min-h-11 gap-1.5 rounded-[10px] bg-[#2563EB] px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
                     >
                         {cta}
                         <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />

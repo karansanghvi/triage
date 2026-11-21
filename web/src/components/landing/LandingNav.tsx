@@ -46,7 +46,7 @@ export default function LandingNav() {
         )}
       >
         <div className="mx-auto flex h-full max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-          <Link to="/" className="flex shrink-0 items-center gap-2.5">
+          <Link to="/" className="flex shrink-0 items-center gap-2.5 max-md:min-h-11 pointer-coarse:min-h-11">
             <span className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-[#2563EB]">
               <Split className="h-5 w-5 text-white" />
             </span>
@@ -55,7 +55,7 @@ export default function LandingNav() {
 
           <nav aria-label="Main" className="hidden items-center gap-7 text-sm md:flex">
             {links.map((link) => (
-              <a key={link.href} href={link.href} className="text-[#A7ACBA] transition-colors hover:text-foreground">
+              <a key={link.href} href={link.href} className="text-[#A7ACBA] transition-colors hover:text-foreground pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center">
                 {link.label}
               </a>
             ))}
@@ -70,13 +70,13 @@ export default function LandingNav() {
             <div className="flex shrink-0 items-center gap-2 sm:gap-2.5">
               <Link
                 to="/login"
-                className="inline-flex min-h-10 items-center rounded-[10px] px-3 text-sm font-medium transition-colors hover:bg-white/5 sm:px-4"
+                className="inline-flex min-h-10 items-center rounded-[10px] px-3 text-sm font-medium transition-colors hover:bg-white/5 sm:px-4 max-md:min-h-11 pointer-coarse:min-h-11"
               >
                 Log in
               </Link>
               <Link
                 to="/signup"
-                className="inline-flex min-h-10 items-center whitespace-nowrap rounded-[10px] bg-[#2563EB] px-4 text-sm font-medium text-white transition-colors hover:bg-[#1D4ED8] sm:px-[18px]"
+                className="inline-flex min-h-10 items-center whitespace-nowrap rounded-[10px] bg-[#2563EB] px-4 text-sm font-medium text-white transition-colors hover:bg-[#1D4ED8] sm:px-[18px] max-md:min-h-11 pointer-coarse:min-h-11"
               >
                 Get started
               </Link>

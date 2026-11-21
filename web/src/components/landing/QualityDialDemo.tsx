@@ -71,7 +71,7 @@ export default function QualityDialDemo() {
             step={1}
             value={bar}
             onChange={(e) => setBar(Number(e.target.value))}
-            className="mt-6 h-7 w-full cursor-pointer accent-[#3B82F6]"
+            className="mt-6 h-7 w-full cursor-pointer accent-[#3B82F6] max-md:h-11 pointer-coarse:h-11"
           />
           <div className="flex justify-between text-xs text-[#8B90A0]">
             <span>Save money</span>

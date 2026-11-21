@@ -1,5 +1,6 @@
 import { Outlet } from "react-router-dom"
 import Sidebar from "./Sidebar"
+import MobileNav from "./MobileNav"
 import NamePrompt from "@/components/NamePrompt"
 import { DemoStatusProvider } from "@/context/DemoStatusContext"
 import { ChatsProvider } from "@/context/ChatsContext"
@@ -10,9 +11,11 @@ export default function AppLayout() {
     <DemoStatusProvider>
       <ProviderKeysProvider>
         <ChatsProvider>
-          <div className="flex h-screen bg-background text-foreground">
+          {/* Below md: top bar + drawer (MobileNav). md and up: the fixed sidebar, as before */}
+          <div className="flex h-dvh flex-col bg-background text-foreground md:flex-row">
+            <MobileNav />
             <Sidebar />
-            <main className="flex-1 overflow-y-auto p-6">
+            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:p-6">
               <Outlet />
             </main>
             <NamePrompt />

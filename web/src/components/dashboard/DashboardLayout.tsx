@@ -43,7 +43,7 @@ export default function DashboardLayout() {
                 to={{ pathname: to, search }}
                 className={({ isActive }) =>
                   cn(
-                    "shrink-0 rounded-[10px] border px-4 py-2 text-sm font-medium transition-colors",
+                    "shrink-0 rounded-[10px] border px-4 py-2 text-sm font-medium transition-colors max-md:min-h-11 pointer-coarse:min-h-11",
                     isActive
                       ? "border-[#2A2D3D] bg-[#1A1C26] text-foreground"
                       : "border-transparent text-muted-foreground hover:text-foreground"

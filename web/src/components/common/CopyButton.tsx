@@ -35,7 +35,7 @@ export default function CopyButton({ text, label, ariaLabel, variant = "subtle",
         className={cn(
             "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-[10px] text-[13px] font-medium transition-colors",
             variant === "primary" && "h-11 bg-[#2563EB] px-4 text-white hover:bg-[#1D4ED8]",
-            variant === "subtle" && "h-8 px-2.5 text-[#8B90A0] hover:text-foreground",
+            variant === "subtle" && "h-8 px-2.5 text-[#8B90A0] hover:text-foreground max-md:min-h-11 pointer-coarse:min-h-11",
             variant === "icon" && "h-11 w-11 border border-[#1F2130] text-[#8B90A0] hover:bg-accent hover:text-foreground",
             className
         )}

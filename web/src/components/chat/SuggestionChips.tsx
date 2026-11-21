@@ -40,7 +40,7 @@ export default function SuggestionChips({ onPick }: SuggestionChipsProps) {
         <button
           key={label}
           onClick={() => onPick(prompt)}
-          className="flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent hover:text-foreground"
+          className="flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm text-muted-foreground max-md:min-h-11 pointer-coarse:min-h-11 transition-colors hover:border-primary/40 hover:bg-accent hover:text-foreground"
         >
           <Icon className={`h-4 w-4 ${iconColor}`} />
           {label}

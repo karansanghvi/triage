@@ -102,7 +102,7 @@ function OnThisPage({ headings, active }: { headings: Heading[]; active: string 
                 href={`#${h.id}`}
                 aria-current={current ? "location" : undefined}
                 className={cn(
-                  "-ml-px block border-l-2 py-1.5 pl-4 text-[13px] leading-snug transition-colors",
+                  "-ml-px block border-l-2 py-1.5 pl-4 text-[13px] leading-snug transition-colors max-md:flex max-md:min-h-11 max-md:items-center pointer-coarse:flex pointer-coarse:min-h-11 pointer-coarse:items-center",
                   focusRing,
                   current
                     ? "border-[#60A5FA] font-medium text-[#F5F7FA]"

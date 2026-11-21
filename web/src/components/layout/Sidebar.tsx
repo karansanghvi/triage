@@ -19,15 +19,26 @@ const navItems: NavItem[] = [
   { to: "/settings", label: "Settings", icon: Settings },
 ]
 
+// md and up: the fixed sidebar. Below md it's hidden; the same content opens as a drawer (MobileNav)
 export default function Sidebar() {
+  return (
+    <aside className="hidden h-full w-64 shrink-0 flex-col overflow-hidden border-r border-border bg-card p-4 md:flex">
+      <SidebarContent />
+    </aside>
+  )
+}
+
+// Logo, navigation, Recent chats (on chat pages) and the demo / keys card with the account row.
+// In the drawer every control is at least 44px tall (max-md:), and the top clears a phone's notch.
+export function SidebarContent() {
   const { pathname } = useLocation()
   const onChatPage = pathname.startsWith("/chat")
   const { user, loading } = useAuth()
 
   return (
-    <aside className="flex h-full w-64 flex-col overflow-hidden border-r border-border bg-card p-4">
+    <>
       {/* Logo */}
-      <Link to="/" className="mb-8 flex items-center gap-3 px-2">
+      <Link to="/" className="mb-8 flex items-center gap-3 px-2 max-md:min-h-11 pointer-coarse:min-h-11">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
           <Split className="h-5 w-5 text-primary-foreground" />
         </div>
@@ -42,7 +53,7 @@ export default function Sidebar() {
             to={to}
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors max-md:min-h-11 pointer-coarse:min-h-11",
                 isActive
                   ? "bg-primary/15 text-primary"
                   : "text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -61,7 +72,7 @@ export default function Sidebar() {
       <div className="flex flex-col gap-3 pt-4">
         {loading ? null : user ? <AccountBottom /> : <GuestBottom />}
       </div>
-    </aside>
+    </>
   )
 }
 
@@ -120,7 +131,7 @@ function AccountRow() {
 
   return (
     <div className="flex items-center gap-2 rounded-lg px-1 py-1">
-      <Link to="/settings/account" className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1 transition-colors hover:bg-accent">
+      <Link to="/settings/account" className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1 transition-colors hover:bg-accent max-md:min-h-11 pointer-coarse:min-h-11">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-primary">
           {name ? name[0].toUpperCase() : "?"}
         </div>
@@ -133,7 +144,7 @@ function AccountRow() {
         onClick={handleLogout}
         title="Log out"
         aria-label="Log out"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground max-md:h-11 pointer-coarse:h-11 max-md:w-11 pointer-coarse:w-11"
       >
         <LogOut className="h-4 w-4" />
       </button>
@@ -150,13 +161,13 @@ function GuestBottom() {
       <div className="flex gap-2">
         <Link
           to="/login"
-          className="flex h-9 flex-1 items-center justify-center rounded-lg border border-border text-sm font-medium transition-colors hover:bg-accent"
+          className="flex h-9 flex-1 items-center justify-center rounded-lg border border-border text-sm font-medium transition-colors hover:bg-accent max-md:h-11 pointer-coarse:h-11"
         >
           Log in
         </Link>
         <Link
           to="/signup"
-          className="flex h-9 flex-1 items-center justify-center rounded-lg bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          className="flex h-9 flex-1 items-center justify-center rounded-lg bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 max-md:h-11 pointer-coarse:h-11"
         >
           Sign up
         </Link>
@@ -220,7 +231,7 @@ function DemoCard({ forAccount = false, allRejected = false }: DemoCardProps) {
 
       <Link
         to={forAccount ? "/settings/provider-keys" : "/signup"}
-        className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-primary/15 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/25"
+        className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-primary/15 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/25 max-md:min-h-11 pointer-coarse:min-h-11"
       >
         <KeyRound className="h-4 w-4" />
         {forAccount ? "Add your keys" : "Use your own keys"}

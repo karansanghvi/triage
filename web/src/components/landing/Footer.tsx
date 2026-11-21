@@ -14,7 +14,7 @@ export default function Footer() {
           </span>
           <span>Triage · Built by Karan Sanghvi</span>
         </div>
-        <nav aria-label="Footer" className="flex flex-wrap gap-6">
+        <nav aria-label="Footer" className="flex flex-wrap gap-x-6 gap-y-1 [&>a]:inline-flex [&>a]:items-center max-md:[&>a]:min-h-11 pointer-coarse:[&>a]:min-h-11">
           <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="text-[#A7ACBA] hover:text-foreground">
             GitHub
           </a>

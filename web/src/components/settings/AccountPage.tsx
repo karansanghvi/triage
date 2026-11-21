@@ -238,7 +238,7 @@ function DataCard() {
           type="button"
           onClick={() => setConfirming(true)}
           disabled={count === 0}
-          className="h-10 rounded-[10px] border border-[#2A2D3D] bg-[#1A1C26] px-3.5 text-[13px] font-medium transition-colors hover:border-[#3B4058] disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-10 rounded-[10px] border border-[#2A2D3D] bg-[#1A1C26] px-3.5 text-[13px] font-medium max-md:min-h-11 pointer-coarse:min-h-11 transition-colors hover:border-[#3B4058] disabled:cursor-not-allowed disabled:opacity-50"
         >
           Clear all chats
         </button>
@@ -303,7 +303,7 @@ function DeleteAccountCard() {
         <button
           type="button"
           onClick={openDialog}
-          className="h-10 rounded-[10px] border border-[#F87171]/40 px-4 text-[13px] font-semibold text-[#FCA5A5] transition-colors hover:border-[#F87171]/70 hover:bg-[#EF4444]/10"
+          className="h-10 rounded-[10px] border border-[#F87171]/40 px-4 text-[13px] font-semibold max-md:min-h-11 pointer-coarse:min-h-11 text-[#FCA5A5] transition-colors hover:border-[#F87171]/70 hover:bg-[#EF4444]/10"
         >
           Delete account
         </button>
