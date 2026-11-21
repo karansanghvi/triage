@@ -36,7 +36,7 @@ import time
 import traceback
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 import anyio
@@ -346,6 +346,21 @@ def _chunk(request_id: str, created: int, model: str, delta: dict, finish=None, 
     return f"data: {json.dumps(body, ensure_ascii=False)}\n\n"
 
 
+def keyless_lookup_minutes_from_env(environ=os.environ) -> float:
+    """TRIAGE_KEYLESS_LOOKUP_MINUTES: how long a keyless request's cost can be read back without a key (default 10).
+    A number above 0; anything else refuses to start."""
+    raw = (environ.get(KEYLESS_LOOKUP_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_KEYLESS_LOOKUP_MINUTES
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0
+    if not value > 0:
+        raise RuntimeError(f"refusing to start: {KEYLESS_LOOKUP_ENV} must be a number of minutes above 0")
+    return value
+
+
 def _not_allowed_message(error: ModelNotAllowed) -> str:
     header = PROVIDER_KEY_HEADERS.get(error.provider)
     if header is None:                 # e.g. the local Ollama with a BYOK request: only the user's providers
@@ -541,7 +556,10 @@ def request_mode(who: Optional[Caller], keys) -> str:
 # key_id in the request log for requests without a Triage key (no visitor identity goes into the log)
 PUBLIC_KEY_IDS = {"demo": "demo", "byok": "public"}
 # What GET /v1/requests/{id} returns without a key, for a request made without one: its outcome and cost, nothing
-# about the prompt, the routing probabilities or the attempts
+# about the prompt, the routing probabilities or the attempts. Only while the request is recent: the web chat asks
+# within seconds of a Stop; after that window, the id is treated like an unknown one.
+KEYLESS_LOOKUP_ENV = "TRIAGE_KEYLESS_LOOKUP_MINUTES"
+DEFAULT_KEYLESS_LOOKUP_MINUTES = 10
 REQUEST_COST_FIELDS = ("request_id", "status", "error_kind", "stream", "served_model", "tier", "cache_hit",
                        "tokens_estimated", "input_tokens", "output_tokens", "price_as_cost", "strong_cost", "saved")
 _KEY_HEADER_LIST = ", ".join(PROVIDER_KEY_HEADERS.values())
@@ -626,6 +644,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app.state.accounts = accounts_from_env() if accounts is None else accounts
     app.state.public_stats = public_stats.PublicStatsCache()
     app.state.public_stats_threshold = public_stats.threshold_from_env()   # refuses a bad value
+    app.state.keyless_lookup_minutes = keyless_lookup_minutes_from_env()   # refuses a bad value
     origins = cors_origins_from_env() if cors_origins is None else list(cors_origins)
     app.add_middleware(InternalErrorMiddleware)       # first, so it sits inside CORSMiddleware
     if origins:
@@ -985,7 +1004,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                         await routed.pieces.aclose()
                         _estimate_stopped_cost(row, decision, routed, "".join(streamed), messages, deps,
                                                baseline_providers, prefer, started)
-                    await finish("error", 499, "client_disconnected")    # no-op if the row was already written
+                    # Not a failure: its own outcome, counted apart from errors in every stat
+                    await finish("stopped", 499, "client_disconnected")    # no-op if the row was already written
 
         async def stream_events():
             yield _chunk(request_id, created, decision.model, {"role": "assistant", "content": ""},
@@ -1095,11 +1115,14 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     @app.get("/v1/requests/{request_id}")
     async def get_request(request_id: str, authorization: Optional[str] = Header(None)):
         """A logged request, for the key (or account) that made it. Public access on, and no key sent: only a
-        request made without a key (the demo or public BYOK), and only its outcome and cost (REQUEST_COST_FIELDS),
-        so the web chat can show what a stopped answer cost. Request ids are random UUIDs: unguessable."""
+        request made without a key (the demo or public BYOK), only while it's recent (TRIAGE_KEYLESS_LOOKUP_MINUTES,
+        default 10), and only its outcome and cost (REQUEST_COST_FIELDS), so the web chat can show what a stopped
+        answer cost. Request ids are random UUIDs: unguessable."""
         if authorization is None and app.state.public:
             row = await anyio.to_thread.run_sync(lambda: app.state.deps.log.get(request_id, include_vectors=False))
-            if row is None or row.user_id is not None or row.key_id not in PUBLIC_KEY_IDS.values():
+            oldest = (datetime.now(timezone.utc) - timedelta(minutes=app.state.keyless_lookup_minutes)).isoformat()
+            if (row is None or row.user_id is not None or row.key_id not in PUBLIC_KEY_IDS.values()
+                    or row.timestamp < oldest):                # too old: the same 404 as an unknown id
                 raise APIError(404, f"No request {request_id!r} without a key.", param="request_id", code="not_found")
             return {name: getattr(row, name) for name in REQUEST_COST_FIELDS}
         who = await caller(authorization)

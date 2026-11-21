@@ -27,7 +27,7 @@ THRESHOLD = 100
 THRESHOLD_ENV = "TRIAGE_PUBLIC_STATS_MIN_REQUESTS"
 LATENCY_MIN_REQUESTS = 20
 TTL_SECONDS = 300
-TOTAL_FIELDS = ("requests", "ok", "errors", "priced_requests", "cost_usd", "strong_model_cost_usd", "saved_usd",
+TOTAL_FIELDS = ("requests", "ok", "errors", "stopped", "priced_requests", "cost_usd", "strong_model_cost_usd", "saved_usd",
                 "saved_share", "cache_hits", "fallbacks", "fallback_rate")
 
 

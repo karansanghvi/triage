@@ -144,7 +144,7 @@ guessed. The stream itself carries the same `triage` object as a non-streaming r
 first chunk, complete (with `cost`, `strong_cost` and `saved`) on its `finish_reason` chunk. Both chunks keep
 `choices[0]`, and the openai SDKs expose it as `chunk.triage`. If the client disconnects part-way (a Stop button),
 Triage closes the model's stream so it stops generating, and logs an estimated cost for what it produced
-(`tokens_estimated: true`, error kind `client_disconnected`). The figures are also in
+(`tokens_estimated: true`, status `stopped`). Stopped requests count in spend and savings, but not as errors. The figures are also in
 `GET /v1/requests/<request id>` once the stream ends. `Saved` assumes the
 strong model would have used the same number of tokens, so it's an estimate. It's only sent for `model: "auto"`:
 when you name a model, the choice was yours, so Triage claims no saving for it (here or in any stats).
@@ -152,7 +152,7 @@ when you name a model, the choice was yours, so Triage claims no saving for it (
 **Other endpoints:** `GET /v1/models` (with prices), `GET /v1/stats` (savings for your key),
 `GET /v1/stats/public` (no key: live totals across everyone's routed requests, once a range has 100 of them),
 `GET /v1/requests/{id}` (one of your own requests; with public access on, a request made without a key can be
-read without one, by its id, but only its outcome and cost), and for admin keys `GET`/`PUT /v1/routing-config`, which
+read without one, by its id, for 10 minutes (`TRIAGE_KEYLESS_LOOKUP_MINUTES`), but only its outcome and cost), and for admin keys `GET`/`PUT /v1/routing-config`, which
 changes the quality presets and backup models without a restart. Those changes are kept in memory only. The
 first model of each tier can't be changed, because the classifier predicts for that exact model.
 
@@ -480,6 +480,7 @@ there on purpose: the server refuses to start rather than run with a guessable v
 | `TRIAGE_FAKE_DB` | no | `data/fake.sqlite3` | Fake mode's own database (it never uses `DATABASE_URL`) |
 | `TRIAGE_CACHE`, `TRIAGE_CACHE_PATH` | no | `on`, `data/cache/responses.sqlite3` | The response cache (local to each instance) |
 | `TRIAGE_LOG` | no | `sql` | `memory`: keep the request log in memory |
+| `TRIAGE_KEYLESS_LOOKUP_MINUTES` | no | `10` | How long a keyless (demo or public BYOK) request's outcome and cost can be read by id without a key |
 | `TRIAGE_PUBLIC_STATS_MIN_REQUESTS` | no | `100` | Routed requests a range needs before `GET /v1/stats/public` shows figures. Keep 100 in production; lower it locally (e.g. `1`) to see the full Overview tab |
 | `TRIAGE_TEST_DATABASE_URL` | tests only | none | A throwaway Postgres for `pytest -m postgres` |
 | `HF_HUB_OFFLINE` | no | `1` (set by the server) | The embedding model must already be in the local Hugging Face cache |

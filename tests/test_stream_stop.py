@@ -65,7 +65,7 @@ def test_a_stop_closes_the_providers_stream_and_logs_an_estimated_cost():
     received = asyncio.run(stream_then_disconnect(app, after=4))
     assert deps.fake_models.stopped == ["groq-small"]               # the model was told to stop
     row = deps.log.get(request_id_of(received))
-    assert (row.status, row.http_status, row.error_kind) == ("error", 499, "client_disconnected")
+    assert (row.status, row.http_status, row.error_kind) == ("stopped", 499, "client_disconnected")
     assert row.tokens_estimated is True and 0 < row.output_tokens < len(LONG) // 4
     assert row.price_as_cost > 0 and row.strong_cost > row.price_as_cost and row.saved > 0
     assert row.training_eligible is False
@@ -100,7 +100,7 @@ def test_a_demo_stop_can_be_read_back_without_a_key():
     request_id = request_id_of(received)
     with TestClient(app) as http:
         body = http.get(f"/v1/requests/{request_id}").json()
-    assert body["status"] == "error" and body["error_kind"] == "client_disconnected"
+    assert body["status"] == "stopped" and body["error_kind"] == "client_disconnected"
     assert body["tokens_estimated"] is True and body["price_as_cost"] > 0 and body["saved"] > 0
     assert "attempts" not in body and "p_low" not in body and "key_id" not in body     # cost and outcome only
 
@@ -153,3 +153,77 @@ def test_a_gemini_stream_is_closed_when_stopped_early():
     assert next(events) == "w0 "
     events.close()
     assert http_stream.closed is True
+
+
+# ---------- a stopped request isn't a failure in any stat ----------
+
+def test_stopped_requests_count_in_money_but_not_as_errors():
+    from sqlalchemy import true
+    from app.api import usage_sql
+    from app.api.request_log import InMemoryRequestLog
+    from app.api.stats import summarize
+    log = InMemoryRequestLog()
+    base = dict(timestamp="2026-11-19T12:00:00+00:00", key_id="k", requested_model="auto", stream=True,
+                routed_by="classifier", tier="medium", served_model="groq-small")
+    log.write(RequestRow(request_id="ok", status="ok", price_as_cost=1.0, strong_cost=3.0, **base))
+    log.write(RequestRow(request_id="stop", status="stopped", error_kind="client_disconnected", http_status=499,
+                         price_as_cost=0.5, strong_cost=1.5, tokens_estimated=True, **base))
+    log.write(RequestRow(request_id="fail", status="error", error_kind="provider_timeout", **base))
+    t = log.run(lambda connection: usage_sql.totals(connection, true()))
+    assert (t["requests"], t["ok"], t["errors"], t["stopped"]) == (3, 1, 1, 1)
+    assert t["cost_usd"] == 1.5 and t["saved_usd"] == 3.0                        # the stop's estimate included
+    assert log.run(lambda connection: usage_sql.errors_by_kind(connection, true())) == {"provider_timeout": 1}
+    stats = log.run(lambda connection: summarize(connection, true()))
+    assert stats["errors"] == 1 and stats["stopped"] == 1
+
+
+def test_public_and_account_stats_report_stopped_requests(monkeypatch):
+    from datetime import datetime, timezone
+    from app.api import public_stats
+    from app.api.request_log import InMemoryRequestLog
+    from app.registry import load_registry
+    log = InMemoryRequestLog()
+    now = datetime.now(timezone.utc)
+    for i, status in enumerate(["ok", "ok", "stopped", "error"]):
+        log.write(RequestRow(request_id=f"r{i}", timestamp=now.isoformat(), key_id="k", requested_model="auto",
+                             stream=True, status=status, routed_by="classifier", tier="medium", served_model="groq-small",
+                             error_kind={"stopped": "client_disconnected", "error": "provider_timeout"}.get(status),
+                             price_as_cost=1.0 if status != "error" else None, strong_cost=3.0 if status != "error" else None))
+    body = public_stats.compute(log, load_registry(), "7d", now, threshold=1)
+    assert (body["totals"]["errors"], body["totals"]["stopped"]) == (1, 1)
+    assert body["errors_by_kind"] == {"provider_timeout": 1} and body["totals"]["cost_usd"] == 3.0
+
+
+# ---------- reading a keyless request back is time-limited ----------
+
+def keyless_row(log, request_id, minutes_ago):
+    from datetime import datetime, timedelta, timezone
+    log.write(RequestRow(request_id=request_id, key_id="demo", requested_model="auto", stream=True, status="stopped",
+                         timestamp=(datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat(),
+                         price_as_cost=0.001, strong_cost=0.003, saved=0.002))
+
+
+def test_a_keyless_request_can_be_read_back_only_while_recent():
+    app, deps = make(public=True)
+    keyless_row(deps.log, "fresh", 1)
+    keyless_row(deps.log, "old", 11)
+    with TestClient(app) as http:
+        assert http.get("/v1/requests/fresh").status_code == 200
+        old, unknown = http.get("/v1/requests/old"), http.get("/v1/requests/never-was")
+        assert old.status_code == unknown.status_code == 404                      # too old looks like unknown
+        assert old.json()["error"]["code"] == unknown.json()["error"]["code"] == "not_found"
+
+
+def test_the_keyless_window_is_configurable(monkeypatch):
+    import pytest
+    from app.api.main import KEYLESS_LOOKUP_ENV, keyless_lookup_minutes_from_env
+    monkeypatch.setenv(KEYLESS_LOOKUP_ENV, "2")
+    app, deps = make(public=True)
+    keyless_row(deps.log, "three", 3)
+    keyless_row(deps.log, "one", 1)
+    with TestClient(app) as http:
+        assert http.get("/v1/requests/three").status_code == 404 and http.get("/v1/requests/one").status_code == 200
+    assert keyless_lookup_minutes_from_env({}) == 10 and keyless_lookup_minutes_from_env({KEYLESS_LOOKUP_ENV: "0.5"}) == 0.5
+    for bad in ("0", "-1", "soon"):
+        with pytest.raises(RuntimeError, match=KEYLESS_LOOKUP_ENV):
+            keyless_lookup_minutes_from_env({KEYLESS_LOOKUP_ENV: bad})
