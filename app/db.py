@@ -4,6 +4,11 @@
                       (default: sqlite:///data/triage.sqlite3)
     TRIAGE_FAKE_DB    fake-model mode's own SQLite file (default data/fake.sqlite3). Fake mode never uses
                       DATABASE_URL, so fake answers can't reach the real log, even when .env sets it.
+    DATABASE_URL_UNPOOLED   optional: a direct (not pooled) Postgres URL, used only by `alembic upgrade head`.
+                      Neon recommends running schema changes on a direct connection; DATABASE_URL is used if unset.
+    TRIAGE_DB_PREPARED_STATEMENTS   auto (default) / on / off. Off is needed behind a transaction-mode connection
+                      pooler (PgBouncer, Neon's "-pooler" host), which can hand each transaction a different server
+                      connection, where psycopg's prepared statements don't exist. "auto": off for a "-pooler" host.
 
 The schema is owned by Alembic (migrations/). A SQLite database is upgraded to the latest revision when it is
 opened (local files and tests need no extra step); any other database must already be at the latest revision
@@ -26,6 +31,7 @@ from sqlalchemy.pool import StaticPool
 from app.registry import PROJECT_ROOT
 
 DB_URL_ENV, FAKE_DB_ENV = "DATABASE_URL", "TRIAGE_FAKE_DB"
+UNPOOLED_URL_ENV, PREPARED_ENV = "DATABASE_URL_UNPOOLED", "TRIAGE_DB_PREPARED_STATEMENTS"
 DEFAULT_DB = PROJECT_ROOT / "data" / "triage.sqlite3"
 FAKE_DB = PROJECT_ROOT / "data" / "fake.sqlite3"
 MIGRATIONS_DIR = PROJECT_ROOT / "migrations"
@@ -180,6 +186,35 @@ def database_url(fake: bool = False) -> str:
     return url
 
 
+def migration_url() -> str:
+    """The URL `alembic upgrade head` uses: DATABASE_URL_UNPOOLED if set (Neon's direct connection), else the
+    normal one. Same checks as database_url (never the fake-mode file)."""
+    return os.environ.get(UNPOOLED_URL_ENV) or database_url()
+
+
+def is_pooler_host(host: Optional[str]) -> bool:
+    """Neon's pooled endpoints are named <endpoint>-pooler.<region>...; anything else is a direct connection"""
+    return bool(host) and "-pooler." in host.lower()
+
+
+def prepared_statements_off(url: str) -> bool:
+    """True when psycopg must not prepare statements for this URL (see TRIAGE_DB_PREPARED_STATEMENTS above)"""
+    parsed = make_url(url)
+    if not parsed.get_backend_name().startswith("postgresql"):
+        return False
+    setting = (os.environ.get(PREPARED_ENV) or "auto").strip().lower()
+    if setting not in {"auto", "on", "off"}:
+        raise RuntimeError(f"{PREPARED_ENV} must be auto, on or off, got {setting!r}")
+    if setting != "auto":
+        return setting == "off"
+    return is_pooler_host(parsed.host)
+
+
+def postgres_connect_args(url: str) -> dict:
+    """psycopg connection arguments: prepare_threshold=None turns prepared statements off entirely"""
+    return {"prepare_threshold": None} if prepared_statements_off(url) else {}
+
+
 def sqlite_url(path: Union[str, Path]) -> str:
     return f"sqlite:///{Path(path)}"
 
@@ -206,7 +241,8 @@ def open_engine(url: str) -> Engine:
                                **({"poolclass": StaticPool} if memory else {}))
         event.listen(engine, "connect", _sqlite_pragmas)
     else:
-        engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5, pool_recycle=300)
+        engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5, pool_recycle=300,
+                               connect_args=postgres_connect_args(url))
     try:
         migrate_or_check(engine)
     except Exception:
