@@ -1,35 +1,30 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { ChartNoAxesColumn } from "lucide-react"
 import { useRange } from "@/hooks/useRange"
-import { getPublicStats, type PublicStats, type TierMix } from "@/lib/dashboard"
+import { getPublicStats, type PublicStats } from "@/lib/dashboard"
+import { errorRows } from "@/lib/errorKinds"
 import { formatCount, formatMs, formatPercent, formatUsd } from "@/lib/format"
 import DashCard from "@/components/dashboard/DashCard"
 import StatCard from "@/components/dashboard/StatCard"
 import TierMixBar from "@/components/dashboard/TierMixBar"
 import CostOverTimeChart from "@/components/dashboard/CostOverTimeChart"
 import { TierPill } from "@/components/dashboard/Pills"
+import {
+  Bone,
+  CardBones,
+  CenterCard,
+  ErrorCard,
+  Loading,
+  PRIMARY_BUTTON,
+  SMALL_BOX,
+  StatCardBones,
+  fullMix,
+} from "@/components/dashboard/states"
 
 type Live = Extract<PublicStats, { enough: true }>
 type Waiting = Extract<PublicStats, { enough: false }>
 type Result = { key: string; data?: PublicStats; failed?: boolean }
-
-const BOX = "rounded-xl border border-[#1F2130] bg-[#0A0A0F] px-3.5 py-3"
-const PRIMARY =
-  "inline-flex h-10 items-center gap-1.5 rounded-[10px] bg-[#2563EB] px-4 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
-
-// Every error code the API can log, in words; anything else is summed as "Other"
-const ERROR_LABELS: Record<string, string> = {
-  provider_timeout: "Too slow (timeout)",
-  timeout: "Too slow (timeout)",
-  provider_overloaded: "Provider busy",
-  overloaded: "Provider busy",
-  provider_unavailable: "Busy or too slow",
-  all_models_failed: "No model could answer",
-  rate_limit: "Rate limited",
-  account_rate_limited: "Rate limited",
-  invalid_provider_key: "Key rejected",
-}
 
 export default function OverviewPage() {
   const [range] = useRange()
@@ -50,42 +45,18 @@ export default function OverviewPage() {
   }, [range, key])
 
   if (!result || result.key !== key) return <LoadingView />
-  if (result.failed || !result.data) return <ErrorView onRetry={() => setAttempt((a) => a + 1)} />
+  if (result.failed || !result.data)
+    return <ErrorCard message="Couldn't load live stats." onRetry={() => setAttempt((a) => a + 1)} />
   if (!result.data.enough) return <WaitingView stats={result.data} />
   return <LiveView stats={result.data} />
 }
 
 /* ---------- Loading, error, not enough traffic ---------- */
 
-function Bone({ className }: { className: string }) {
-  return <div aria-hidden="true" className={`animate-pulse rounded-md bg-[#1A1C26] ${className}`} />
-}
-
-function CardBones({ className = "", children }: { className?: string; children: ReactNode }) {
-  return (
-    <div className={`min-w-0 rounded-[18px] border border-[#1F2130] bg-[#12131A] px-6 py-[22px] ${className}`}>
-      <Bone className="h-6 w-40" />
-      <Bone className="mt-1 h-5 w-full max-w-[420px]" />
-      {children}
-    </div>
-  )
-}
-
 function LoadingView() {
   return (
-    <div className="flex flex-col gap-5" aria-busy="true">
-      <p className="sr-only" role="status">
-        Loading live stats…
-      </p>
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="min-w-0 rounded-[18px] border border-[#1F2130] bg-[#12131A] p-5">
-            <Bone className="h-5 w-28" />
-            <Bone className="mt-2.5 h-9 w-24" />
-            <Bone className="mt-1.5 h-4 w-36" />
-          </div>
-        ))}
-      </div>
+    <Loading label="Loading live stats…">
+      <StatCardBones />
       <CardBones>
         <Bone className="mt-3.5 h-5 w-48" />
         <Bone className="mt-2 h-64 w-full" />
@@ -105,22 +76,7 @@ function LoadingView() {
       <CardBones>
         <Bone className="mt-4 h-40 w-full" />
       </CardBones>
-    </div>
-  )
-}
-
-function ErrorView({ onRetry }: { onRetry: () => void }) {
-  return (
-    <section
-      role="alert"
-      className="flex flex-col items-center rounded-[18px] border border-[#1F2130] bg-[#12131A] px-6 py-12 text-center"
-    >
-      <p className="text-base font-semibold">Couldn't load live stats.</p>
-      <p className="mt-1.5 text-[13px] text-muted-foreground">Check your connection, then try again.</p>
-      <button type="button" onClick={onRetry} className={`${PRIMARY} mt-5`}>
-        Try again
-      </button>
-    </section>
+    </Loading>
   )
 }
 
@@ -129,62 +85,35 @@ function WaitingView({ stats }: { stats: Waiting }) {
   const share = stats.threshold > 0 ? Math.min(1, stats.qualifying_requests / stats.threshold) : 0
 
   return (
-    <section className="relative overflow-hidden rounded-[18px] border border-[#1F2130] bg-[#12131A] px-6 py-12 sm:px-8">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -top-40 left-1/2 h-[360px] w-[560px] max-w-full -translate-x-1/2 rounded-full"
-        style={{ background: "radial-gradient(closest-side, rgba(37,99,235,0.16), rgba(18,19,26,0))" }}
-      />
-      <div className="relative mx-auto flex max-w-[460px] flex-col items-center text-center">
-        <span className="flex h-12 w-12 items-center justify-center rounded-[14px] border border-[#1F2130] bg-[#0A0A0F] text-[#60A5FA]">
-          <ChartNoAxesColumn aria-hidden="true" className="h-6 w-6" />
-        </span>
-        <h2 className="mt-5 text-xl font-semibold tracking-[-0.01em]">Live stats appear once Triage has enough traffic</h2>
-        <p className="mt-2 text-sm leading-relaxed text-[#A7ACBA]">
-          To keep the numbers meaningful and nobody's usage identifiable, nothing is shown until {stats.threshold}{" "}
-          requests have been routed in this time range.
-        </p>
-        <div className="mt-6 w-full">
-          <div
-            role="progressbar"
-            aria-label="Routed requests so far"
-            aria-valuemin={0}
-            aria-valuemax={stats.threshold}
-            aria-valuenow={Math.min(stats.qualifying_requests, stats.threshold)}
-            className="h-2 overflow-hidden rounded-full bg-[#1A1C26]"
-          >
-            <div className="h-full rounded-full bg-[#3B82F6]" style={{ width: `${share * 100}%` }} />
-          </div>
-          <p className="mt-2.5 text-[13px] text-muted-foreground">
-            <strong className="text-foreground">{formatCount(stats.qualifying_requests)}</strong> of{" "}
-            {formatCount(stats.threshold)} routed requests
-          </p>
+    <CenterCard icon={<ChartNoAxesColumn aria-hidden="true" />} title="Live stats appear once Triage has enough traffic">
+      <p className="mt-2 text-sm leading-relaxed text-[#A7ACBA]">
+        To keep the numbers meaningful and nobody's usage identifiable, nothing is shown until {stats.threshold}{" "}
+        requests have been routed in this time range.
+      </p>
+      <div className="mt-6 w-full">
+        <div
+          role="progressbar"
+          aria-label="Routed requests so far"
+          aria-valuemin={0}
+          aria-valuemax={stats.threshold}
+          aria-valuenow={Math.min(stats.qualifying_requests, stats.threshold)}
+          className="h-2 overflow-hidden rounded-full bg-[#1A1C26]"
+        >
+          <div className="h-full rounded-full bg-[#3B82F6]" style={{ width: `${share * 100}%` }} />
         </div>
-        <Link to={{ pathname: "/dashboard/benchmark", search }} className={`${PRIMARY} mt-7`}>
-          See the benchmark
-        </Link>
+        <p className="mt-2.5 text-[13px] text-muted-foreground">
+          <strong className="text-foreground">{formatCount(stats.qualifying_requests)}</strong> of{" "}
+          {formatCount(stats.threshold)} routed requests
+        </p>
       </div>
-    </section>
+      <Link to={{ pathname: "/dashboard/benchmark", search }} className={`${PRIMARY_BUTTON} mt-7`}>
+        See the benchmark
+      </Link>
+    </CenterCard>
   )
 }
 
 /* ---------- Enough traffic ---------- */
-
-function fullMix(mix: Partial<TierMix>): TierMix {
-  return { low: mix.low ?? 0, medium: mix.medium ?? 0, high: mix.high ?? 0 }
-}
-
-function errorRows(byKind: Record<string, number>): { label: string; count: number }[] {
-  const totals = new Map<string, number>()
-  for (const [kind, count] of Object.entries(byKind)) {
-    const label = ERROR_LABELS[kind] ?? "Other"
-    totals.set(label, (totals.get(label) ?? 0) + count)
-  }
-  return [...totals.entries()]
-    .map(([label, count]) => ({ label, count }))
-    .filter((r) => r.count > 0)
-    .sort((a, b) => b.count - a.count) // largest first
-}
 
 function LiveView({ stats }: { stats: Live }) {
   const t = stats.totals
@@ -214,11 +143,11 @@ function LiveView({ stats }: { stats: Live }) {
 
         <DashCard title="Reliability" description="How often a backup model answered, and how often nothing did.">
           <div className="mt-4 grid grid-cols-2 gap-2.5">
-            <div className={BOX}>
+            <div className={SMALL_BOX}>
               <p className="text-xs text-muted-foreground">Answered after a fallback</p>
               <p className="mt-1 text-lg font-semibold">{formatPercent(t.fallback_rate, 1)}</p>
             </div>
-            <div className={BOX}>
+            <div className={SMALL_BOX}>
               <p className="text-xs text-muted-foreground">Failed requests</p>
               <p className="mt-1 text-lg font-semibold">{formatPercent(share(t.errors), 1)}</p>
             </div>

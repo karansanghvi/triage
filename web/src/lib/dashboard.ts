@@ -151,8 +151,25 @@ export type PublicStats =
       small_talk_excluded: true
     } & LiveStats)
 
+export type Tier = "low" | "medium" | "high"
+
+// GET /v1/account/usage's totals: the public ones plus a few only an account sees
+export type AccountTotals = Totals & {
+  streams: number
+  credited_requests: number // requests credited with a saving (model "auto", not small talk)
+  small_talk_requests: number
+}
+
 export type ModelUsage = {
-  model: string
+  model: string | null // null: the request failed before any model answered
+  provider: string // "unknown" for a model no longer in the registry (or none)
+  tier: Tier | "unknown"
+  requests: number
+  cost_usd: number
+  saved_usd: number
+}
+
+export type ProviderUsage = {
   provider: string
   requests: number
   cost_usd: number
@@ -160,35 +177,43 @@ export type ModelUsage = {
 }
 
 export type KeyUsage = {
-  key_id: string
+  key_id: string // the key's public id ("trk_..."), or "session" for the website
   label: string // "Website chat" for the website, else the key's name
-  revoked: boolean
+  kind: "api_key" | "website_chat"
+  revoked: boolean | null // null: a key id the account no longer has
   requests: number
   cost_usd: number
   saved_usd: number
   last_used: string | null
 }
 
-export type AccountUsage = LiveStats & {
+export type AccountUsage = Omit<LiveStats, "totals"> & {
+  totals: AccountTotals
   by_model: ModelUsage[]
+  by_provider: ProviderUsage[]
   by_key: KeyUsage[]
+  savings_credited_to: string
 }
 
+// GET /v1/account/requests: routing details only (no prompt, answer or hash)
 export type RequestItem = {
   request_id: string
   timestamp: string
+  key_id: string
   requested_model: string
   served_model: string | null
-  tier: "low" | "medium" | "high" | null
-  routed_by: "classifier" | "small_talk" | "requested_model" | null
+  tier: Tier | null
+  routed_by: "classifier" | "small_talk" | "requested_model" | null // null on rows from before it was logged
   status: "ok" | "error"
+  http_status: number
   error_kind: string | null
   stream: boolean
   cache_hit: boolean | null
   fell_back: boolean | null
-  cost_usd: number | null
-  saved_usd: number | null
   latency_ms: number | null
+  ttft_ms: number | null
+  cost_usd: number | null
+  saved_usd: number | null // null: not credited (a named model, small talk) or unknown
   key_label: string
 }
 
