@@ -116,6 +116,49 @@ send each transaction to a different server connection, where psycopg's prepared
 turns them off when the host contains `-pooler` (`TRIAGE_DB_PREPARED_STATEMENTS=auto`, the default; `on` or `off`
 overrides it). Migrations run on the direct connection, as Neon recommends.
 
+### Stay inside the Free plan: let the database sleep
+
+**Budget:** the Free plan gives **100 CU-hours per project per month**, which is about 400 hours of a 0.25 CU compute.
+A month is about 730 hours, so the database **must** spend most of its time scaled to zero. If the CU-hours run out,
+Neon suspends the compute until the next billing period (or an upgrade). The API stays up (`/healthz` is 200) but
+everything that needs the database fails: the demo, sign-in, accounts and the request log. Production is its own
+Neon project, so the test project's usage doesn't count against it.
+
+**Set the production compute to a fixed 0.25 CU** (minimum 0.25, maximum 0.25): in the Neon console, edit the
+production branch's compute and set its size. Free defaults to autoscaling from 0.25 up to 2 CU, which can burn
+the budget up to 8 times as fast. Changing the size restarts the compute and drops open connections for a moment.
+
+**Scale to zero:** Neon suspends the compute after **5 minutes** with no activity, and this can't be changed on
+Free. Any query or new connection wakes it, and each wake is billed for at least those 5 minutes (about 0.02 CU-hours
+at 0.25 CU). What touches the database:
+
+| What | How often | Wakes Neon? |
+|---|---|---|
+| Real requests: demo chat, sign-in, account pages, API calls | When people use the site | Yes: that's the point |
+| `GET /readyz` | Only when you run it | Yes: never point a monitor at it |
+| Request-log retention (12 months) | At startup, then once a day | Yes: about 2.5 hours awake a month, about 0.6 CU-hours |
+| `alembic upgrade head` and the schema check | Each deploy or restart | Yes, once |
+| `GET /healthz`, Docker's healthcheck, uptime monitors | Every 30 seconds | **No**: never touches the database |
+| Response-cache purge | Hourly | **No**: a local file |
+| Open but idle pooled connections | Between requests | **No** (measured below) |
+
+Measured on 2026-11-21 on a Free-plan test project: with one idle connection held open, pooled and then direct, the
+compute still suspended after 5 minutes, and Neon dropped the held connection. The app's pool notices a dropped
+connection before using it (pre-ping) and opens a new one.
+
+**The first request after a sleep** waits for Neon to wake. Neon puts the wake at a few hundred milliseconds; in
+the same test a first connection plus query took 1.1 to 1.3 seconds, against about 0.5 seconds for an awake
+database. Postgres connections get a 10-second connect timeout and one retry after a second, so that request is
+slower rather than failed. `/readyz` gives the database only 2 seconds, so after a sleep it can occasionally
+return 503: check again.
+
+**Restores:** the Free plan's history window is **6 hours** (capped at 1 GB of changes): within it you can restore
+the branch to any moment (instant restore, also called point-in-time restore). Older than that, there is no
+backup. Leave the window at its default. The privacy policy says backups may hold deleted data for **up to 6
+hours**, which matches; if you move to a plan with a longer window, update that line too.
+
+Check usage now and then in the Neon console's usage page, especially after launch or a traffic spike.
+
 ## 4. Environment variables and secrets
 
 ### The server's `.env`
@@ -327,6 +370,8 @@ Check it after the first deploy:
 - [ ] Dashboard: Benchmark shows the test results; My usage shows the requests just made.
 - [ ] Client-IP check (section 8).
 - [ ] Neon: the tables exist (`alembic_version` at the latest revision).
+- [ ] Neon: the production compute is a fixed 0.25 CU, and after 10 minutes with no visitors the console
+      shows it suspended (idle).
 - [ ] On the VM: `free -m` and `df -h /` look healthy.
 
 ## 11. Maintenance

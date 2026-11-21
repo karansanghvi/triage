@@ -98,7 +98,7 @@ We keep your account information until you delete your account.
 - **Cached answers** are deleted after 24 hours.
 - **Request records** are deleted after 12 months.
 - **Server logs** kept by our hosting provider may include your IP address for a limited time.
-- **Backups** made by our database provider may hold deleted data for a short time before they expire.
+- **Backups** made by our database provider may hold deleted data for up to 6 hours before they expire.
 
 Information in your browser stays until you clear it in Settings → Account or in your browser.
 
