@@ -118,13 +118,25 @@ _END = object()
 
 
 async def aiter_in_thread(iterable) -> AsyncIterator:
-    """Iterate a blocking (sync) iterable from async code, one next() per worker-thread call."""
+    """Iterate a blocking (sync) iterable from async code, one next() per worker-thread call.
+
+    Stopped early (the client went away, or the caller closed this generator): the iterator is closed, so a
+    provider's stream ends and the model stops generating. No next() is running then: anyio waits for a worker
+    thread's call to return before it delivers a cancellation."""
     iterator = iter(iterable)
-    while True:
-        item = await anyio.to_thread.run_sync(next, iterator, _END)
-        if item is _END:
-            return
-        yield item
+    finished = False
+    try:
+        while True:
+            item = await anyio.to_thread.run_sync(next, iterator, _END)
+            if item is _END:
+                finished = True
+                return
+            yield item
+    finally:                               # closing an iterator that already ended or raised does nothing
+        close = getattr(iterator, "close", None)
+        if not finished and close is not None:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(close)
 
 
 async def route_and_stream(messages: list, *, tau: Optional[float], task_type: Optional[str], model: str = "auto",

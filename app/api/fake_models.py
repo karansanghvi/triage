@@ -55,6 +55,7 @@ class FakeModels:
     def __init__(self, script: Optional[dict] = None, sleep=time.sleep):
         self.script = dict(script or {})
         self.calls = []                    # one dict per call, for tests
+        self.stopped = []                  # models whose stream was closed before its end (the caller stopped)
         self.last_api_key = None
         self._sleep = sleep
         self._lock = threading.Lock()
@@ -99,12 +100,17 @@ class FakeModels:
             self._sleep(b.first_token_delay)
             if b.fail_before:
                 raise ProviderError(provider, b.fail_before, self._failure_text(b, api_key, "before the first token"))
-            for i, piece in enumerate(pieces):
-                if b.fail_after is not None and i == b.fail_after:
-                    raise ProviderError(provider, b.fail_kind, "scripted failure mid-stream (fake)")
-                if i:
-                    self._sleep(b.piece_delay)
-                yield piece
+            try:
+                for i, piece in enumerate(pieces):
+                    if b.fail_after is not None and i == b.fail_after:
+                        raise ProviderError(provider, b.fail_kind, "scripted failure mid-stream (fake)")
+                    if i:
+                        self._sleep(b.piece_delay)
+                    yield piece
+            except GeneratorExit:              # closed before the end: what a real provider stream does on stop
+                with self._lock:
+                    self.stopped.append(model_config.name)
+                raise
             yield usage
 
         return StreamingResponse(events(), model_config, messages)

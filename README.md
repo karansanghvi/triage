@@ -83,6 +83,8 @@ python -m scripts.final_check        # end-to-end test with a real outage
 - **Retries only where they can help.** A 429 or 5xx may succeed a moment later; a bad key or bad request never will.
 - **Library retries are turned off** (`max_retries=0`), so the reliability layer is the only thing deciding when to retry.
 - **Only temperature 0 is cached**, because only then is a saved answer a fair substitute. Empty or cut-off answers are never saved.
+  Streamed and plain requests share the cache: a hit on a stream arrives as one chunk, and a streamed answer is
+  saved only if it finished on its own (never one that failed or was stopped part-way).
 - **The cache wraps `send_request()`** instead of changing it, and plugs into the reliability layer through `send_fn`.
 - **Prices live in config**, so a provider price change is a two-number edit, not a code change.
 ## The OpenAI-compatible API (Phase 4)
@@ -138,13 +140,19 @@ Anything else is a 400 that names the header.
 `X-Triage-Saved` (US dollars at paid prices). The full list, including the routing probabilities, is in
 "Accounts: a guide for developers" below. On a stream, the headers go out once the first token exists,
 so model, tier and fallback are real, but cost isn't known yet. Those two headers are left out rather than
-guessed. Fetch the real figures with `GET /v1/requests/<request id>` once the stream ends. `Saved` assumes the
+guessed. The stream itself carries the same `triage` object as a non-streaming response: routing only on its
+first chunk, complete (with `cost`, `strong_cost` and `saved`) on its `finish_reason` chunk. Both chunks keep
+`choices[0]`, and the openai SDKs expose it as `chunk.triage`. If the client disconnects part-way (a Stop button),
+Triage closes the model's stream so it stops generating, and logs an estimated cost for what it produced
+(`tokens_estimated: true`, error kind `client_disconnected`). The figures are also in
+`GET /v1/requests/<request id>` once the stream ends. `Saved` assumes the
 strong model would have used the same number of tokens, so it's an estimate. It's only sent for `model: "auto"`:
 when you name a model, the choice was yours, so Triage claims no saving for it (here or in any stats).
 
 **Other endpoints:** `GET /v1/models` (with prices), `GET /v1/stats` (savings for your key),
 `GET /v1/stats/public` (no key: live totals across everyone's routed requests, once a range has 100 of them),
-`GET /v1/requests/{id}` (one of your own requests), and for admin keys `GET`/`PUT /v1/routing-config`, which
+`GET /v1/requests/{id}` (one of your own requests; with public access on, a request made without a key can be
+read without one, by its id, but only its outcome and cost), and for admin keys `GET`/`PUT /v1/routing-config`, which
 changes the quality presets and backup models without a restart. Those changes are kept in memory only. The
 first model of each tier can't be changed, because the classifier predicts for that exact model.
 

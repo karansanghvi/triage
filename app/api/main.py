@@ -12,7 +12,8 @@ Endpoints
     GET  /v1/models               "auto" plus every model, with prices
     GET  /v1/stats                savings summary (your key's requests; an admin key sees all)
     GET  /v1/stats/public         no auth: live aggregates of auto-routed requests (app/api/public_stats.py)
-    GET  /v1/requests/{id}        one logged request, only for the key that made it
+    GET  /v1/requests/{id}        one logged request, only for the key that made it (public access: a keyless
+                                  request's outcome and cost, by its id, without a key)
     GET  /v1/routing-config       the config in use (admin)
     PUT  /v1/routing-config       update quality presets/default and backup models live (admin; not persisted)
 
@@ -64,7 +65,7 @@ from app.api import public_stats, usage_sql
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
-from app.providers.base import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
+from app.providers.base import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE, _build_response
 from app.providers.common import ProviderError
 from app.providers.keys import KeyContext, redact
 from app.reliability import AllModelsFailed, ModelNotAllowed
@@ -183,6 +184,20 @@ def _apply_costs(row: RequestRow, response, deps, providers=None, prefer=None) -
         return
     row.strong_cost = strong.reported_cost(response.input_tokens, response.output_tokens)
     _credit_saving(row)
+
+
+def _estimate_stopped_cost(row: RequestRow, decision, routed, text: str, messages: list, deps, providers, prefer,
+                           started: float) -> None:
+    """A stream the client stopped part-way: the provider bills what it generated, but sends no token counts for
+    an unfinished stream. Estimate them from the text (about 4 characters a token, tokens_estimated=True), price
+    them like any answer, and add any billed truncated attempts. A cache hit cost nothing; a model that sent no
+    text yet is charged for the prompt only."""
+    if routed.cached or decision.model not in deps.registry:
+        return
+    latency_ms = (time.perf_counter() - started) * 1000
+    estimate = _build_response(deps.registry[decision.model], text, None, messages, latency_ms, finish_reason="stopped")
+    _apply_costs(row, estimate, deps, providers, prefer)
+    _add_truncated_costs(row, decision.attempts)
 
 
 def _credit_saving(row: RequestRow) -> None:
@@ -525,6 +540,10 @@ def request_mode(who: Optional[Caller], keys) -> str:
 
 # key_id in the request log for requests without a Triage key (no visitor identity goes into the log)
 PUBLIC_KEY_IDS = {"demo": "demo", "byok": "public"}
+# What GET /v1/requests/{id} returns without a key, for a request made without one: its outcome and cost, nothing
+# about the prompt, the routing probabilities or the attempts
+REQUEST_COST_FIELDS = ("request_id", "status", "error_kind", "stream", "served_model", "tier", "cache_hit",
+                       "tokens_estimated", "input_tokens", "output_tokens", "price_as_cost", "strong_cost", "saved")
 _KEY_HEADER_LIST = ", ".join(PROVIDER_KEY_HEADERS.values())
 
 
@@ -960,6 +979,12 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                     yield event
             finally:
                 with anyio.CancelScope(shield=True):           # a disconnect cancels the stream; still log it
+                    if not logged:
+                        # The client went away (the web chat's Stop): end the provider's stream so the model
+                        # stops generating, and record what the answer cost so far as an estimate
+                        await routed.pieces.aclose()
+                        _estimate_stopped_cost(row, decision, routed, "".join(streamed), messages, deps,
+                                               baseline_providers, prefer, started)
                     await finish("error", 499, "client_disconnected")    # no-op if the row was already written
 
         async def stream_events():
@@ -1068,7 +1093,16 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         return JSONResponse(result, headers={"Cache-Control": f"public, max-age={public_stats.TTL_SECONDS}"})
 
     @app.get("/v1/requests/{request_id}")
-    async def get_request(request_id: str, who: Caller = Depends(caller)):
+    async def get_request(request_id: str, authorization: Optional[str] = Header(None)):
+        """A logged request, for the key (or account) that made it. Public access on, and no key sent: only a
+        request made without a key (the demo or public BYOK), and only its outcome and cost (REQUEST_COST_FIELDS),
+        so the web chat can show what a stopped answer cost. Request ids are random UUIDs: unguessable."""
+        if authorization is None and app.state.public:
+            row = await anyio.to_thread.run_sync(lambda: app.state.deps.log.get(request_id, include_vectors=False))
+            if row is None or row.user_id is not None or row.key_id not in PUBLIC_KEY_IDS.values():
+                raise APIError(404, f"No request {request_id!r} without a key.", param="request_id", code="not_found")
+            return {name: getattr(row, name) for name in REQUEST_COST_FIELDS}
+        who = await caller(authorization)
         row = await anyio.to_thread.run_sync(lambda: app.state.deps.log.get(request_id, include_vectors=False))
         owner = (row.user_id == who.user_id) if (row is not None and who.kind == "account") else \
             (row is not None and row.user_id is None and row.key_id == who.key_id)
