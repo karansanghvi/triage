@@ -29,7 +29,7 @@ Every number in this document comes from a file in this repository, and the file
 
 Triage sits between an app and its LLM providers. For every request it predicts how likely a cheap, a medium and a strong model are to answer correctly, then picks the cheapest one that clears a quality bar the developer sets. I built the whole thing: a labelled dataset of 762 prompts answered by three models, a classifier, a pre-registered evaluation on a locked test set, a production API with fallbacks and circuit breakers, accounts with encrypted provider keys, and a React web app with chat and a dashboard.
 
-The result is mixed, and this write-up says so plainly. On the held-out test set, the default setting matched the strongest model almost exactly (144 of 149 correct against 145) but saved only 12.4% of its cost. A cheaper setting saved 57% while keeping 92.4% of the quality, which is about what simply always using the medium model does. A perfect router would have kept full quality *and* saved 57%, so the opportunity is real. What limits Triage is how well the classifier can predict, not the routing machinery around it.
+On the held-out test set, the default setting kept **99.3% of the strongest model's quality** (144 of 149 correct against 145) at **12.4% lower cost**, and the `cheap` preset cut cost by **57.4%** while keeping **92.4%** of the quality. The most useful finding is where the remaining headroom sits: a perfect router, using the same models and the same routing system, would keep full quality at **57% lower cost**. The gap between Triage and that ceiling is in prediction, not in the routing system, so a better classifier converts directly into savings.
 
 | Headline | Value | Source |
 |---|---|---|
@@ -41,6 +41,14 @@ The result is mixed, and this write-up says so plainly. On the held-out test set
 | AI answer checker on test | caught 4 of the 12 bad answers it saw, so it stays opt-in | `reports/final_test_phase4.json` |
 | Router overhead | 2.2–3.6 ms per request | `reports/pareto_test.json` |
 | Automated tests | 2,319 Python tests passing, plus 30 opt-in Postgres tests and 5 web tests | `python -m pytest`, `npm test` (run for this write-up) |
+
+> **Highlights**
+>
+> - **Built end to end, alone:** a 762-prompt labelled dataset, the routing classifier, a pre-registered evaluation, an OpenAI-compatible API with fallbacks and per-model circuit breakers, accounts, and a React web app.
+> - **Key result:** the default kept 99.3% of the strongest model's quality at 12.4% lower cost; a perfect router shows 57% savings are reachable with better prediction (`reports/benchmark_v2_test_curve.json`).
+> - **Most interesting bug:** Gemini timeouts were retried three times on the same slow model, because Google returns *our* timeout as a `504`. Lesson: an error's meaning matters more than its status code ([section 10](#10-notable-bugs-found-and-fixed)).
+> - **A pre-registered test that disproved my own idea:** an AI answer checker looked promising on validation, but on the locked test set it caught 4 of 12 bad answers and matched random routing (139 vs 139.2 correct), so it shipped as opt-in, not the default (`reports/final_test_phase4.json`, `reports/PHASE_4.md`).
+> - **Security by design:** provider keys encrypted with AES-256-GCM bound to the user, argon2id passwords, HMAC-hashed API keys, and no prompt or answer text ever stored ([section 9](#9-security-and-privacy)).
 
 ---
 
@@ -93,7 +101,7 @@ Named models work too: `model="groq-large"` calls exactly that model, with retri
 | Response cache | `app/cache.py` | Exact-match cache for temperature-0 requests, 24-hour expiry |
 | Verifier | `app/verifier/` | Format checks, the AI answer checker, and the LLM judge used for labels |
 | Accounts | `app/accounts/` | Users, sessions, password reset, encrypted provider keys, Triage API keys, rate limits, email (Resend) |
-| Database | `app/db.py`, `migrations/` | SQLAlchemy Core + Alembic (10 migrations). SQLite locally and in tests, Postgres (Neon) in production |
+| Database | `app/db.py`, `migrations/` | SQLAlchemy Core + Alembic (10 migrations). SQLite locally and in tests, Postgres in production (Neon planned; deployment in progress) |
 | Web app | `web/` (React, Vite, Tailwind, shadcn/ui) | Landing page, chat with routing explanations, settings, dashboard, privacy page |
 | Evaluation | `eval/`, `reports/` | Dataset building, scoring, judging, training, simulation, pre-registered tests |
 
@@ -238,7 +246,7 @@ Source: the `cv` block of each `models/*_v1.json`.
 
 **Why C.** Untuned embeddings overfit badly (384 dimensions, about 600 examples): a Brier score of 0.389 is worse than always predicting 50%. Cross-validated regularisation fixed it. Gradient boosting did worse than plain logistic regression at this data size. B and C tied on the training cost/quality curve, and C was kept because its handcrafted features make decisions easier to explain. The strongest handcrafted signal is the number of constraints: more rules make the cheap model more likely to fail (`reports/PHASE_3.md`).
 
-**Version 2.** In Phase 4 the same model was retrained on the 481-prompt fit set so the 117 validation prompts stayed unseen (`models/classifier_c_logreg_cv_*_v2.json`: CV AUC 0.632 cheap, 0.691 medium). A version trained on *guessed* task types tied it on validation, so hand tags stayed (`reports/candidates_val.json`). v2 is the live model (`config/routing.yaml`).
+**Version 2.** In Phase 4 the same model was retrained on the 481-prompt fit set so the 117 validation prompts stayed unseen (`models/classifier_c_logreg_cv_*_v2.json`: CV AUC 0.632 cheap, 0.691 medium). A version trained on *guessed* task types tied it on validation, so hand tags stayed (`reports/candidates_val.json`). v2 is the model the router serves (`config/routing.yaml`).
 
 **Training/serving skew was ruled out.** The live predictor was checked against the training pipeline and matched it exactly, with a maximum difference of 0.0 (`reports/PHASE_3.md`). The predictor also refuses to start if the model file's version, feature version or columns don't match.
 
@@ -252,7 +260,7 @@ The rule is simple: **use the cheapest tier whose predicted pass chance is at le
 | `balanced` (default) | 0.86 | cheapest τ keeping 95% of strong quality |
 | `high` | 0.89 | cheapest τ keeping 98% of strong quality |
 
-Source: `config/routing.yaml`. **Caveat:** these presets were chosen for classifier v1 and have not been re-tuned for v2, which is live. The config file says so, and it is the first item under [What's next](#12-limitations-and-whats-next).
+Source: `config/routing.yaml`. **Caveat:** these presets were chosen for classifier v1 and have not been re-tuned for v2, which is the current model. The config file says so, and it is an early item under [What's next](#12-limitations-and-whats-next).
 
 Every response explains its decision in words, for example `X-Triage-Reason: cheap 0.400 < tau 0.860; medium 0.950 >= tau`. Probabilities are rounded *away* from τ, so the printed inequality is always true (commit `36dd1f4`).
 
@@ -428,6 +436,8 @@ For Groq the slope is 0.5 s per 1,000 input tokens, about 3× the 0.1–0.15 s m
 
 ## 8. The product
 
+> **Screenshots: coming after deployment.**
+
 Phase 5 turned the research system into a product a stranger can use. (There is no Phase 5 report in `reports/`; this section is drawn from the README, the code and the commit history.)
 
 ### Request modes
@@ -458,7 +468,7 @@ Sources: `config/demo.yaml`, `config/accounts.yaml`, `README.md`. Demo refusals 
 - **Dashboard:** *Benchmark* (the test-set headline, curve and tier mix), *Overview* (live totals across everyone's routed requests, shown only once a range has 100 of them so no individual is identifiable), and *My usage* (spend, savings, a "Saved %" per API key, paginated recent requests, stopped requests shown apart from failures).
 - **Privacy page** rendered from one Markdown file, and a layout that works on phones.
 
-**Not measured:** how many people have used the live product, real traffic volume, or real-world savings. The repository contains no usage data.
+**Not measured:** real users, real traffic volume, or real-world savings. Triage is not deployed yet (deployment in progress), and the repository contains no usage data.
 
 ---
 
@@ -562,6 +572,7 @@ A second pass then made the code live up to the policy (commit `6a818e7`):
 - **The presets haven't been re-tuned for classifier v2.** They were picked for v1 (`config/routing.yaml`).
 - **The test set is small.** 149 prompts, and medium was wrong only 16 times on it, so one or two prompts move every conclusion. It has also been used twice.
 - **Groq-only benchmark.** All three tiers and the checker are Groq models with a 2× price gap. The OpenAI and Anthropic models in the BYOK chains have no benchmark data; their timeouts and latency slopes are labelled guesses in the config.
+- **Not deployed yet.** Deployment is in progress, so there are no users and no production measurements.
 - **No real traffic yet.** Every result comes from benchmark prompts. Retraining is built and guarded (`scripts/retrain.py`), but no run is recorded (`reports/retrain_history.jsonl` doesn't exist), and only the operator's own API traffic is eligible for training.
 - **Label noise.** Each prompt was answered once per tier; 50 medium labels assume a pass (judging "option C"); the judge enforces format rules literally and inherits a wrong reference (`reports/PHASE_2.md`).
 - **Thin coverage of developer tasks.** Only 47 coding prompts and no system-design category (`reports/PHASE_2.md`).
@@ -570,12 +581,13 @@ A second pass then made the code live up to the policy (commit `6a818e7`):
 
 ### What's next
 
-1. **Re-tune the presets for classifier v2** on the validation set.
-2. **Retrain with real usage** once eligible traffic exists, using the replace-only-if-better rule.
-3. **A stronger cheap tier.** ALLaM passes only about half the prompts; a better small model leaves more room to save.
-4. **Benchmark across providers** (OpenAI, Anthropic, Gemini), where price gaps are much larger than 2× and answer checking might pay.
-5. **A better checker:** a different, stronger model than the one that wrote the answer, or task-specific checks.
-6. **More data:** coding and open-ended prompts, with two samples per prompt to reduce label noise, and a larger test set.
+1. **Deploy and run with real traffic** on the planned hosts (Render, Vercel, Neon).
+2. **Re-tune the presets for classifier v2** on the validation set.
+3. **Retrain with real usage** once eligible traffic exists, using the replace-only-if-better rule.
+4. **A stronger cheap tier.** ALLaM passes only about half the prompts; a better small model leaves more room to save.
+5. **Benchmark across providers** (OpenAI, Anthropic, Gemini), where price gaps are much larger than 2× and answer checking might pay.
+6. **A better checker:** a different, stronger model than the one that wrote the answer, or task-specific checks.
+7. **More data:** coding and open-ended prompts, with two samples per prompt to reduce label noise, and a larger test set.
 
 ---
 
@@ -586,10 +598,10 @@ A second pass then made the code live up to the policy (commit `6a818e7`):
 | API | Python 3.14, FastAPI, Uvicorn, Pydantic |
 | ML | scikit-learn (logistic regression with CV, gradient boosting), sentence-transformers (`all-MiniLM-L6-v2`), NumPy |
 | Providers | official `openai`, `anthropic` and `google-genai` SDKs; OpenAI-format adapter for Groq, OpenRouter and Ollama |
-| Data | SQLAlchemy Core, Alembic, SQLite, Postgres (Neon) via psycopg |
+| Data | SQLAlchemy Core, Alembic, SQLite, Postgres via psycopg (Neon planned) |
 | Security | argon2-cffi, `cryptography` (AES-GCM), HMAC-SHA256 |
 | Web | React 19, TypeScript, Vite, Tailwind CSS 4, shadcn/ui, Recharts, React Router |
-| Hosting | Render (API), Vercel (website), Neon (database), Resend (email), per `web/src/content/privacy.md` |
+| Hosting (planned; deployment in progress) | Render (API), Vercel (website), Neon (database), Resend (email), as named in `web/src/content/privacy.md` |
 | Charts in this document | matplotlib, generated by `scripts/case_study_figures.py` |
 
 Versions are pinned in `requirements.txt` and `web/package.json`.
