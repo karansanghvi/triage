@@ -47,18 +47,45 @@ function savedShare(routing: RoutingInfo): number | null {
   return routing.saved / routing.strongCost
 }
 
+// Probabilities next to the bar (tau). Whole percents normally; but when one is within 1 point of the bar, every
+// number compared with it gets one decimal, so 85.8% never shows as "86% likely" beside "Needed: 86%".
+const NEAR_BAR = 0.01
+
+function isNear(p: number | null, tau: number): boolean {
+  return p !== null && Math.abs(p - tau) < NEAR_BAR
+}
+
+function justUnder(p: number | null, tau: number): boolean {
+  return p !== null && p < tau && isNear(p, tau)
+}
+
+// One precision for the whole panel: decimals if either model's probability is near the bar
+function precise(routing: RoutingInfo): boolean {
+  return routing.tau !== null && (isNear(routing.pLow, routing.tau) || isNear(routing.pMedium, routing.tau))
+}
+
+function pct(share: number | null, decimals: boolean): string {
+  if (share === null) return "-"
+  return decimals ? `${(share * 100).toFixed(1)}%` : formatPercent(share)
+}
+
 // Turns Triage's numbers into one plain sentence
 function explain(routing: RoutingInfo): string {
   if (routing.routedBy === "small_talk") return "Small talk, so Triage used the cheapest model."
   const { tier, pLow, pMedium, tau } = routing
   if (tau === null || pLow === null) return routing.reason
 
-  const needed = formatPercent(tau)
+  const d = precise(routing)
+  const needed = pct(tau, d)
   if (tier === "low") {
-    return `The cheapest model was ${formatPercent(pLow)} likely to answer well, above the ${needed} needed, so Triage used it.`
+    return `The cheapest model was ${pct(pLow, d)} likely to answer well, above the ${needed} needed, so Triage used it.`
   }
+  const lowMiss = justUnder(pLow, tau) ? "just under" : "below"
   if (tier === "medium" && pMedium !== null) {
-    return `The cheapest model was only ${formatPercent(pLow)} likely to answer well, below the ${needed} needed. The mid-range model was ${formatPercent(pMedium)} likely, so Triage used it.`
+    return `The cheapest model was only ${pct(pLow, d)} likely to answer well, ${lowMiss} the ${needed} needed. The mid-range model was ${pct(pMedium, d)} likely, so Triage used it.`
+  }
+  if (justUnder(pMedium, tau)) {
+    return `Neither cheaper model was likely enough to answer well: the mid-range model was ${pct(pMedium, d)} likely, just under the ${needed} needed, so Triage used the most powerful model.`
   }
   return `Neither cheaper model was likely enough to answer well (${needed} needed), so Triage used the most powerful model.`
 }
@@ -157,12 +184,12 @@ function SelectedDetails({ routing }: { routing: RoutingInfo }) {
         <section>
           <p className="text-xs text-muted-foreground">Could a cheaper model handle it?</p>
           <div className="mt-3 space-y-3">
-            <ProbabilityBar label="Cheapest model" value={routing.pLow} tau={routing.tau} barClass={TIER_BAR.low} />
-            <ProbabilityBar label="Mid-range model" value={routing.pMedium} tau={routing.tau} barClass={TIER_BAR.medium} />
+            <ProbabilityBar label="Cheapest model" value={routing.pLow} tau={routing.tau} decimals={precise(routing)} barClass={TIER_BAR.low} />
+            <ProbabilityBar label="Mid-range model" value={routing.pMedium} tau={routing.tau} decimals={precise(routing)} barClass={TIER_BAR.medium} />
           </div>
           <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
             <span className="inline-block h-3 w-0.5 rounded-full bg-foreground" />
-            Needed: {formatPercent(routing.tau)}, set by your quality dial
+            Needed: {pct(routing.tau, precise(routing))}, set by your quality dial
           </p>
         </section>
       )}
@@ -210,11 +237,13 @@ function ProbabilityBar({
   label,
   value,
   tau,
+  decimals,
   barClass,
 }: {
   label: string
   value: number | null
   tau: number
+  decimals: boolean
   barClass: string
 }) {
   const passed = value !== null && value >= tau
@@ -224,9 +253,10 @@ function ProbabilityBar({
       <div className="flex justify-between text-xs">
         <span className="text-muted-foreground">{label}</span>
         <span className={cn("font-medium", passed ? "text-foreground" : "text-muted-foreground")}>
-          {formatPercent(value)} likely to answer well
+          {pct(value, decimals)} likely to answer well
         </span>
       </div>
+      {justUnder(value, tau) && <p className="mt-0.5 text-right text-[11px] text-warning">just under the bar</p>}
       <div className="relative mt-1.5 h-1.5 rounded-full bg-muted">
         <div
           className={cn("h-full rounded-full transition-all duration-500", passed ? barClass : "bg-muted-foreground/40")}
