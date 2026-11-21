@@ -235,11 +235,66 @@ def test_a_broken_log_at_startup_doesnt_stop_the_server():
 # ---------- 2. no raw IPs in our logs ----------
 
 def test_every_documented_start_command_turns_off_the_access_log():
-    readme = (PROJECT_ROOT / "README.md").read_text()
-    commands = re.findall(r"uvicorn (?:app\.api\.main:app|\.\.\.)[^`\n]*", readme)
-    starts = [c for c in commands if "--port" in c or "..." in c]
-    assert len(starts) >= 3 and all("--no-access-log" in c for c in starts), starts
-    for name in ("Procfile", "render.yaml"):           # any deploy config added later must do the same
-        path = Path(PROJECT_ROOT, name)
-        if path.exists():
-            assert "--no-access-log" in path.read_text(), name
+    """Every uvicorn command we document or configure: the README, the API's own run instructions, scripts and
+    any deploy config. uvicorn's access log prints each client's IP, and the privacy policy says we log none."""
+    sources = {"README.md": (PROJECT_ROOT / "README.md").read_text(),
+               "app/api/main.py": (PROJECT_ROOT / "app" / "api" / "main.py").read_text()}
+    for path in [*PROJECT_ROOT.glob("scripts/*"), *PROJECT_ROOT.glob("*.sh"), *PROJECT_ROOT.glob("*.toml"),
+                 *PROJECT_ROOT.glob("*.yaml"), *PROJECT_ROOT.glob("*.yml"), PROJECT_ROOT / "Procfile",
+                 PROJECT_ROOT / "Dockerfile"]:
+        if path.is_file():
+            sources[path.name] = path.read_text(errors="ignore")
+    commands = [(name, line) for name, text in sources.items() for line in text.splitlines()
+                if re.search(r"\buvicorn (app\.api\.main:app|\.\.\.)", line)]
+    assert sum(name == "README.md" for name, _ in commands) >= 3 and any(n == "app/api/main.py" for n, _ in commands)
+    missing = [(name, line.strip()) for name, line in commands if "--no-access-log" not in line]
+    assert missing == []
+
+
+def test_no_log_line_of_ours_contains_the_client_ip(caplog):
+    """The public paths a visitor reaches without an account, and the account ones: the demo, public stats,
+    sign up, a failed log in. The visitor is only ever logged as a keyed hash."""
+    import logging
+    from tests.test_account_mode import PASSWORD, app as account_app
+    ip = "203.0.113.77"
+    http, _ = account_app(public=True)
+    via_proxy = {"X-Forwarded-For": ip}
+    with caplog.at_level(logging.DEBUG):
+        assert http.get("/v1/demo/status", headers=via_proxy).status_code == 200
+        chat = http.post("/v1/chat/completions", headers=via_proxy,
+                         json={"model": "auto", "messages": [{"role": "user", "content": "What is 2 + 3?"}]})
+        assert chat.status_code == 200                                     # the demo answered: its logging ran
+        assert http.get("/v1/stats/public", headers=via_proxy).status_code == 200
+        assert http.post("/v1/auth/signup", json={"email": "ada@example.com", "password": PASSWORD},
+                         headers=via_proxy).status_code == 201
+        assert http.post("/v1/auth/login", json={"email": "ada@example.com", "password": "wrong password!"},
+                         headers=via_proxy).status_code == 401
+    lines = [record.getMessage() for record in caplog.records]
+    assert any('"request_id"' in line for line in lines)                    # the request log line was written
+    assert not [line for line in lines if ip in line or "203.0.113" in line]
+
+
+# ---------- 3. the stats still work after old rows are deleted ----------
+
+def test_stats_and_request_pages_keep_working_after_retention_deletes_old_rows():
+    from tests.test_account_mode import app as account_app, signup
+    http, deps = account_app()
+    ada, ada_id = signup(http)
+    for i in range(15):                                                    # 10 old rows, then 5 recent ones
+        deps.log.write(RequestRow(request_id=f"r{i}", timestamp=(NOW - timedelta(days=400 if i < 10 else 1)).isoformat(),
+                                  key_id="session", requested_model="auto", stream=False, status="ok",
+                                  routed_by="classifier", tier="medium", served_model="groq-small",
+                                  price_as_cost=1.0, strong_cost=3.0, latency_ms=100.0, user_id=ada_id))
+    first = http.get("/v1/account/requests", params={"limit": 5}, headers=ada).json()
+    second = http.get("/v1/account/requests", params={"limit": 5, "cursor": first["next_cursor"]}, headers=ada).json()
+    assert first["total"] == 15 and second["next_cursor"] is not None            # page 3 is old rows only
+    assert maintenance.run_once(SimpleNamespace(cached_sender=None, log=deps.log), 365, clock=lambda: NOW,
+                                batch_size=3) == {"request_rows_deleted": 10}
+    # a cursor into rows that are gone is still a valid page: just shorter, or empty
+    third = http.get("/v1/account/requests", params={"limit": 5, "cursor": second["next_cursor"]}, headers=ada)
+    assert third.status_code == 200 and third.json() == {"data": [], "next_cursor": None, "total": 5}
+    usage = http.get("/v1/account/usage?range=all", headers=ada)
+    assert usage.status_code == 200 and usage.json()["totals"]["requests"] == 5
+    assert http.get("/v1/stats", headers=ada).json()["requests"] == 5
+    assert http.get("/v1/stats/public?range=all").json() == {**http.get("/v1/stats/public?range=all").json(),
+                                                             "enough": False, "qualifying_requests": 5}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useMatch, useNavigate } from "react-router-dom"
 import { MessageSquare, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react"
 import { useChats } from "@/context/ChatsContext"
 import type { Chat } from "@/lib/chatStore"
@@ -17,12 +17,13 @@ function relativeTime(iso: string): string {
 }
 
 export default function ChatHistory() {
-  const { chats, activeId, openChat, newChat, busy } = useChats()
+  const { chats, busy } = useChats()
   const navigate = useNavigate()
+  // The sidebar sits outside the chat route, so read the open chat from the address directly
+  const activeId = useMatch("/chat/:id")?.params.id ?? null
 
   function handleNew() {
     if (busy) return
-    newChat()
     navigate("/chat")
   }
 
@@ -51,9 +52,8 @@ export default function ChatHistory() {
               active={chat.id === activeId}
               busy={busy}
               onOpen={() => {
-                if (busy) return
-                openChat(chat.id)
-                navigate("/chat")
+                if (busy || chat.id === activeId) return
+                navigate(`/chat/${chat.id}`)
               }}
             />
           ))}
@@ -74,6 +74,7 @@ type ChatItemProps = {
 
 function ChatItem({ chat, active, busy, onOpen }: ChatItemProps) {
   const { renameChat, deleteChat } = useChats()
+  const navigate = useNavigate()
   const [mode, setMode] = useState<Mode>("idle")
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [draft, setDraft] = useState(chat.title)
@@ -186,6 +187,7 @@ function ChatItem({ chat, active, busy, onOpen }: ChatItemProps) {
         onConfirm={() => {
           setConfirmingDelete(false)
           deleteChat(chat.id)
+          if (active) navigate("/chat", { replace: true })     // the chat being viewed is gone
         }}
       />
     </>

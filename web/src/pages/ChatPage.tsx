@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { Navigate, useNavigate, useParams } from "react-router-dom"
 import { Plus } from "lucide-react"
 import Welcome from "@/components/chat/Welcome"
 import SuggestionChips from "@/components/chat/SuggestionChips"
@@ -45,7 +46,13 @@ export default function ChatPage() {
   const demoStatus = useDemoStatus()
   const { user, token, expireSession } = useAuth()
   const providerKeys = useProviderKeys()
-  const { activeId, activeMessages: messages, updateMessages, newChat, busy, setBusy } = useChats()
+  const { chats, updateMessages, busy, setBusy } = useChats()
+  const navigate = useNavigate()
+  // /chat is always a new, empty chat; /chat/:id is that saved chat
+  const { id: routeId } = useParams()
+  const activeChat = routeId ? chats.find((c) => c.id === routeId) : undefined
+  const activeId = activeChat?.id ?? null
+  const messages = activeChat?.messages ?? []
 
   const [input, setInput] = useState("")
   const [quality, setQuality] = useState(DEFAULT_QUALITY)
@@ -83,6 +90,8 @@ export default function ChatPage() {
     // Passing null starts a new chat; keep its id so the answer lands in the same chat
     const id = updateMessages(chatId, () => [...history, pending])
     setBusy(true)
+    // A new chat is saved with its first message: give it its own address, replacing /chat in history
+    if (chatId === null) navigate(`/chat/${id}`, { replace: true })
 
     try {
       const result = await sendChat(history, quality, { sessionToken: mode.kind === "account" ? mode.token : null })
@@ -142,10 +151,13 @@ export default function ChatPage() {
 
   function handleNewChat() {
     if (busy) return
-    newChat()
     setSelectedId(null)
     setInput("")
+    navigate("/chat")
   }
+
+  // A chat that doesn't exist (deleted, or a stale link): start fresh instead
+  if (routeId && !activeChat) return <Navigate to="/chat" replace />
 
   const chatInput = (
     <>

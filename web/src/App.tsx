@@ -30,6 +30,7 @@ export default function App() {
       {/* The app: sidebar + pages */}
       <Route element={<AppLayout />}>
         <Route path="/chat" element={<ChatPage />} />
+        <Route path="/chat/:id" element={<ChatPage />} />
         <Route path="/dashboard" element={<DashboardLayout />}>
           <Route index element={<Navigate to="benchmark" replace />} />
           <Route path="benchmark" element={<BenchmarkPage />} />
