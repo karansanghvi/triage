@@ -64,7 +64,7 @@ We also rely on these service providers to run Triage. They process data only to
 | Service provider | What it does for Triage |
 | --- | --- |
 | Neon | Hosts our database (United States) |
-| Render | Runs the Triage API (United States) |
+| Oracle Cloud Infrastructure | Runs the Triage API |
 | Vercel | Hosts the gettriage.dev website |
 | Resend | Sends our welcome and password reset emails |
 

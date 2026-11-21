@@ -147,8 +147,8 @@ def test_a_worse_candidate_is_kept_but_its_files_are_saved(env):
     before = env["routing"].read_text()
     entry = run(env, evaluate_fn=rigged(metrics(0.95, 0.30), metrics(0.94, 0.33)))
     assert entry["decision"] == "keep" and env["routing"].read_text() == before
-    assert sorted(p.name for p in env["models"].iterdir()) == sorted(
-        f"{NAME}_{t}_v1{e}" for t in ("low", "medium") for e in (".joblib", ".json"))
+    assert sorted(p.name for p in env["models"].iterdir()) == sorted(           # .npz: the numpy export
+        f"{NAME}_{t}_v1{e}" for t in ("low", "medium") for e in (".joblib", ".json", ".npz"))
     [h] = history(env)
     assert h["decision"] == "keep" and h["reason"] == "keep: neither rule" and h["candidate_version"] == 1
 
@@ -183,7 +183,7 @@ def test_dry_run_changes_nothing_but_the_candidate_files(env, better):
     assert entry["decision"] == ("replace" if better else "keep") and entry["dry_run"] is True
     assert env["routing"].read_text() == before_routing
     assert not env["history"].exists()
-    assert len(list(env["models"].iterdir())) == 4                        # the candidate files only
+    assert len(list(env["models"].iterdir())) == 6                        # the candidate files only (.joblib/.json/.npz)
     assert SQLiteRequestLog(env["db"]).labels() == before_labels           # the log is only read
     others = {p.name for p in env["tmp"].iterdir()} - {"routing.yaml", "models"}
     assert {n for n in others if not n.startswith("requests.sqlite3")} == set()

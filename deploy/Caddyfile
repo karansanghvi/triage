@@ -1,0 +1,21 @@
+# Caddy in front of the Triage API: automatic HTTPS (Let's Encrypt) for the API's domain, then the API container.
+# Only API_DOMAIN and ACME_EMAIL reach Caddy (docker-compose.yml); no other secret from .env does.
+
+# Optional Let's Encrypt contact address (ACME_EMAIL), for certificate expiry warnings. docker-compose.yml writes
+# this one file only when ACME_EMAIL is set; with nothing to import, no email is registered.
+import /etc/caddy/global.d/*.caddy
+
+{$API_DOMAIN:api.gettriage.dev} {
+	reverse_proxy api:8000 {
+		# Streamed answers (server-sent events) go out as they arrive
+		flush_interval -1
+	}
+	# No `encode` (compression would buffer streamed answers) and no `log` directive: Caddy writes no access log,
+	# so client IPs aren't logged here either, as the privacy policy promises.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}

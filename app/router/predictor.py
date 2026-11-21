@@ -5,7 +5,10 @@ predictor.py: turns a prompt into "chance the cheap tier passes" and "chance the
            -> the classifier named in routing.yaml -> p_low, p_medium
            -> quality.py compares them with tau -> low / medium / high
  
-Everything is loaded once (load_predictor() is cached). At load time the predictor refuses to start if
+Everything is loaded once (load_predictor() is cached). A classifier that is a StandardScaler + logistic regression
+runs as plain numpy maths from its exported .npz (scripts/export_numpy_classifier.py), so the server never imports
+scikit-learn (and scipy): about 150 MB of memory. The .npz records the SHA-256 of the .joblib it came from; if it
+doesn't match, or there is no .npz, the .joblib is loaded with scikit-learn as before. At load time the predictor refuses to start if
 the saved models don't match the current code (feature version, embedding model, number of columns),
 because a silently mismatched model is one of the most common real-world ML bugs.
  
@@ -17,7 +20,9 @@ Try it:
 from __future__ import annotations
  
 import argparse
+import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -38,8 +43,87 @@ USES_FEATURES = {"features", "task_only", "both"}
 USES_EMBEDDINGS = {"embeddings", "both"}
 
 
+logger = logging.getLogger("triage.predictor")
+
+
 class PredictorError(RuntimeError):
     """The configured classifier is missing or doesn't match the current one"""
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+class NumpyLogisticPipeline:
+    """StandardScaler -> binary logistic regression, as numpy: predict_proba(X)[:, 1] = 1 / (1 + e^-(z @ w + b)),
+    z = (X - mean) / scale. The same maths scikit-learn runs (tests/test_numpy_classifier.py checks it)."""
+
+    def __init__(self, mean: np.ndarray, scale: np.ndarray, coef: np.ndarray, intercept: float):
+        self.mean = np.asarray(mean, dtype=np.float64)
+        self.scale = np.asarray(scale, dtype=np.float64)
+        self.coef = np.asarray(coef, dtype=np.float64)
+        self.intercept = float(intercept)
+        self.n_features_in_ = self.coef.shape[0]
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        z = (np.asarray(X, dtype=np.float64) - self.mean) / self.scale
+        logit = z @ self.coef + self.intercept
+        # expit without overflow warnings: e^-x for x >= 0, e^x / (1 + e^x) below
+        p = np.empty_like(logit)
+        pos = logit >= 0
+        p[pos] = 1.0 / (1.0 + np.exp(-logit[pos]))
+        e = np.exp(logit[~pos])
+        p[~pos] = e / (1.0 + e)
+        return np.column_stack([1.0 - p, p])
+
+    @classmethod
+    def from_sklearn(cls, pipeline) -> "NumpyLogisticPipeline":
+        """From a fitted Pipeline([StandardScaler, LogisticRegression(CV)]) with classes [0, 1]"""
+        steps = [step for _, step in pipeline.steps]
+        if len(steps) != 2 or type(steps[0]).__name__ != "StandardScaler" or not hasattr(steps[1], "coef_"):
+            raise PredictorError(f"can't export {[type(s).__name__ for s in steps]}: only StandardScaler + "
+                                 "logistic regression")
+        scaler, clf = steps
+        if list(clf.classes_) != [0, 1] or clf.coef_.shape[0] != 1:
+            raise PredictorError(f"expected a binary classifier with classes [0, 1], got {list(clf.classes_)}")
+        n = clf.coef_.shape[1]
+        mean = scaler.mean_ if scaler.with_mean and scaler.mean_ is not None else np.zeros(n)
+        scale = scaler.scale_ if scaler.with_std and scaler.scale_ is not None else np.ones(n)
+        return cls(mean, scale, clf.coef_[0], clf.intercept_[0])
+
+    def save(self, path: Path, source_sha256: str) -> None:
+        np.savez(path, mean=self.mean, scale=self.scale, coef=self.coef, intercept=np.array(self.intercept),
+                 source_sha256=np.array(source_sha256))
+
+    @classmethod
+    def load(cls, path: Path) -> tuple["NumpyLogisticPipeline", str]:
+        with np.load(path, allow_pickle=False) as data:
+            return cls(data["mean"], data["scale"], data["coef"], float(data["intercept"])), str(data["source_sha256"])
+
+
+def export_numpy(stem: Path) -> Optional[Path]:
+    """Write <stem>.npz next to <stem>.joblib if the model can run as numpy; None (nothing written) if it can't
+    (gradient boosting, a model without a scaler). Exact maths, so routing doesn't change (see the parity test)."""
+    joblib_path = stem.with_suffix(".joblib")
+    try:
+        model = NumpyLogisticPipeline.from_sklearn(joblib.load(joblib_path))
+    except (PredictorError, AttributeError):
+        return None
+    out = stem.with_suffix(".npz")
+    model.save(out, file_sha256(joblib_path))
+    return out
+
+
+def load_classifier_file(stem: Path):
+    """The fitted model for one tier: the numpy export when it matches the .joblib, else the .joblib itself"""
+    joblib_path, npz_path = stem.with_suffix(".joblib"), stem.with_suffix(".npz")
+    if npz_path.exists():
+        model, source = NumpyLogisticPipeline.load(npz_path)
+        if source == file_sha256(joblib_path):
+            return model
+        logger.warning("%s doesn't match %s (re-export it with scripts/export_numpy_classifier.py); loading the "
+                       ".joblib with scikit-learn instead", npz_path.name, joblib_path.name)
+    return joblib.load(joblib_path)
 
 
 @dataclass(frozen=True)
@@ -62,16 +146,20 @@ class Predictor:
         self.models, self.meta = {}, {}
         for tier in TIERS:
             stem = Path(models_dir) / f"{name}_{tier}_v{version}"
-            if not stem.with_suffix(".joblib").exists() or not stem.with_suffix(".json").exists():
-                raise PredictorError(f"{stem.name}.joblib/.json not found in {models_dir}; "
-                                     "train it with eval/train_classifier.py or fix routing.yaml")
+            missing = [p.name for p in (stem.with_suffix(".joblib"), stem.with_suffix(".json")) if not p.exists()]
+            if missing:
+                raise PredictorError(
+                    f"model file(s) {', '.join(missing)} not found in {models_dir}. The live classifier's files "
+                    f"are committed to git (see .gitignore); a deploy must include them. Restore them with "
+                    f"`git checkout -- models/{stem.name}.*`, train them with eval/train_classifier.py, or point "
+                    f"routing.yaml's classifier at a version that exists")
             self.meta[tier] = json.loads(stem.with_suffix(".json").read_text(encoding="utf-8"))
             # The file name picks the model; the version saved INSIDE the JSON must agree with it too,
             # so a renamed or copied file can't quietly serve a different model than routing.yaml names
             if self.meta[tier].get("version") != version:
                 raise PredictorError(f"{stem.name}.json records version {self.meta[tier].get('version')!r}, "
                                      f"but version {version!r} was requested (routing.yaml classifier.version)")
-            self.models[tier] = joblib.load(stem.with_suffix(".joblib"))
+            self.models[tier] = load_classifier_file(stem)
 
         feature_sets = {m["feature_set"] for m in self.meta.values()}
         if len(feature_sets) != 1:
@@ -125,7 +213,8 @@ class Predictor:
                 parts.append(np.array([to_vector(f) for f in feats], dtype=np.float64))
         if self.feature_set in USES_EMBEDDINGS:
             from app.router.embeddings import embed_texts
-            vecs, _ = embed_texts(list(texts))
+            from app.router.embeddings import BATCH_SIZE, LIVE_BATCH_SIZE
+            vecs, _ = embed_texts(list(texts), batch_size=LIVE_BATCH_SIZE if len(texts) == 1 else BATCH_SIZE)
             parts.append(vecs.astype(np.float64))
         return np.hstack(parts), tasks, guessed
     
