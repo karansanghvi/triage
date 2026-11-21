@@ -2,7 +2,8 @@
 
     GET /v1/account/usage?range=7d|30d|all      totals, time buckets, tier mix, by model / provider / API key,
                                                 errors by kind, latency per model
-    GET /v1/account/requests?cursor=&limit=     recent requests, newest first (limit 1-100, default 50)
+    GET /v1/account/requests?cursor=&limit=     recent requests, newest first (limit 1-100, default 50), with
+                                                total: how many requests the account has in all
 
 Either a session token (trs_, the website) or one of the account's API keys (trk_) works; both see every request
 of the account, whichever key made it. A Triage server key (TRIAGE_API_KEYS) is not an account: 401.
@@ -131,12 +132,19 @@ def usage(log, registry, keys: list, user_id: str, range_name: str, now: datetim
 
 
 def recent(log, keys: list, user_id: str, before_id: Optional[int], limit: int) -> dict:
-    items, next_before = log.run(lambda connection: usage_sql.page(connection, usage_sql.c.user_id == user_id,
-                                                                   before_id, limit))
+    """One page, plus total: every request of the account (the list's own filter, not just what's after the
+    cursor), counted on the (user_id, id) index in the same connection, so a page and its total agree."""
+    mine = usage_sql.c.user_id == user_id
+
+    def query(connection):
+        items, next_before = usage_sql.page(connection, mine, before_id, limit)
+        return items, next_before, usage_sql.count(connection, mine)
+
+    items, next_before, total = log.run(query)
     labels = key_labels(keys)
     for item in items:
         item["key_label"] = labels.get(item["key_id"], (item["key_id"], None))[0]
-    return {"data": items, "next_cursor": None if next_before is None else encode_cursor(next_before)}
+    return {"data": items, "next_cursor": None if next_before is None else encode_cursor(next_before), "total": total}
 
 
 def usage_router(account_caller) -> APIRouter:

@@ -697,6 +697,7 @@ def test_account_usage_and_requests_on_postgres(pg_app):
         if cursor is None:
             break
     assert len(seen) == len({i["request_id"] for i in seen}) == 31 and seen[0]["request_id"] == "mine"
+    assert page.json()["total"] == 31
     assert seen[0]["key_label"] == "laptop" and seen[0]["saved_usd"] == 2.0
 
 
