@@ -1,7 +1,10 @@
-// Placeholder numbers until the real benchmark results are in
+import { benchmark } from "@/lib/benchmark"
+import { formatPercent } from "@/lib/format"
+
+// The headline from the benchmark (src/content/benchmark.json), never typed by hand
 const STATS = [
-  { value: "[X]%", label: ["cheaper than always using", "the most powerful model"] },
-  { value: "[Y]%", label: ["of answers judged", "just as good"] },
+  { value: formatPercent(benchmark.headline.quality_kept), label: ["of the strongest", "model's quality"] },
+  { value: formatPercent(benchmark.headline.cost_saved), label: ["lower", "cost"] },
   { value: "2 lines", label: ["of code to switch", "your app over"] },
 ]
 
@@ -12,17 +15,20 @@ export default function ProofStrip() {
     <>
       <section className="px-6 pb-24">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-8 border-y border-[#1A1C26] py-9">
-            <div className="flex flex-wrap gap-14">
-                {STATS.map((stat) => (
-                    <div key={stat.value}>
-                        <p className="text-4xl font-bold tracking-[-0.02em]">{stat.value}</p>
-                        <p className="mt-1 text-[13px] leading-snug text-[#8B90A0]">
-                            {stat.label[0]}
-                            <br />
-                            {stat.label[1]}
-                        </p>
-                    </div>
-                ))}
+            <div>
+                <div className="flex flex-wrap gap-14">
+                    {STATS.map((stat) => (
+                        <div key={stat.label.join(" ")}>
+                            <p className="text-4xl font-bold tracking-[-0.02em]">{stat.value}</p>
+                            <p className="mt-1 text-[13px] leading-snug text-[#8B90A0]">
+                                {stat.label[0]}
+                                <br />
+                                {stat.label[1]}
+                            </p>
+                        </div>
+                    ))}
+                </div>
+                <p className="mt-5 text-xs text-[#6B7080]">Measured on {benchmark.split.n} held-out test questions.</p>
             </div>
 
             <div>

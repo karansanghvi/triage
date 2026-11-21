@@ -1,17 +1,26 @@
 import { useState } from "react"
+import { benchmark, curveAt } from "@/lib/benchmark"
+import { formatPercent } from "@/lib/format"
 import SectionHeading from "./SectionHeading"
 
-// An illustrative traffic mix: higher bar = fewer cheap answers, more powerful ones
+// The dial is the quality setting (tau, shown as a percent). Everything it shows is the benchmark's real result at
+// that setting (src/content/benchmark.json curve), so it can't contradict the Results section.
+const MIN_BAR = 50
+const MAX_BAR = 95
+const PRESETS = benchmark.presets
+
 function trafficMix(bar: number) {
-  const low = Math.round(Math.max(8, Math.min(80, 80 - (bar - 60) * 2.0)))
-  const high = Math.round(Math.max(4, Math.min(60, 4 + (bar - 60) * 1.4)))
-  const mid = Math.max(0, 100 - low - high)
-  return { low, mid, high }
+  const mix = curveAt(bar / 100).mix ?? { low: 0, medium: 0, high: 0 }
+  const low = Math.round(mix.low * 100)
+  const high = Math.round(mix.high * 100)
+  return { low, mid: Math.max(0, 100 - low - high), high }
 }
 
+// Named after the nearest preset: halfway between two presets is where one name gives way to the next
 function dialLabel(bar: number): string {
-  if (bar <= 77) return "Cheapest"
-  if (bar <= 87) return "Balanced"
+  const tau = bar / 100
+  if (tau <= (PRESETS.cheap.tau! + PRESETS.balanced.tau!) / 2) return "Cheapest"
+  if (tau <= (PRESETS.balanced.tau! + PRESETS.high.tau!) / 2) return "Balanced"
   return "Best quality"
 }
 
@@ -22,8 +31,9 @@ const BARS = [
 ] as const
 
 export default function QualityDialDemo() {
-  const [bar, setBar] = useState(86)
+  const [bar, setBar] = useState(Math.round(benchmark.headline.tau * 100))
   const mix = trafficMix(bar)
+  const point = curveAt(bar / 100)
 
   return (
     <section className="relative px-6 pb-[120px]">
@@ -56,8 +66,8 @@ export default function QualityDialDemo() {
           <input
             id="landing-dial"
             type="range"
-            min={60}
-            max={95}
+            min={MIN_BAR}
+            max={MAX_BAR}
             step={1}
             value={bar}
             onChange={(e) => setBar(Number(e.target.value))}
@@ -85,7 +95,13 @@ export default function QualityDialDemo() {
             ))}
           </div>
 
-          <p className="mt-5 text-xs text-[#8B90A0]">Illustrative traffic mix. Real numbers come from your benchmark.</p>
+          <p className="mt-6 text-[13px] text-[#C9CDD8]">
+            Keeps <strong className="text-foreground">{formatPercent(point.quality_kept)}</strong> of the strongest
+            model's quality at <strong className="text-[#4ADE80]">{formatPercent(point.cost_saved)}</strong> lower cost.
+          </p>
+          <p className="mt-1.5 text-xs text-[#8B90A0]">
+            Real results at each setting, measured on {benchmark.split.n} held-out test questions.
+          </p>
         </div>
       </div>
     </section>
