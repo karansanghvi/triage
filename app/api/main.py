@@ -937,7 +937,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 _apply_costs(row, response, deps, baseline_providers, prefer)
             _add_truncated_costs(row, decision.attempts)
             await finish()
-            cache = "hit" if response.cached else ("miss" if is_cacheable(temperature, False) else "bypass")
+            cache = "hit" if response.cached else ("miss" if is_cacheable(temperature) else "bypass")
             headers = _triage_headers(decision, cache, model=served_model, tier=served_tier, reason=reason,
                                       verified=verify, escalated=escalated, check=check) | _cost_headers(row)
             headers |= request.state.triage_headers
@@ -951,7 +951,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         streamed = []                                         # the answer, in memory only, for a background label
         # The routing is known now (the first token exists); cost only at the end. The first chunk carries the
         # "triage" object without cost, the finish_reason chunk the complete one, as a non-streaming response has
-        start_headers = _triage_headers(decision, "bypass") | request.state.triage_headers
+        cache_status = "hit" if routed.cached else ("miss" if is_cacheable(temperature) else "bypass")
+        start_headers = _triage_headers(decision, cache_status) | request.state.triage_headers
 
         async def events():
             try:

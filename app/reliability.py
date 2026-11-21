@@ -563,6 +563,11 @@ class _PrimedStream:
     def response(self):
         return self._stream.response
 
+    @property
+    def cached(self) -> bool:
+        """A cache hit (app/cache.CachedStream): known before the first piece, unlike .response."""
+        return bool(getattr(self._stream, "cached", False))
+
 
 # ---------- The client ----------
 

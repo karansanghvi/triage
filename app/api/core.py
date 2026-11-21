@@ -85,10 +85,12 @@ class RoutedStream:
     response  None until pieces is exhausted, then the full Response (tokens, costs, cached, latency)
     """
 
-    def __init__(self, decision: RouteDecision, pieces: AsyncIterator[str], response_fn: Callable[[], Optional[Response]]):
+    def __init__(self, decision: RouteDecision, pieces: AsyncIterator[str], response_fn: Callable[[], Optional[Response]],
+                 cached: bool = False):
         self.decision = decision
         self.pieces = pieces
         self._response_fn = response_fn
+        self.cached = cached          # served from the response cache (known as soon as the answer has begun)
 
     @property
     def response(self) -> Optional[Response]:
@@ -98,7 +100,7 @@ class RoutedStream:
     def from_stream(cls, decision: RouteDecision, stream) -> "RoutedStream":
         """Wrap a ReliableResult.response from send(stream=True): its pieces are pulled in a worker thread;
         its .response appears once they run out."""
-        return cls(decision, aiter_in_thread(stream), lambda: stream.response)
+        return cls(decision, aiter_in_thread(stream), lambda: stream.response, bool(getattr(stream, "cached", False)))
 
     @classmethod
     def from_response(cls, decision: RouteDecision, response: Response) -> "RoutedStream":

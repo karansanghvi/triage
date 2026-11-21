@@ -26,13 +26,14 @@ CACHE_VERSION = 1                        # bump this to throw away every old ent
 # Answers cut off by the token limit (TRUNCATED_FINISH_REASONS) are never cached
 
 
-def is_cacheable(temperature: float, stream: bool) -> bool:
-    """Only temperature=0, non-streaming requests are cached.
+def is_cacheable(temperature: float, stream: bool = False) -> bool:
+    """Only temperature=0 requests are cached, streamed or not (they share entries: a streamed request can be
+    answered from a non-streamed one's answer, and the other way round).
 
     At temperature 0 the model gives (nearly) the same answer every time,
     so a saved answer is a fair substitute. Above 0, variety is the point.
     """
-    return float(temperature) == 0.0 and not stream
+    return float(temperature) == 0.0
 
 
 def make_cache_key(messages: list, model: ModelConfig, temperature: float, max_tokens: int,
@@ -205,7 +206,7 @@ class CachedSender:
             self.hits += 1
             self.saved_cost += saved.reported_cost
             logger.info("cache hit: %s (saved $%.6f)", model.name, saved.reported_cost)
-            return dataclasses.replace(
+            hit = dataclasses.replace(
                 saved,
                 cached=True,
                 latency_ms=round(lookup_ms, 1),
@@ -213,8 +214,12 @@ class CachedSender:
                 reported_cost=0.0,
                 cache_saved_cost=saved.reported_cost,
             )
+            return CachedStream(hit) if stream else hit
 
         self.misses += 1
+        if stream:          # stored only if it finishes complete (never one cut off, failed or stopped part-way)
+            inner = self._send(messages, model, stream=True, temperature=temperature, max_tokens=max_tokens, **settings)
+            return CachingStream(inner, lambda response: self.cache.set(key, response))
         response = self._send(
             messages, model, temperature=temperature, max_tokens=max_tokens, **settings,
         )
@@ -226,3 +231,39 @@ class CachedSender:
     def hit_rate(self) -> float:
         total = self.hits + self.misses
         return self.hits / total if total else 0.0
+
+class CachedStream:
+    """A cache hit for a streamed request: the saved answer as a single piece (no pretend typing), then
+    .response. cached is True, so the reliability layer doesn't count it as the provider being healthy."""
+
+    cached = True
+
+    def __init__(self, response):
+        self._response = response
+        self.response = None
+
+    def __iter__(self):
+        if self._response.text:
+            yield self._response.text
+        self.response = self._response
+
+
+class CachingStream:
+    """A cache miss for a streamed request: the provider's stream, passed through; once it has finished on its
+    own and its answer is worth keeping, store(response) saves it. A stream closed early (the caller stopped),
+    or one that raised part-way, never reaches that point, so a partial answer is never cached."""
+
+    cached = False
+
+    def __init__(self, stream, store):
+        self._stream = stream
+        self._store = store
+
+    def __iter__(self):
+        yield from self._stream
+        if _worth_caching(self._stream.response):
+            self._store(self._stream.response)
+
+    @property
+    def response(self):
+        return self._stream.response
