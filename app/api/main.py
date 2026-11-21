@@ -60,7 +60,7 @@ from app.api.headers import (PROVIDER_KEY_HEADERS, check_verify_model, parse_pre
 from app.accounts.limits import AccountLimitError
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.router.small_talk import is_small_talk
-from app.api import maintenance
+from app.api import health, maintenance
 from app.api import public_stats, usage_sql
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
@@ -640,6 +640,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     _ensure_json_handler()
     app = FastAPI(title="Triage", version="0.5", lifespan=lifespan)
     app.state.deps, app.state.auth = deps, auth
+    app.state.db_health = None                       # /healthz's cached database check (built on first use)
     app.state.public = public_from_env() if public is None else public
     app.state.accounts = accounts_from_env() if accounts is None else accounts
     app.state.public_stats = public_stats.PublicStatsCache()
@@ -1044,6 +1045,18 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         from app.api.usage_routes import usage_router
         app.include_router(account_router())
         app.include_router(usage_router(account_caller))
+
+    # ----- health -----
+
+    @app.get("/healthz", include_in_schema=False)
+    async def healthz():
+        """For the host's health checks: 200 once the classifier, the embedding model and the database are ready,
+        else 503. No key needed; the body holds only status words. The database check is cached (health.DB_TTL)."""
+        deps = app.state.deps
+        if getattr(app.state, "db_health", None) is None and deps is not None and deps.engine is not None:
+            app.state.db_health = health.DbHealthCache(health.select_one_probe(deps.engine))
+        code, body = await anyio.to_thread.run_sync(health.health_report, deps, getattr(app.state, "db_health", None))
+        return JSONResponse(body, status_code=code, headers={"Cache-Control": "no-store"})
 
     # ----- the free demo -----
 
