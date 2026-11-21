@@ -73,7 +73,7 @@ export default function Hero() {
 
           <p className="mt-6 max-w-[540px] text-lg leading-relaxed text-[#A7ACBA]">
             Triage predicts how hard each prompt is and sends it to the cheapest model that can answer it well. Lower
-            costs, same quality.
+            costs, near-identical quality.
           </p>
 
           {/* Logged in: back to work. While a saved session is checked, the space is kept but nothing shows, so
