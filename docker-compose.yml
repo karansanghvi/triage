@@ -1,0 +1,79 @@
+# Triage on one server: the API, with Caddy in front for HTTPS. Setup, updates and rollback: DEPLOY.md.
+#
+#   cp deploy/.env.example .env      # then fill it in (never commit it)
+#   TRIAGE_IMAGE_TAG=$(git rev-parse --short HEAD) docker compose up -d --build
+#
+# Only Caddy is reachable from outside (80/443). The API listens on the private Docker network only.
+
+name: triage
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  api:
+    build: .
+    # Tagged per commit, so the previous image stays available for a rollback (DEPLOY.md)
+    image: triage-api:${TRIAGE_IMAGE_TAG:-latest}
+    env_file: .env
+    environment:
+      # Caddy is the one proxy in front of the API, and it sets X-Forwarded-For to the address it received the
+      # request from (ignoring any value a client sent). So the rightmost entry is the visitor: 1 hop. Set here, not
+      # in .env, because it follows from this file's layout.
+      TRIAGE_TRUSTED_PROXY_HOPS: "1"
+    expose:
+      - "8000"
+    restart: unless-stopped
+    mem_limit: 1536m            # peak is about 660 MB (DEPLOY.md, "Memory"); a runaway can't starve the VM
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - api-cache:/app/data/cache        # the response cache (24-hour answers), kept across restarts
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    logging: *logging
+
+  caddy:
+    image: caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"           # HTTP/3
+    environment:
+      # Read from .env by Compose; only these two reach Caddy
+      API_DOMAIN: ${API_DOMAIN:-api.gettriage.dev}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    # An optional global block with the Let's Encrypt email (see deploy/Caddyfile), then Caddy as usual
+    command:
+      - sh
+      - -c
+      - >-
+        mkdir -p /etc/caddy/global.d && rm -f /etc/caddy/global.d/*.caddy &&
+        if [ -n "$$ACME_EMAIL" ]; then printf '{\n\temail %s\n}\n' "$$ACME_EMAIL" > /etc/caddy/global.d/email.caddy; fi &&
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data                 # certificates: keep them, or Let's Encrypt rate limits may bite
+      - caddy-config:/config
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  api-cache:
+  caddy-data:
+  caddy-config:
