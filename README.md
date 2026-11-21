@@ -139,7 +139,8 @@ Anything else is a 400 that names the header.
 "Accounts: a guide for developers" below. On a stream, the headers go out once the first token exists,
 so model, tier and fallback are real, but cost isn't known yet. Those two headers are left out rather than
 guessed. Fetch the real figures with `GET /v1/requests/<request id>` once the stream ends. `Saved` assumes the
-strong model would have used the same number of tokens, so it's an estimate.
+strong model would have used the same number of tokens, so it's an estimate. It's only sent for `model: "auto"`:
+when you name a model, the choice was yours, so Triage claims no saving for it (here or in any stats).
 
 **Other endpoints:** `GET /v1/models` (with prices), `GET /v1/stats` (savings for your key),
 `GET /v1/requests/{id}` (one of your own requests), and for admin keys `GET`/`PUT /v1/routing-config`, which

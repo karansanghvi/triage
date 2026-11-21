@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from app.api.config_state import ActiveConfig
-from app.api.request_log import InMemoryRequestLog, SQLRequestLog, hash_secret_from_env, open_request_log
+from app.api.request_log import InMemoryRequestLog, hash_secret_from_env, open_request_log
 from pathlib import Path
 
 from app.api.demo import DemoLimiter, DemoSettings, load_demo_settings, trusted_hops_from_env
@@ -46,6 +46,7 @@ class RouterDeps:
     account_limiter: Optional[object] = None             # app.accounts.limits.AccountLimiter (account chat)
     password_resets: Optional[object] = None             # app.accounts.password_reset.ResetStore
     email_sender: Optional[object] = field(default=None, repr=False)   # app.accounts.email (chosen at startup)
+    fake_mode: bool = False                              # TRIAGE_FAKE_MODELS=1 (load_deps); public stats refuse it
 
     def strong_model(self, providers=None, prefer=None) -> str:
         """The savings baseline: the first model of the high chain after filtering by provider, and reordering
@@ -74,7 +75,7 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
     config = config or ActiveConfig.from_file(registry)
     log = log or InMemoryRequestLog()
     if hash_secret is None:
-        hash_secret = hash_secret_from_env(required=isinstance(log, SQLRequestLog))
+        hash_secret = hash_secret_from_env(required=getattr(log, "persistent", False))
     # hash_secret also fingerprints BYOK keys in cache keys (never the key itself)
     cached = CachedSender(cache, send_fn=send_fn, hash_secret=hash_secret) if cache is not None else None
     kwargs = {"sleep": sleep} if sleep is not None else {}
@@ -170,7 +171,7 @@ def load_deps() -> RouterDeps:
     from app import db
     engine = db.open_engine(db.database_url(fake))
     log = open_request_log(fake=fake, engine=engine)
-    hash_secret = hash_secret_from_env(required=isinstance(log, SQLRequestLog))   # before loading anything slow
+    hash_secret = hash_secret_from_env(required=getattr(log, "persistent", False))   # before loading anything slow
     path = cache_path(fake)
     cache = ResponseCache(path) if path else None
     registry = load_registry()
@@ -179,7 +180,9 @@ def load_deps() -> RouterDeps:
     demo_limiter = DemoLimiter(demo_settings, engine=engine)   # survives restarts and redeploys
     trusted_proxy_hops = trusted_hops_from_env()
     predictor, classifier = load_predictor_checked()
-    return build_deps(predictor, send_fn, registry=registry, config=config, cache=cache, classifier=classifier,
+    deps = build_deps(predictor, send_fn, registry=registry, config=config, cache=cache, classifier=classifier,
                       log=log, fake_models=send_fn if fake else None, hash_secret=hash_secret,
                       demo_settings=demo_settings, demo_limiter=demo_limiter, trusted_proxy_hops=trusted_proxy_hops,
                       engine=engine, key_verifier=fake_verify_key if fake else None)
+    deps.fake_mode = fake
+    return deps

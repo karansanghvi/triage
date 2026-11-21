@@ -194,7 +194,8 @@ def test_stats_leave_small_talk_out_and_count_it_separately():
     chat(http, "Explain how a B-tree splits a node.")
     chat(http, "hi")
     chat(http, "thank you")
-    stats = summarize(deps.log.rows())
+    from sqlalchemy import true
+    stats = deps.log.run(lambda connection: summarize(connection, true()))
     assert stats["requests"] == 1 and stats["small_talk_requests"] == 2
     assert stats["tier_mix"] == {"high": 1.0}
     r = http.get("/v1/stats", headers={"Authorization": f"Bearer {API_KEY}"})

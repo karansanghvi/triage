@@ -26,6 +26,7 @@ import numpy as np
 
 LOG_KIND_ENV, HASH_SECRET_ENV = "TRIAGE_LOG", "TRIAGE_HASH_SECRET"
 VECTOR_FIELDS = ("features", "embedding")          # skipped by reads that don't need them (stats, lookups)
+PRIVATE_FIELDS = ("prompt_hmac",)                  # never returned by an endpoint
 
 
 @dataclass
@@ -97,8 +98,9 @@ class RequestRow:
         return asdict(self)
 
     def public_dict(self) -> dict:
-        """For GET /v1/requests/{id}: everything except the raw vectors; vectors_stored says if they exist."""
-        out = {k: v for k, v in asdict(self).items() if k not in VECTOR_FIELDS}
+        """For GET /v1/requests/{id}: everything except the raw vectors (vectors_stored says if they exist) and
+        prompt_hmac (a fingerprint of the prompt: it's for matching repeats inside Triage, not for callers)."""
+        out = {k: v for k, v in asdict(self).items() if k not in VECTOR_FIELDS and k not in PRIVATE_FIELDS}
         out["vectors_stored"] = self.feature_version is not None or self.embedding_model is not None
         return out
 
@@ -176,54 +178,6 @@ class RequestLog(Protocol):
     def delete_older_than(self, cutoff: str, batch_size: int = 1000) -> int: ...
 
 
-class InMemoryRequestLog:
-    def __init__(self):
-        self._rows, self._by_id, self._labels = [], {}, []
-        self._lock = threading.Lock()
-
-    def write_label(self, label: LabelRow) -> None:
-        with self._lock:
-            self._labels.append(label)
-
-    def labels(self, request_id: Optional[str] = None) -> list:
-        with self._lock:
-            return [l for l in self._labels if request_id is None or l.request_id == request_id]
-
-    def label_usage_since(self, created_at: str) -> tuple:
-        with self._lock:
-            recent = [l for l in self._labels if l.created_at >= created_at]
-        return sum(l.calls for l in recent), sum(l.tokens for l in recent)
-
-    def write(self, row: RequestRow) -> None:
-        with self._lock:
-            self._rows.append(row)
-            self._by_id[row.request_id] = row
-
-    def delete_older_than(self, cutoff: str, batch_size: int = 1000) -> int:
-        with self._lock:
-            old = {r.request_id for r in self._rows if r.timestamp < cutoff}
-            self._rows = [r for r in self._rows if r.request_id not in old]
-            for request_id in old:
-                self._by_id.pop(request_id, None)
-            self._labels = [l for l in self._labels if l.request_id not in old]
-        return len(old)
-
-    @staticmethod
-    def _view(r: RequestRow, include_vectors: bool) -> RequestRow:
-        return r if include_vectors else replace(r, features=None, embedding=None)
-
-    def rows(self, key_id: Optional[str] = None, include_vectors: bool = True,
-             user_id: Optional[str] = None) -> list:
-        with self._lock:
-            return [self._view(r, include_vectors) for r in self._rows
-                    if (key_id is None or r.key_id == key_id) and (user_id is None or r.user_id == user_id)]
-
-    def get(self, request_id: str, include_vectors: bool = True) -> Optional[RequestRow]:
-        with self._lock:
-            r = self._by_id.get(request_id)
-        return None if r is None else self._view(r, include_vectors)
-
-
 # ---------- the database (app/db.py: SQLite locally, Postgres in production) ----------
 
 _JSON = {"attempts", "features"}            # stored as JSON text
@@ -250,6 +204,8 @@ def _from_sql(name, value):
 class SQLRequestLog:
     """The request log in the database (app/db.py). Each write is its own transaction; the engine's pool gives
     every worker thread its own connection. `owns_engine`: close() disposes it (a log opened on its own)."""
+
+    persistent = True                       # outlives the process: prompt HMACs need a fixed TRIAGE_HASH_SECRET
 
     def __init__(self, engine, owns_engine: bool = False):
         from app import db
@@ -335,9 +291,61 @@ class SQLRequestLog:
             calls, tokens = connection.execute(query).one()
         return int(calls), int(tokens)
 
+    def run(self, fn):
+        """fn(connection): read-only queries outside this module (the stats in app/api/usage_sql.py)."""
+        with self.engine.connect() as connection:
+            return fn(connection)
+
     def close(self) -> None:
         if self._owns_engine:
             self.engine.dispose()
+
+
+class InMemoryRequestLog(SQLRequestLog):
+    """For tests (or TRIAGE_LOG=memory): the same SQL log on a private in-memory SQLite database, so every log
+    answers the same SQL queries (the stats endpoints aggregate in SQL). Built with create_all, not the
+    migrations (fast; tests/test_db.py checks the two match). Foreign keys aren't enforced: a log on its own
+    has no users table to point at. One connection is shared by every thread, so each call holds a lock."""
+
+    persistent = False
+
+    def __init__(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.pool import StaticPool
+        from app import db
+        engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+        db.metadata.create_all(engine)
+        super().__init__(engine, owns_engine=True)
+        self._lock = threading.RLock()
+
+    def write(self, row: RequestRow) -> None:
+        with self._lock:
+            super().write(row)
+
+    def delete_older_than(self, cutoff: str, batch_size: int = 1000) -> int:
+        with self._lock:
+            return super().delete_older_than(cutoff, batch_size)
+
+    def _select(self, where=None, include_vectors: bool = True) -> list:
+        with self._lock:
+            return super()._select(where, include_vectors)
+
+    def write_label(self, label: LabelRow) -> None:
+        with self._lock:
+            super().write_label(label)
+
+    def labels(self, request_id: Optional[str] = None) -> list:
+        with self._lock:
+            return super().labels(request_id)
+
+    def label_usage_since(self, created_at: str) -> tuple:
+        with self._lock:
+            return super().label_usage_since(created_at)
+
+    def run(self, fn):
+        """fn(connection) under the lock: the stats queries (app/api/usage_sql.py) go through here."""
+        with self._lock, self.engine.connect() as connection:
+            return fn(connection)
 
 
 class SQLiteRequestLog(SQLRequestLog):

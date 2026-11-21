@@ -3,6 +3,8 @@ import { useAuth } from "@/context/AuthContext"
 import * as account from "@/lib/account"
 import type { AccountChanges, Provider } from "@/lib/account"
 import { TriageError } from "@/lib/errors"
+import * as dashboard from "@/lib/dashboard"
+import type { Range } from "@/lib/dashboard"
 
 export function useAccountApi() {
   const { token, expireSession, updateUser, refreshUser } = useAuth()
@@ -28,6 +30,9 @@ export function useAccountApi() {
       listApiKeys: () => call((t) => account.listApiKeys(t)),
       createApiKey: (name: string) => call((t) => account.createApiKey(t, name)),
       revokeApiKey: (id: string) => call((t) => account.revokeApiKey(t, id)),
+
+      getUsage: (range: Range) => call((t) => dashboard.getAccountUsage(t, range)),
+      listRequests: (cursor?: string | null) => call((t) => dashboard.listAccountRequests(t, cursor)),
 
       // After a change, update the user everywhere (sidebar, chat greeting)
       updateAccount: async (changes: AccountChanges) => {

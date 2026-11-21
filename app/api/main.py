@@ -10,13 +10,14 @@ Endpoints
     POST /v1/chat/completions     OpenAI chat completions, stream or not; model "auto" or a models.yaml name
     GET  /v1/models               "auto" plus every model, with prices
     GET  /v1/stats                savings summary (your key's requests; an admin key sees all)
+    GET  /v1/stats/public         no auth: live aggregates of auto-routed requests (app/api/public_stats.py)
     GET  /v1/requests/{id}        one logged request, only for the key that made it
     GET  /v1/routing-config       the config in use (admin)
     PUT  /v1/routing-config       update quality presets/default and backup models live (admin; not persisted)
 
 Response headers: X-Triage-Request-Id, -Model, -Tier, -Reason, -Fallback, -Cache, -Verified, -Escalated,
 -Check, -P-Low, -P-Medium and -Tau (model "auto" only, 6 decimals), and on non-streaming responses -Cost,
--Strong-Cost and -Saved (including any checks and escalation). A stream's headers are sent once its first token
+-Strong-Cost and -Saved (including any checks and escalation; -Saved for model "auto" only). A stream's headers are sent once its first token
 exists, so model, tier and fallback are real; its cost isn't known yet, so -Cost, -Strong-Cost and -Saved are left
 out (never faked).
 The real figures are in GET /v1/requests/{id} once the stream ends, and in /v1/stats.
@@ -41,6 +42,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import true as sql_true
 from starlette.background import BackgroundTask
 
 from app.api import core
@@ -56,6 +58,7 @@ from app.accounts.limits import AccountLimitError
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.router.small_talk import is_small_talk
 from app.api import maintenance
+from app.api import public_stats, usage_sql
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
@@ -177,7 +180,15 @@ def _apply_costs(row: RequestRow, response, deps, providers=None, prefer=None) -
         row.strong_cost = row.saved = None
         return
     row.strong_cost = strong.reported_cost(response.input_tokens, response.output_tokens)
-    row.saved = row.strong_cost - row.price_as_cost
+    _credit_saving(row)
+
+
+def _credit_saving(row: RequestRow) -> None:
+    """saved = strong_cost - price_as_cost, for model="auto" only: with a named model the caller chose it, so
+    Triage claims no saving (None; the X-Triage-Saved header is then left out). Stats apply the same rule in
+    SQL (app/api/usage_sql.py), so rows logged before it still count right."""
+    row.saved = (row.strong_cost - row.price_as_cost
+                 if row.strong_cost is not None and row.requested_model == "auto" else None)
 
 
 MAX_ATTEMPT_MESSAGE_CHARS = 300
@@ -213,8 +224,7 @@ def _add_truncated_costs(row: RequestRow, attempts) -> None:
         return
     row.cost = (row.cost or 0.0) + sum(r.cost for r in billed)
     row.price_as_cost = (row.price_as_cost or 0.0) + sum(r.reported_cost for r in billed)
-    if row.strong_cost is not None:
-        row.saved = row.strong_cost - row.price_as_cost
+    _credit_saving(row)
 
 
 def _triage_headers(d: core.RouteDecision, cache: str, *, model: Optional[str] = None, tier: Optional[str] = None,
@@ -246,7 +256,7 @@ def _apply_verification(row: RequestRow, first, outcome, deps, providers=None, p
     _apply_costs(row, final, deps, providers, prefer)  # tokens, cache and strong_cost from the served answer
     row.price_as_cost = first.reported_cost + outcome.check_cost + outcome.escalation_cost
     row.cost = first.cost + outcome.check_actual_cost + outcome.escalation_actual_cost
-    row.saved = None if row.strong_cost is None else row.strong_cost - row.price_as_cost
+    _credit_saving(row)
     row.escalated, row.decided_by = outcome.escalated, outcome.decided_by
     row.checker_verdict, row.checker_version = outcome.checker_verdict, outcome.checker_version
     row.escalated_from, row.escalated_to = outcome.escalated_from, outcome.escalated_to
@@ -575,6 +585,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app.state.deps, app.state.auth = deps, auth
     app.state.public = public_from_env() if public is None else public
     app.state.accounts = accounts_from_env() if accounts is None else accounts
+    app.state.public_stats = public_stats.PublicStatsCache()
     origins = cors_origins_from_env() if cors_origins is None else list(cors_origins)
     app.add_middleware(InternalErrorMiddleware)       # first, so it sits inside CORSMiddleware
     if origins:
@@ -964,7 +975,9 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
 
     if app.state.accounts:
         from app.api.account_routes import account_router
+        from app.api.usage_routes import usage_router
         app.include_router(account_router())
+        app.include_router(usage_router(account_caller))
 
     # ----- the free demo -----
 
@@ -1007,13 +1020,30 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     @app.get("/v1/stats")
     async def stats(who: Caller = Depends(caller)):
         # read from the log (survives restarts), without the feature and embedding columns
-        log = app.state.deps.log
+        log, c = app.state.deps.log, usage_sql.c
         if who.kind == "account":              # every request of this account, whichever of its keys made it
-            mine = await anyio.to_thread.run_sync(lambda: log.rows(user_id=who.user_id, include_vectors=False))
-            return {"scope": "your account", **summarize(mine)}
-        mine = await anyio.to_thread.run_sync(lambda: log.rows(None if who.admin else who.key_id,
-                                                               include_vectors=False))
-        return {"scope": "all keys" if who.admin else "your key", **summarize(mine)}
+            scope, where = "your account", c.user_id == who.user_id
+        elif who.admin:
+            scope, where = "all keys", sql_true()
+        else:
+            scope, where = "your key", c.key_id == who.key_id
+        summary = await anyio.to_thread.run_sync(lambda: log.run(lambda connection: summarize(connection, where)))
+        return {"scope": scope, **summary}
+
+    @app.get("/v1/stats/public")
+    async def stats_public(range: Optional[str] = None):
+        """No auth: the Overview tab's live aggregates (app/api/public_stats.py), cached for 5 minutes."""
+        deps = app.state.deps
+        if deps.fake_mode:
+            raise APIError(404, "Public stats aren't served in fake-model mode.", code="not_found")
+        try:
+            range_name = usage_sql.parse_range(range)
+        except usage_sql.RangeError as error:
+            raise bad_request(str(error), "range", "invalid_value") from None
+        now = datetime.now(timezone.utc)
+        result = await anyio.to_thread.run_sync(lambda: app.state.public_stats.get(
+            range_name, lambda: public_stats.compute(deps.log, deps.registry, range_name, now)))
+        return JSONResponse(result, headers={"Cache-Control": f"public, max-age={public_stats.TTL_SECONDS}"})
 
     @app.get("/v1/requests/{request_id}")
     async def get_request(request_id: str, who: Caller = Depends(caller)):
