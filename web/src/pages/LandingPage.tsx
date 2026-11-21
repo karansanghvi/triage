@@ -11,6 +11,7 @@ import ProofStrip from "@/components/landing/ProofStrip";
 import QualityDialDemo from "@/components/landing/QualityDialDemo";
 import Results from "@/components/landing/Results";
 import Security from "@/components/landing/Security";
+import FAQ from "@/components/landing/FAQ";
 
 export default function LandingPage() {
   // Arriving from another page at /#how etc.: the browser looks for the section before React has drawn it, so
@@ -36,6 +37,7 @@ export default function LandingPage() {
             <Results />
             <Security />
             <FinalCTA />
+            <FAQ />
         </main>
         <Footer />
       </div>
