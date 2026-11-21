@@ -23,7 +23,7 @@ function messageFor(err: unknown, fallback: string): string {
 }
 
 const backToLogin = (
-  <Link to="/login" className="text-sm font-medium text-[#60A5FA] hover:text-[#93C5FD]">
+  <Link to="/login" className="inline-flex items-center text-sm font-medium text-[#60A5FA] hover:text-[#93C5FD] max-md:min-h-11 pointer-coarse:min-h-11">
     Back to log in
   </Link>
 )

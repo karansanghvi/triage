@@ -104,7 +104,7 @@ export default function ChatInput({ value, onChange, onSend, quality, onQualityC
           <button
             onClick={() => setShowDial(!showDial)}
             className={cn(
-              "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+              "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors max-md:min-h-11 pointer-coarse:min-h-11",
               showDial ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
             )}
           >
@@ -116,7 +116,7 @@ export default function ChatInput({ value, onChange, onSend, quality, onQualityC
             onClick={onSend}
             disabled={!canSend}
             className={cn(
-              "flex h-9 w-9 items-center justify-center rounded-xl transition-all",
+              "flex h-9 w-9 items-center justify-center rounded-xl transition-all max-md:h-11 pointer-coarse:h-11 max-md:w-11 pointer-coarse:w-11",
               canSend
                 ? "bg-primary text-primary-foreground shadow-lg shadow-primary/30 hover:bg-primary/90"
                 : "cursor-not-allowed bg-muted text-muted-foreground"

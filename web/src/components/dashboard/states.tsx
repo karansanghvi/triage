@@ -5,9 +5,9 @@ import { cn } from "@/lib/utils"
 // Shared by the live tabs (Overview, My usage): buttons, skeleton pieces, the error card and the centered card
 
 export const PRIMARY_BUTTON =
-  "inline-flex h-10 items-center justify-center gap-1.5 rounded-[10px] bg-[#2563EB] px-4 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8] disabled:pointer-events-none disabled:opacity-60"
+  "inline-flex h-10 items-center justify-center gap-1.5 rounded-[10px] bg-[#2563EB] px-4 max-md:min-h-11 pointer-coarse:min-h-11 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8] disabled:pointer-events-none disabled:opacity-60"
 export const SECONDARY_BUTTON =
-  "inline-flex h-10 items-center justify-center gap-1.5 rounded-[10px] border border-[#2A2D3D] bg-[#0E0F15] px-4 text-[13px] font-semibold text-foreground transition-colors hover:bg-[#1A1C26] disabled:pointer-events-none disabled:opacity-60"
+  "inline-flex h-10 items-center justify-center gap-1.5 rounded-[10px] border border-[#2A2D3D] max-md:min-h-11 pointer-coarse:min-h-11 bg-[#0E0F15] px-4 text-[13px] font-semibold text-foreground transition-colors hover:bg-[#1A1C26] disabled:pointer-events-none disabled:opacity-60"
 export const SMALL_BOX = "rounded-xl border border-[#1F2130] bg-[#0A0A0F] px-3.5 py-3"
 
 // A tier nobody reached is left out of tier_mix; the bar wants all three

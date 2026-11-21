@@ -35,7 +35,7 @@ export default function ChatHistory() {
           onClick={handleNew}
           disabled={busy}
           title="New chat"
-          className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 max-md:h-11 max-md:w-11 pointer-coarse:h-11 pointer-coarse:w-11"
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
@@ -135,12 +135,12 @@ function ChatItem({ chat, active, busy, onOpen }: ChatItemProps) {
           onClick={onOpen}
           disabled={busy && !active}
           className={cn(
-            "flex min-w-0 flex-1 items-start gap-2.5 px-3 py-2 text-left disabled:cursor-not-allowed",
+            "flex min-w-0 flex-1 items-start gap-2.5 px-3 py-2 text-left disabled:cursor-not-allowed max-md:min-h-11 pointer-coarse:min-h-11",
             active ? "text-foreground" : "text-muted-foreground hover:text-foreground"
           )}
         >
           <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <div className="min-w-0 flex-1 pr-6">
+          <div className="min-w-0 flex-1 pr-6 pointer-coarse:pr-10">
             <p className="truncate text-sm">{chat.title}</p>
             <p className="text-[11px] text-muted-foreground/70">{relativeTime(chat.updatedAt)}</p>
           </div>
@@ -152,18 +152,18 @@ function ChatItem({ chat, active, busy, onOpen }: ChatItemProps) {
           disabled={busy}
           title="Chat options"
           className={cn(
-            "absolute right-1.5 top-2 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-background hover:text-foreground disabled:hidden",
-            mode === "menu" || active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+            "absolute right-1.5 top-2 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-background hover:text-foreground disabled:hidden pointer-coarse:right-0 pointer-coarse:top-0.5 pointer-coarse:h-11 pointer-coarse:w-11",
+            mode === "menu" || active ? "opacity-100" : "opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100"
           )}
         >
           <MoreHorizontal className="h-4 w-4" />
         </button>
 
         {mode === "menu" && (
-          <div className="absolute right-1.5 top-9 z-20 w-36 overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-xl">
+          <div className="absolute right-1.5 top-9 z-20 w-36 pointer-coarse:top-12 overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-xl">
             <button
               onClick={startRename}
-              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground hover:bg-accent"
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground hover:bg-accent max-md:min-h-11 pointer-coarse:min-h-11"
             >
               <Pencil className="h-3.5 w-3.5" /> Rename
             </button>
@@ -172,7 +172,7 @@ function ChatItem({ chat, active, busy, onOpen }: ChatItemProps) {
                 setMode("idle")
                 setConfirmingDelete(true)
               }}
-              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-destructive hover:bg-destructive/10"
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-destructive hover:bg-destructive/10 max-md:min-h-11 pointer-coarse:min-h-11"
             >
               <Trash2 className="h-3.5 w-3.5" /> Delete
             </button>

@@ -87,7 +87,7 @@ export default function CodeSnippet({ baseUrl = TRIAGE_API_BASE, className }: Co
               aria-selected={tab === name}
               onClick={() => setTab(name)}
               className={cn(
-                "min-h-8 rounded-lg px-3 text-[13px] transition-colors",
+                "min-h-8 rounded-lg px-3 text-[13px] transition-colors max-md:min-h-11 pointer-coarse:min-h-11",
                 tab === name ? "bg-[#1A1C26] text-foreground" : "text-[#8B90A0] hover:text-foreground"
               )}
             >

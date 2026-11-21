@@ -39,7 +39,7 @@ const RTH = "whitespace-nowrap px-2.5 py-2.5 font-medium"
 const RTD = "whitespace-nowrap px-2.5 py-2"
 const PAGE_SIZE = 10
 const PAGE_BUTTON =
-  "inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-[10px] border border-[#1F2130] bg-[#0E0F15] px-2.5 text-[13px] font-medium text-[#C9CDD8] transition-colors hover:bg-[#1A1C26] hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+  "inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-[10px] border border-[#1F2130] max-md:min-h-11 pointer-coarse:min-h-11 max-md:min-w-11 pointer-coarse:min-w-11 bg-[#0E0F15] px-2.5 text-[13px] font-medium text-[#C9CDD8] transition-colors hover:bg-[#1A1C26] hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
 const PAGE_CURRENT = "border-[#2A2D3D] bg-[#1A1C26] text-foreground"
 
 export default function UsagePage() {

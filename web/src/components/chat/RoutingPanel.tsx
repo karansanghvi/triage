@@ -63,10 +63,20 @@ function explain(routing: RoutingInfo): string {
   return `Neither cheaper model was likely enough to answer well (${needed} needed), so Triage used the most powerful model.`
 }
 
+// lg and up: the panel beside the chat. Below lg it's hidden, and the same details open as a bottom sheet
+// when an answer's footer is tapped (ChatPage).
 export default function RoutingPanel({ selected, messages }: RoutingPanelProps) {
   return (
-    <aside className="hidden w-80 shrink-0 flex-col overflow-hidden rounded-2xl border border-border bg-card xl:flex">
-      <div className="border-b border-border px-5 py-4">
+    <aside className="hidden w-80 shrink-0 flex-col overflow-hidden rounded-2xl border border-border bg-card lg:flex">
+      <RoutingDetails selected={selected} messages={messages} />
+    </aside>
+  )
+}
+
+export function RoutingDetails({ selected, messages }: RoutingPanelProps) {
+  return (
+    <>
+      <div className="border-b border-border px-5 py-4 pr-14 lg:pr-5">
         <p className="text-sm font-semibold">How Triage answered</p>
         <p className="mt-0.5 text-xs text-muted-foreground">Triage picks the cheapest model that can answer well.</p>
       </div>
@@ -76,7 +86,7 @@ export default function RoutingPanel({ selected, messages }: RoutingPanelProps) 
       </div>
 
       <SessionTotals messages={messages} />
-    </aside>
+    </>
   )
 }
 

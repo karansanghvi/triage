@@ -67,7 +67,7 @@ export default function ApiKeysPage() {
             <button
                 type="button"
                 onClick={() => setCreating(true)}
-                className="inline-flex h-10 items-center gap-1.5 rounded-[10px] bg-[#2563EB] px-4 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
+                className="inline-flex h-10 items-center gap-1.5 rounded-[10px] bg-[#2563EB] px-4 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8] max-md:min-h-11 pointer-coarse:min-h-11"
             >
                 <Plus className="h-4 w-4" />
                 Create key

@@ -69,7 +69,7 @@ export default function AssistantMessage({ message, selected, onSelect, onRetry 
               <button
                 onClick={onSelect}
                 className={cn(
-                  "group -ml-2 mt-2 flex items-center gap-2 rounded-md px-2 py-1 text-xs transition-colors",
+                  "group -ml-2 mt-2 flex max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md px-2 py-1 text-left text-xs transition-colors [&>span]:whitespace-nowrap max-md:min-h-11 pointer-coarse:min-h-11",
                   selected ? "text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"
                 )}
               >

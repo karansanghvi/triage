@@ -16,7 +16,7 @@ export default function RangeSelector() {
                 aria-pressed={range === value}
                 onClick={() => setRange(value)}
                 className={cn(
-                    "h-9 rounded-[9px] px-3.5 text-[13px] font-medium transition-colors",
+                    "h-9 rounded-[9px] px-3.5 text-[13px] font-medium transition-colors max-md:min-h-11 pointer-coarse:min-h-11",
                     range === value ? "bg-[#1A1C26] text-foreground" : "text-muted-foreground hover:text-foreground"
                 )}
             >

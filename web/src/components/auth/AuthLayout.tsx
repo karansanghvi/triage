@@ -35,7 +35,7 @@ export default function AuthLayout({ title, subtitle, children, footer }: AuthLa
         style={{ background: "radial-gradient(closest-side, rgba(37,99,235,0.30), rgba(37,99,235,0.07) 55%, rgba(7,7,11,0))" }}
       />
 
-      <Link to="/" className="relative inline-flex items-center gap-2.5">
+      <Link to="/" className="relative inline-flex items-center gap-2.5 max-md:min-h-11 pointer-coarse:min-h-11">
         <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#2563EB] shadow-[0_0_40px_rgba(37,99,235,0.5)]">
           <Split className="h-[22px] w-[22px] text-white" />
         </span>

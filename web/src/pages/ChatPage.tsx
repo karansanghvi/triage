@@ -5,7 +5,8 @@ import Welcome from "@/components/chat/Welcome"
 import SuggestionChips from "@/components/chat/SuggestionChips"
 import ChatInput from "@/components/chat/ChatInput"
 import MessageList from "@/components/chat/MessageList"
-import RoutingPanel from "@/components/chat/RoutingPanel"
+import RoutingPanel, { RoutingDetails } from "@/components/chat/RoutingPanel"
+import { Sheet } from "@/components/ui/sheet"
 import { useVisitorName } from "@/hooks/useVisitorName"
 import { useDemoStatus } from "@/context/DemoStatusContext"
 import { useChats } from "@/context/ChatsContext"
@@ -57,6 +58,7 @@ export default function ChatPage() {
   const [input, setInput] = useState("")
   const [quality, setQuality] = useState(DEFAULT_QUALITY)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false) // below lg: the routing details as a bottom sheet
 
   const isEmpty = messages.length === 0
 
@@ -149,6 +151,12 @@ export default function ChatPage() {
     requestAnswer(messages.slice(0, index), activeId, currentMode())
   }
 
+  // Tapping an answer's footer: select it, and below lg (no side panel) open the details as a sheet
+  function selectAnswer(id: string) {
+    setSelectedId(id)
+    if (!window.matchMedia("(min-width: 1024px)").matches) setDetailsOpen(true)
+  }
+
   function handleNewChat() {
     if (busy) return
     setSelectedId(null)
@@ -195,7 +203,7 @@ export default function ChatPage() {
               <button
                 onClick={handleNewChat}
                 disabled={busy}
-                className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 max-md:min-h-11 pointer-coarse:min-h-11"
               >
                 <Plus className="h-3.5 w-3.5" />
                 New chat
@@ -205,7 +213,7 @@ export default function ChatPage() {
               <MessageList
                 messages={messages}
                 selectedId={selectedMessage?.id ?? null}
-                onSelect={setSelectedId}
+                onSelect={selectAnswer}
                 onRetry={handleRetry}
               />
             </div>
@@ -215,6 +223,18 @@ export default function ChatPage() {
       </div>
 
       <RoutingPanel selected={selectedRouting} messages={messages} />
+      <Sheet
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        side="bottom"
+        title="How Triage answered"
+        closeLabel="Close details"
+        className="lg:hidden"
+      >
+        <div className="flex min-h-0 flex-1 flex-col" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+          <RoutingDetails selected={selectedRouting} messages={messages} />
+        </div>
+      </Sheet>
     </div>
   )
 }
