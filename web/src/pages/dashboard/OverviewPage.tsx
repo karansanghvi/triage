@@ -116,6 +116,12 @@ function WaitingView({ stats }: { stats: Waiting }) {
 
 /* ---------- Enough traffic ---------- */
 
+// Answered out of the requests that ran to the end: one the visitor stopped isn't a failure, so it's left out
+function successRate(t: { ok: number; requests: number; stopped: number }): number | null {
+  const finished = t.requests - t.stopped
+  return finished > 0 ? t.ok / finished : null
+}
+
 function LiveView({ stats }: { stats: Live }) {
   const t = stats.totals
   const share = (part: number) => (t.requests > 0 ? part / t.requests : null)
@@ -124,10 +130,14 @@ function LiveView({ stats }: { stats: Live }) {
   return (
     <>
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Requests routed" value={formatCount(t.requests)} note="Small talk not counted" />
+        <StatCard
+          label="Requests routed"
+          value={formatCount(t.requests)}
+          note={t.stopped > 0 ? `Small talk not counted · ${formatCount(t.stopped)} stopped` : "Small talk not counted"}
+        />
         <SpentCard label="Spent" cost={t.cost_usd} requests={t.requests} />
         <SavedCard label="Saved" share={t.saved_share} saved={t.saved_usd} />
-        <StatCard label="Success rate" value={formatPercent(share(t.ok), 1)} note="Requests answered" />
+        <StatCard label="Success rate" value={formatPercent(successRate(t), 1)} note="Requests answered" />
       </div>
 
       <DashCard

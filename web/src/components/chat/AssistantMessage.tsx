@@ -1,6 +1,6 @@
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { ChevronRight, Split, Scissors } from "lucide-react"
+import { ChevronRight, Split, Scissors, Square } from "lucide-react"
 import type { AssistantMessage as AssistantMessageType, Tier } from "@/types/chat"
 import { formatPercent } from "@/lib/format"
 import Usd from "@/components/common/Usd"
@@ -9,6 +9,7 @@ import ErrorCard from "./ErrorCard"
 
 type AssistantMessageProps = {
   message: AssistantMessageType
+  live?: string            // the text that has arrived so far, while this answer streams in
   selected: boolean
   onSelect: () => void
   onRetry?: () => void
@@ -26,7 +27,22 @@ const TIER_SHORT: Record<Tier, string> = {
   high: "Most powerful",
 }
 
-export default function AssistantMessage({ message, selected, onSelect, onRetry }: AssistantMessageProps) {
+// Markdown that is still arriving: an unclosed code fence is closed for display only, so the rest of the answer
+// doesn't flash as code until the closing fence arrives
+function displayable(text: string): string {
+  const fences = text.match(/^\s*```/gm)?.length ?? 0
+  return fences % 2 === 1 ? `${text}\n\`\`\`` : text
+}
+
+function Markdown({ text }: { text: string }) {
+  return (
+    <div className="prose prose-sm prose-invert max-w-none pt-1">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  )
+}
+
+export default function AssistantMessage({ message, live, selected, onSelect, onRetry }: AssistantMessageProps) {
   const routing = message.routing
   const savedShare =
     routing && routing.saved !== null && routing.strongCost ? routing.saved / routing.strongCost : null
@@ -39,8 +55,11 @@ export default function AssistantMessage({ message, selected, onSelect, onRetry 
       </div>
 
       <div className="min-w-0 flex-1">
-        {/* Thinking */}
-        {message.status === "pending" && (
+        {/* Arriving: the text so far */}
+        {message.status === "pending" && live && <Markdown text={displayable(live)} />}
+
+        {/* Thinking (nothing has arrived yet) */}
+        {message.status === "pending" && !live && (
           <div className="flex items-center gap-1.5 py-3">
             <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
             <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
@@ -48,15 +67,21 @@ export default function AssistantMessage({ message, selected, onSelect, onRetry 
           </div>
         )}
 
-        {/* Error */}
+        {/* Error: whatever arrived before it, then the card */}
+        {message.status === "error" && message.content && <Markdown text={displayable(message.content)} />}
         {message.status === "error" && message.error && <ErrorCard error={message.error} onRetry={onRetry} />}
 
         {/* Answer */}
         {message.status === "done" && (
           <>
-            <div className="prose prose-sm prose-invert max-w-none pt-1">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-            </div>
+            {message.content && <Markdown text={message.stopped ? displayable(message.content) : message.content} />}
+
+            {message.stopped && (
+              <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Square className="h-3 w-3" />
+                {message.content ? "Stopped" : "Stopped before the answer started"}
+              </p>
+            )}
 
             {message.truncated && (
               <p className="mt-2 flex items-center gap-1.5 text-xs text-warning">
@@ -78,8 +103,16 @@ export default function AssistantMessage({ message, selected, onSelect, onRetry 
                 <span className="text-muted-foreground/40">·</span>
                 <span>{routing.model}</span>
                 <span className="text-muted-foreground/40">·</span>
-                <Usd value={routing.cost} />
-                {savedShare !== null && savedShare > 0 && (
+                {routing.cost === null ? (
+                  <span>Stopped</span>
+                ) : routing.costEstimated ? (
+                  <span>
+                    ≈ <Usd value={routing.cost} /> (stopped)
+                  </span>
+                ) : (
+                  <Usd value={routing.cost} />
+                )}
+                {!message.stopped && savedShare !== null && savedShare > 0 && (
                   <>
                     <span className="text-muted-foreground/40">·</span>
                     <span className="font-medium text-success">saved {formatPercent(savedShare)}</span>

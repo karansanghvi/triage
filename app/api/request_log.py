@@ -36,7 +36,7 @@ class RequestRow:
     key_id: str                            # first 8 hex characters of the key's SHA-256
     requested_model: str                   # "auto" or a pass-through name
     stream: bool
-    status: str = "ok"                     # ok | error
+    status: str = "ok"                     # ok | error | stopped (the client went away part-way: not a failure)
     http_status: int = 200
     error_kind: Optional[str] = None
     # routing

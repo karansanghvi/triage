@@ -15,7 +15,8 @@ export type RoutingInfo = {
   pMedium: number | null      // same for the medium tier
   tau: number | null          // the quality bar a tier must reach
   reason: string              // Triage's explanation
-  cost: number                // what this answer cost, in dollars
+  cost: number | null         // what this answer cost, in dollars; null: a stopped answer whose cost isn't known
+  costEstimated?: boolean     // the cost is an estimate (a stopped answer: from the text produced so far)
   strongCost: number | null   // what the strongest model would have cost
   saved: number | null        // strongCost - cost
   cacheHit: boolean
@@ -49,6 +50,7 @@ export type AssistantMessage = {
   routing?: RoutingInfo
   error?: ChatError
   truncated?: boolean         // the answer stopped at the length limit
+  stopped?: boolean           // the visitor pressed Stop: content is the part that arrived
 }
 
 export type Message = UserMessage | AssistantMessage

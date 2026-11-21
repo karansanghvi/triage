@@ -104,15 +104,18 @@ def _stream(client, messages, model_id, provider, extra):
             stream_options={"include_usage": True},  # ask for token counts at the end
             **extra,
         )
-        for chunk in chunks:
-            if chunk.choices:
-                piece = chunk.choices[0].delta.content
-                if piece:
-                    yield piece
-                if provider == "openai" and chunk.choices[0].finish_reason:
-                    yield Finish(chunk.choices[0].finish_reason)
-            if chunk.usage:
-                yield _usage_from(chunk.usage)
+        try:
+            for chunk in chunks:
+                if chunk.choices:
+                    piece = chunk.choices[0].delta.content
+                    if piece:
+                        yield piece
+                    if provider == "openai" and chunk.choices[0].finish_reason:
+                        yield Finish(chunk.choices[0].finish_reason)
+                if chunk.usage:
+                    yield _usage_from(chunk.usage)
+        finally:
+            chunks.close()          # stopped early (or done): end the HTTP stream, so the model stops generating
     except openai.APIError as error:
         raise _convert_error(error, provider) from None
 

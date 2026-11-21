@@ -119,11 +119,24 @@ def test_mode_header_on_streams_too(stream):
 
 # ---------- everything else still needs a Triage key ----------
 
-@pytest.mark.parametrize("method, path", [("get", "/v1/models"), ("get", "/v1/stats"),
-                                          ("get", "/v1/requests/chatcmpl-x"), ("get", "/v1/routing-config")])
+@pytest.mark.parametrize("method, path", [("get", "/v1/models"), ("get", "/v1/stats"), ("get", "/v1/routing-config")])
 def test_other_endpoints_still_need_a_key_with_public_on(method, path):
     http, _ = app()
     assert getattr(http, method)(path).status_code == 401
+
+
+def test_without_a_key_only_a_keyless_requests_outcome_and_cost_can_be_read():
+    http, _ = app()
+    demo = chat(http).headers["x-triage-request-id"]
+    keyed = chat(http, BEARER).headers["x-triage-request-id"]
+    body = http.get(f"/v1/requests/{demo}").json()
+    assert body["request_id"] == demo and body["status"] == "ok" and body["price_as_cost"] > 0
+    assert not {"attempts", "key_id", "user_id", "p_low", "p_medium", "prompt_hmac", "mode"} & set(body)
+    assert http.get(f"/v1/requests/{keyed}").status_code == 404           # made with a key: not without one
+    assert http.get("/v1/requests/chatcmpl-x").status_code == 404
+    assert http.get(f"/v1/requests/{keyed}", headers=BEARER).json()["key_id"]   # its own key: everything, as before
+    off, _ = app(public=False)
+    assert off.get("/v1/requests/chatcmpl-x").status_code == 401             # public access off: a key, as before
 
 
 def test_admin_endpoints_still_need_an_admin_key():

@@ -1,7 +1,7 @@
 """Adapter for Google Gemini, using Googl'es own library"""
-import httpx 
-from google import genai 
-from google.genai import errors, types 
+import httpx
+from google import genai
+from google.genai import errors, types
 
 from app.providers.common import (
     ProviderError, RawResult, Usage, kind_from_status, server_or_given_key, split_system,
@@ -42,7 +42,7 @@ def _convert_error(error) -> ProviderError:
 def _usage_from(meta) -> Usage | None:
     if meta is None:
         return None
-    # Thinking tokens are billed as output, so count them as output 
+    # Thinking tokens are billed as output, so count them as output
     thoughts = meta.thoughts_token_count or 0
     output = (meta.candidates_token_count or 0) + thoughts
     return Usage(meta.prompt_token_count or 0, output, thoughts if meta.thoughts_token_count is not None else None)
@@ -52,7 +52,7 @@ def _to_contents(turns):
         types.Content(role=ROLE_MAP[m["role"]], parts=[types.Part(text=m["content"])])
         for m in turns
     ]
-    
+
 def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_key=None, thinking_level=None):
     """api_key: the caller's own key (BYOK); None = GEMINI_API_KEY from the environment.
     thinking_level: "low" etc., sent as ThinkingConfig(thinking_level="LOW"); None = no thinking config (the
@@ -79,22 +79,22 @@ def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_ke
         system_instruction=system_text or None,
         thinking_config=types.ThinkingConfig(thinking_level=thinking_level.upper()) if thinking_level else None,
     )
-    model = model_id.removeprefix("models/") #accept IDs copied from the model list 
+    model = model_id.removeprefix("models/") #accept IDs copied from the model list
     contents = _to_contents(turns)
-    
+
     if stream:
         return _stream(client, model, contents, config)
-    
+
     try:
         response = client.models.generate_content(model=model, contents=contents, config=config)
     except (errors.APIError, httpx.HTTPError) as error:
-        raise _convert_error(error) from None 
-    
-    finish_reason = None 
+        raise _convert_error(error) from None
+
+    finish_reason = None
     if response.candidates and response.candidates[0].finish_reason:
         reason = response.candidates[0].finish_reason
         finish_reason = getattr(reason, "name", str(reason))
-    
+
     return RawResult(
         text=response.text or "",
         usage=_usage_from(response.usage_metadata),
@@ -103,16 +103,19 @@ def send(messages, model_id, *, stream, temperature, max_tokens, timeout, api_ke
 
 def _stream(client, model, contents, config):
     """Yield text pieces as they arrive, then a final Usage"""
-    usage = None 
+    usage = None
+    chunks = client.models.generate_content_stream(model=model, contents=contents, config=config)
     try:
-        for chunk in client.models.generate_content_stream(
-            model=model, contents=contents, config=config
-        ):
+        for chunk in chunks:
             if chunk.text:
                 yield chunk.text
             if chunk.usage_metadata:
-                usage = _usage_from(chunk.usage_metadata) # the last chunk has the totals 
+                usage = _usage_from(chunk.usage_metadata) # the last chunk has the totals
     except (errors.APIError, httpx.HTTPError) as error:
         raise _convert_error(error) from None
+    finally:
+        close = getattr(chunks, "close", None)        # stopped early: end the stream, so the model stops
+        if close is not None:
+            close()
     if usage:
         yield usage

@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowUp, SlidersHorizontal } from "lucide-react"
+import { ArrowUp, SlidersHorizontal, Square } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { QUALITY_MAX, QUALITY_MIN, QUALITY_PRESETS, qualityLabel } from "@/lib/quality"
 
@@ -10,6 +10,8 @@ type ChatInputProps = {
   quality: number
   onQualityChange: (value: number) => void
   disabled?: boolean
+  streaming?: boolean     // an answer is arriving: the send button becomes Stop
+  onStop?: () => void
 }
 
 // Where a value sits along the slider, as a percentage of its width
@@ -17,7 +19,7 @@ function position(value: number): string {
   return `${((value - QUALITY_MIN) / (QUALITY_MAX - QUALITY_MIN)) * 100}%`
 }
 
-export default function ChatInput({ value, onChange, onSend, quality, onQualityChange, disabled = false }: ChatInputProps) {
+export default function ChatInput({ value, onChange, onSend, quality, onQualityChange, disabled = false, streaming = false, onStop }: ChatInputProps) {
   const [showDial, setShowDial] = useState(false)
   const canSend = value.trim().length > 0 && !disabled
 
@@ -112,9 +114,21 @@ export default function ChatInput({ value, onChange, onSend, quality, onQualityC
             Quality: {qualityLabel(quality)}
           </button>
 
+          {streaming && onStop ? (
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label="Stop answer"
+              title="Stop"
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-foreground text-background transition-all hover:bg-foreground/85 max-md:h-11 pointer-coarse:h-11 max-md:w-11 pointer-coarse:w-11"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+            </button>
+          ) : (
           <button
             onClick={onSend}
             disabled={!canSend}
+            aria-label="Send"
             className={cn(
               "flex h-9 w-9 items-center justify-center rounded-xl transition-all max-md:h-11 pointer-coarse:h-11 max-md:w-11 pointer-coarse:w-11",
               canSend
@@ -124,6 +138,7 @@ export default function ChatInput({ value, onChange, onSend, quality, onQualityC
           >
             <ArrowUp className="h-4 w-4" />
           </button>
+          )}
         </div>
       </div>
     </div>

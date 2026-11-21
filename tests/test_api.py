@@ -5,6 +5,7 @@ the async client an httpx.AsyncClient on an ASGITransport. route_and_stream is s
 version in tests/api_helpers.py, so these tests cover the API around it.
 """
 import asyncio
+import json
 
 import httpx
 import openai
@@ -166,10 +167,122 @@ def test_streaming_headers_leave_out_cost_and_report_it_by_request_id(http):
         h = r.headers
     assert TRIAGE_HEADERS <= set(h)
     assert "x-triage-cost" not in h and "x-triage-saved" not in h
-    assert h["x-triage-cache"] == "bypass" and h["content-type"].startswith("text/event-stream")
+    assert h["x-triage-cache"] == "miss" and h["content-type"].startswith("text/event-stream")    # streams are cached too
     assert body.rstrip().endswith("data: [DONE]")
     row = http.get(f"/v1/requests/{h['x-triage-request-id']}", headers=auth()).json()
     assert row["status"] == "ok" and row["price_as_cost"] > 0 and row["saved"] > 0 and row["stream"] is True
+
+
+def stream_chunks(http, body=None, headers=None):
+    """The JSON chunks of a stream (without [DONE]), and its headers."""
+    with http.stream("POST", "/v1/chat/completions", headers=auth() | (headers or {}),
+                     json=body or {"model": "auto", "messages": ASK, "stream": True}) as r:
+        text = "".join(r.iter_text())
+        h = r.headers
+    chunks = [json.loads(line[6:]) for line in text.split("\n") if line.startswith("data: {")]
+    return chunks, h
+
+
+def test_a_stream_carries_the_triage_object_routing_first_cost_at_the_end(http, app_deps):
+    chunks, h = stream_chunks(http)
+    first, last = chunks[0], [c for c in chunks if c["choices"] and c["choices"][0]["finish_reason"]][-1]
+    assert first["choices"][0]["delta"]["role"] == "assistant" and first["triage"]["model"] == "groq-small"
+    assert first["triage"]["tier"] == "medium" and first["triage"]["request_id"] == h["x-triage-request-id"]
+    assert first["triage"]["cost"] is None and first["triage"]["saved"] is None
+    assert first["triage"]["tau"] == pytest.approx(0.86) and first["triage"]["p_low"] == pytest.approx(0.4)
+    assert last["triage"]["cost"] > 0 and last["triage"]["strong_cost"] > last["triage"]["cost"]
+    assert last["triage"]["saved"] == pytest.approx(last["triage"]["strong_cost"] - last["triage"]["cost"])
+    assert [c for c in chunks if "triage" in c] == [first, last]           # only those two
+    # the same figures as the request log and as a non-streaming answer to the same question
+    row = app_deps[1].log.get(h["x-triage-request-id"])
+    assert last["triage"]["cost"] == pytest.approx(row.price_as_cost, abs=1e-8)
+    plain = post(TestClient(make_app(predictor=FakePredictor(0.4, 0.95))[0])).json()["triage"]   # no cache: a fresh answer
+    assert set(plain) == set(last["triage"])
+    assert {k: last["triage"][k] for k in ("model", "tier", "cost", "strong_cost", "saved")} == \
+        {k: plain[k] for k in ("model", "tier", "cost", "strong_cost", "saved")}
+
+
+def test_the_sdk_streams_unchanged_and_exposes_triage(app_deps):
+    chunks = list(sdk(app_deps[0]).chat.completions.create(model="auto", messages=ASK, stream=True))
+    assert "".join(c.choices[0].delta.content or "" for c in chunks) == fake_text("groq-small")   # choices[0] always there
+    assert chunks[0].triage["tier"] == "medium" and chunks[-1].triage["cost"] > 0
+    assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def test_a_named_models_stream_reports_no_saving(http):
+    chunks, _ = stream_chunks(http, {"model": "groq-large", "messages": ASK, "stream": True})
+    assert chunks[-1]["triage"]["cost"] > 0 and chunks[-1]["triage"]["saved"] is None
+
+
+def test_a_stream_that_fails_part_way_sends_no_final_triage(tmp_path):
+    app, _ = make_app({"groq-small": FakeBehavior(fail_after=2)}, predictor=FakePredictor(0.4, 0.95))
+    chunks, _ = stream_chunks(TestClient(app))
+    assert "triage" in chunks[0] and "error" in chunks[-1]
+    assert not [c for c in chunks[1:] if "triage" in c]
+
+
+def cached_app(tmp_path, script=None):
+    return make_app(script, cache=ResponseCache(tmp_path / "c.sqlite3"), predictor=FakePredictor(0.4, 0.95))
+
+
+def stream_text(chunks):
+    return "".join(c["choices"][0]["delta"].get("content") or "" for c in chunks if c.get("choices"))
+
+
+def test_a_repeated_streamed_question_is_served_from_the_cache_as_one_chunk(tmp_path):
+    app, deps = cached_app(tmp_path)
+    http = TestClient(app)
+    first, h1 = stream_chunks(http)
+    again, h2 = stream_chunks(http)
+    assert h1["x-triage-cache"] == "miss" and h2["x-triage-cache"] == "hit"
+    assert stream_text(again) == stream_text(first) == fake_text("groq-small")
+    assert len([c for c in again if c["choices"] and c["choices"][0]["delta"].get("content")]) == 1   # no fake typing
+    assert again[0]["triage"]["cache"] == again[-1]["triage"]["cache"] == "hit"
+    assert again[-1]["triage"]["cost"] == 0 and again[-1]["triage"]["saved"] > 0
+    assert len(deps.fake_models.calls) == 1                                  # the second never reached a model
+    row = deps.log.get(h2["x-triage-request-id"])
+    assert row.cache_hit is True and row.training_eligible is False and row.price_as_cost == 0
+
+
+def test_streamed_and_plain_requests_share_the_cache(tmp_path):
+    app, deps = cached_app(tmp_path)
+    http = TestClient(app)
+    assert post(http).headers["x-triage-cache"] == "miss"
+    chunks, h = stream_chunks(http)
+    assert h["x-triage-cache"] == "hit" and stream_text(chunks) == fake_text("groq-small")
+    app2, deps2 = cached_app(tmp_path / "other")
+    http2 = TestClient(app2)
+    stream_chunks(http2)
+    assert post(http2).headers["x-triage-cache"] == "hit"
+
+
+def test_a_stream_that_fails_part_way_is_not_cached(tmp_path):
+    app, deps = cached_app(tmp_path, {"groq-small": FakeBehavior(fail_after=2)})
+    http = TestClient(app)
+    stream_chunks(http)
+    deps.fake_models.script.clear()                                          # the model works again
+    chunks, h = stream_chunks(http)
+    assert h["x-triage-cache"] == "miss" and stream_text(chunks) == fake_text("groq-small")
+
+
+def test_a_cached_stream_doesnt_count_as_a_healthy_provider(tmp_path):
+    app, deps = cached_app(tmp_path)
+    http = TestClient(app)
+    stream_chunks(http)
+    successes = []
+    deps.client.breaker.record_success = lambda key: successes.append(key)
+    stream_chunks(http)
+    assert successes == []
+
+
+def test_a_stream_above_temperature_zero_bypasses_the_cache(tmp_path):
+    app, deps = cached_app(tmp_path)
+    http = TestClient(app)
+    body = {"model": "auto", "messages": ASK, "stream": True, "temperature": 0.7}
+    for _ in range(2):
+        chunks, h = stream_chunks(http, body)
+        assert h["x-triage-cache"] == "bypass" and chunks[-1]["triage"]["cache"] == "bypass"
+    assert len(deps.fake_models.calls) == 2
 
 
 def test_fallback_header_and_model(tmp_path):

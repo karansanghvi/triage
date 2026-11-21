@@ -85,10 +85,12 @@ class RoutedStream:
     response  None until pieces is exhausted, then the full Response (tokens, costs, cached, latency)
     """
 
-    def __init__(self, decision: RouteDecision, pieces: AsyncIterator[str], response_fn: Callable[[], Optional[Response]]):
+    def __init__(self, decision: RouteDecision, pieces: AsyncIterator[str], response_fn: Callable[[], Optional[Response]],
+                 cached: bool = False):
         self.decision = decision
         self.pieces = pieces
         self._response_fn = response_fn
+        self.cached = cached          # served from the response cache (known as soon as the answer has begun)
 
     @property
     def response(self) -> Optional[Response]:
@@ -98,7 +100,7 @@ class RoutedStream:
     def from_stream(cls, decision: RouteDecision, stream) -> "RoutedStream":
         """Wrap a ReliableResult.response from send(stream=True): its pieces are pulled in a worker thread;
         its .response appears once they run out."""
-        return cls(decision, aiter_in_thread(stream), lambda: stream.response)
+        return cls(decision, aiter_in_thread(stream), lambda: stream.response, bool(getattr(stream, "cached", False)))
 
     @classmethod
     def from_response(cls, decision: RouteDecision, response: Response) -> "RoutedStream":
@@ -116,13 +118,25 @@ _END = object()
 
 
 async def aiter_in_thread(iterable) -> AsyncIterator:
-    """Iterate a blocking (sync) iterable from async code, one next() per worker-thread call."""
+    """Iterate a blocking (sync) iterable from async code, one next() per worker-thread call.
+
+    Stopped early (the client went away, or the caller closed this generator): the iterator is closed, so a
+    provider's stream ends and the model stops generating. No next() is running then: anyio waits for a worker
+    thread's call to return before it delivers a cancellation."""
     iterator = iter(iterable)
-    while True:
-        item = await anyio.to_thread.run_sync(next, iterator, _END)
-        if item is _END:
-            return
-        yield item
+    finished = False
+    try:
+        while True:
+            item = await anyio.to_thread.run_sync(next, iterator, _END)
+            if item is _END:
+                finished = True
+                return
+            yield item
+    finally:                               # closing an iterator that already ended or raised does nothing
+        close = getattr(iterator, "close", None)
+        if not finished and close is not None:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(close)
 
 
 async def route_and_stream(messages: list, *, tau: Optional[float], task_type: Optional[str], model: str = "auto",

@@ -85,10 +85,9 @@ def test_key_ignores_dict_order_and_int_vs_float():
     assert make_cache_key(reordered, MODEL, 0, 1024) == make_cache_key(MESSAGES, MODEL, 0.0, 1024)
 
 
-def test_only_temperature_zero_non_streaming_is_cacheable():
-    assert is_cacheable(0, stream=False)
-    assert not is_cacheable(0.7, stream=False)
-    assert not is_cacheable(0, stream=True)
+def test_only_temperature_zero_is_cacheable_streamed_or_not():
+    assert is_cacheable(0, stream=False) and is_cacheable(0, stream=True)
+    assert not is_cacheable(0.7, stream=False) and not is_cacheable(0.7, stream=True)
 
 
 def test_higher_temperature_always_calls_the_model(cache):

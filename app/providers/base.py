@@ -131,17 +131,25 @@ class StreamingResponse:
         started_at = time.perf_counter()  # the request really starts here
         pieces, usage, first_piece_at, finish_reason = [], None, None, None
 
-        for event in self._events:
-            if isinstance(event, Usage):
-                usage = event
-                continue
-            if isinstance(event, Finish):
-                finish_reason = event.reason
-                continue
-            if first_piece_at is None:
-                first_piece_at = time.perf_counter()
-            pieces.append(event)
-            yield event
+        try:
+            for event in self._events:
+                if isinstance(event, Usage):
+                    usage = event
+                    continue
+                if isinstance(event, Finish):
+                    finish_reason = event.reason
+                    continue
+                if first_piece_at is None:
+                    first_piece_at = time.perf_counter()
+                pieces.append(event)
+                yield event
+        except GeneratorExit:
+            # Closed before the end (the caller stopped): a for loop doesn't close what it loops over, so close the
+            # provider's events here, and its stream ends (the model stops generating) instead of waiting for GC
+            close = getattr(self._events, "close", None)
+            if close is not None:
+                close()
+            raise
 
         finished_at = time.perf_counter()
         ttft_ms = None if first_piece_at is None else (first_piece_at - started_at) * 1000

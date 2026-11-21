@@ -17,7 +17,7 @@ def engine_at(tmp_path, name="t.sqlite3"):
 
 def test_opening_a_new_sqlite_file_creates_the_schema_at_the_latest_revision(tmp_path):
     engine = engine_at(tmp_path)
-    assert db.current_revision(engine) == db.head_revision() == "0009"
+    assert db.current_revision(engine) == db.head_revision() == "0010"
     raw = sqlite3.connect(tmp_path / "t.sqlite3")
     tables = {r[0] for r in raw.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"requests", "labels", "visitor_day", "demo_day", "users", "sessions", "auth_attempts",
@@ -90,7 +90,7 @@ def test_a_database_behind_the_code_is_refused_unless_sqlite(tmp_path, monkeypat
     engine = engine_at(tmp_path)
     monkeypatch.setattr(db, "head_revision", lambda: "9999")
     monkeypatch.setattr(engine.dialect, "name", "postgresql")
-    with pytest.raises(RuntimeError, match="revision 0009, this code needs 9999.*alembic upgrade head"):
+    with pytest.raises(RuntimeError, match="revision 0010, this code needs 9999.*alembic upgrade head"):
         db.migrate_or_check(engine)
     engine.dispose()
 
@@ -222,3 +222,22 @@ def test_upgrading_from_0002_keeps_every_request_row(tmp_path):
     indexes = {r[1] for r in raw.execute("PRAGMA index_list(requests)")}
     assert {"idx_requests_request_id", "idx_requests_key_id", "idx_requests_timestamp", "idx_requests_user_id"} <= indexes
     again.dispose()
+
+
+def test_0010_turns_old_client_disconnected_errors_into_stopped(tmp_path):
+    from alembic import command
+    from app.api.request_log import SQLRequestLog
+    engine = engine_at(tmp_path)
+    with engine.begin() as connection:
+        command.downgrade(db.alembic_config(connection), "0009")
+    log = SQLRequestLog(engine)
+    for rid, status, kind in (("stop", "error", "client_disconnected"), ("fail", "error", "provider_timeout"),
+                              ("fine", "ok", None)):
+        log.write(RequestRow(request_id=rid, timestamp="2026-11-01T00:00:00+00:00", key_id="k", requested_model="auto",
+                             stream=True, status=status, error_kind=kind))
+    db.upgrade(engine)
+    assert {r.request_id: r.status for r in log.rows()} == {"stop": "stopped", "fail": "error", "fine": "ok"}
+    with engine.begin() as connection:
+        command.downgrade(db.alembic_config(connection), "0009")
+    assert {r.request_id: r.status for r in log.rows()}["stop"] == "error"
+    engine.dispose()

@@ -12,7 +12,8 @@ Endpoints
     GET  /v1/models               "auto" plus every model, with prices
     GET  /v1/stats                savings summary (your key's requests; an admin key sees all)
     GET  /v1/stats/public         no auth: live aggregates of auto-routed requests (app/api/public_stats.py)
-    GET  /v1/requests/{id}        one logged request, only for the key that made it
+    GET  /v1/requests/{id}        one logged request, only for the key that made it (public access: a keyless
+                                  request's outcome and cost, by its id, without a key)
     GET  /v1/routing-config       the config in use (admin)
     PUT  /v1/routing-config       update quality presets/default and backup models live (admin; not persisted)
 
@@ -20,8 +21,9 @@ Response headers: X-Triage-Request-Id, -Model, -Tier, -Reason, -Fallback, -Cache
 -Check, -P-Low, -P-Medium and -Tau (model "auto" only, 6 decimals), and on non-streaming responses -Cost,
 -Strong-Cost and -Saved (including any checks and escalation; -Saved for model "auto" only). A stream's headers are sent once its first token
 exists, so model, tier and fallback are real; its cost isn't known yet, so -Cost, -Strong-Cost and -Saved are left
-out (never faked).
-The real figures are in GET /v1/requests/{id} once the stream ends, and in /v1/stats.
+out (never faked). The stream itself carries the same "triage" object as a non-streaming response: routing only on
+its first chunk, complete (with cost and savings) on its finish_reason chunk. The figures are also in
+GET /v1/requests/{id} once the stream ends, and in /v1/stats.
 """
 import asyncio
 import contextlib
@@ -34,7 +36,7 @@ import time
 import traceback
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 import anyio
@@ -63,7 +65,7 @@ from app.api import public_stats, usage_sql
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
 from app.cache import is_cacheable
-from app.providers.base import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
+from app.providers.base import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE, _build_response
 from app.providers.common import ProviderError
 from app.providers.keys import KeyContext, redact
 from app.reliability import AllModelsFailed, ModelNotAllowed
@@ -184,6 +186,20 @@ def _apply_costs(row: RequestRow, response, deps, providers=None, prefer=None) -
     _credit_saving(row)
 
 
+def _estimate_stopped_cost(row: RequestRow, decision, routed, text: str, messages: list, deps, providers, prefer,
+                           started: float) -> None:
+    """A stream the client stopped part-way: the provider bills what it generated, but sends no token counts for
+    an unfinished stream. Estimate them from the text (about 4 characters a token, tokens_estimated=True), price
+    them like any answer, and add any billed truncated attempts. A cache hit cost nothing; a model that sent no
+    text yet is charged for the prompt only."""
+    if routed.cached or decision.model not in deps.registry:
+        return
+    latency_ms = (time.perf_counter() - started) * 1000
+    estimate = _build_response(deps.registry[decision.model], text, None, messages, latency_ms, finish_reason="stopped")
+    _apply_costs(row, estimate, deps, providers, prefer)
+    _add_truncated_costs(row, decision.attempts)
+
+
 def _credit_saving(row: RequestRow) -> None:
     """saved = strong_cost - price_as_cost, for model="auto" only: with a named model the caller chose it, so
     Triage claims no saving (None; the X-Triage-Saved header is then left out). Stats apply the same rule in
@@ -279,6 +295,19 @@ def _verified_reason(d: core.RouteDecision, outcome) -> str:
     return f"{d.reason}; verified: kept {d.tier} ({outcome.decided_by}: {outcome.checker_verdict})"
 
 
+def _cost_headers(row: RequestRow) -> dict:
+    """X-Triage-Cost, -Strong-Cost and -Saved for a finished request; each is left out when unknown, never faked
+    (strong cost: no baseline model reachable; saved: a named model, see _credit_saving)."""
+    headers = {}
+    if row.price_as_cost is not None:
+        headers["X-Triage-Cost"] = _money(row.price_as_cost)
+    if row.strong_cost is not None:
+        headers["X-Triage-Strong-Cost"] = _money(row.strong_cost)
+    if row.saved is not None:
+        headers["X-Triage-Saved"] = _money(row.saved)
+    return headers
+
+
 def triage_body(headers: dict) -> dict:
     """The top-level "triage" object of a non-streaming response: the same values as its X-Triage-* headers (built
     from them, so the two can't disagree), numbers as JSON numbers. A header that was left out is null.
@@ -304,12 +333,32 @@ def _usage(response) -> dict:
             "total_tokens": response.input_tokens + response.output_tokens}
 
 
-def _chunk(request_id: str, created: int, model: str, delta: dict, finish=None, usage=None, choices=True) -> str:
+def _chunk(request_id: str, created: int, model: str, delta: dict, finish=None, usage=None, choices=True,
+           triage=None) -> str:
+    """One SSE chunk. triage: the same object as a non-streaming response's "triage", on chunks that keep their
+    choices[0], so clients that read chunk.choices[0] never meet an empty list (the SDKs keep unknown fields)."""
     body = {"id": request_id, "object": "chat.completion.chunk", "created": created, "model": model,
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}] if choices else []}
     if usage is not None:
         body["usage"] = usage
+    if triage is not None:
+        body["triage"] = triage
     return f"data: {json.dumps(body, ensure_ascii=False)}\n\n"
+
+
+def keyless_lookup_minutes_from_env(environ=os.environ) -> float:
+    """TRIAGE_KEYLESS_LOOKUP_MINUTES: how long a keyless request's cost can be read back without a key (default 10).
+    A number above 0; anything else refuses to start."""
+    raw = (environ.get(KEYLESS_LOOKUP_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_KEYLESS_LOOKUP_MINUTES
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0
+    if not value > 0:
+        raise RuntimeError(f"refusing to start: {KEYLESS_LOOKUP_ENV} must be a number of minutes above 0")
+    return value
 
 
 def _not_allowed_message(error: ModelNotAllowed) -> str:
@@ -506,6 +555,13 @@ def request_mode(who: Optional[Caller], keys) -> str:
 
 # key_id in the request log for requests without a Triage key (no visitor identity goes into the log)
 PUBLIC_KEY_IDS = {"demo": "demo", "byok": "public"}
+# What GET /v1/requests/{id} returns without a key, for a request made without one: its outcome and cost, nothing
+# about the prompt, the routing probabilities or the attempts. Only while the request is recent: the web chat asks
+# within seconds of a Stop; after that window, the id is treated like an unknown one.
+KEYLESS_LOOKUP_ENV = "TRIAGE_KEYLESS_LOOKUP_MINUTES"
+DEFAULT_KEYLESS_LOOKUP_MINUTES = 10
+REQUEST_COST_FIELDS = ("request_id", "status", "error_kind", "stream", "served_model", "tier", "cache_hit",
+                       "tokens_estimated", "input_tokens", "output_tokens", "price_as_cost", "strong_cost", "saved")
 _KEY_HEADER_LIST = ", ".join(PROVIDER_KEY_HEADERS.values())
 
 
@@ -588,6 +644,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
     app.state.accounts = accounts_from_env() if accounts is None else accounts
     app.state.public_stats = public_stats.PublicStatsCache()
     app.state.public_stats_threshold = public_stats.threshold_from_env()   # refuses a bad value
+    app.state.keyless_lookup_minutes = keyless_lookup_minutes_from_env()   # refuses a bad value
     origins = cors_origins_from_env() if cors_origins is None else list(cors_origins)
     app.add_middleware(InternalErrorMiddleware)       # first, so it sits inside CORSMiddleware
     if origins:
@@ -918,14 +975,9 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 _apply_costs(row, response, deps, baseline_providers, prefer)
             _add_truncated_costs(row, decision.attempts)
             await finish()
-            cache = "hit" if response.cached else ("miss" if is_cacheable(temperature, False) else "bypass")
+            cache = "hit" if response.cached else ("miss" if is_cacheable(temperature) else "bypass")
             headers = _triage_headers(decision, cache, model=served_model, tier=served_tier, reason=reason,
-                                      verified=verify, escalated=escalated, check=check) | {
-                "X-Triage-Cost": _money(row.price_as_cost)}
-            if row.strong_cost is not None:    # unknown when no baseline model is reachable: left out, not faked
-                headers["X-Triage-Strong-Cost"] = _money(row.strong_cost)
-            if row.saved is not None:
-                headers["X-Triage-Saved"] = _money(row.saved)
+                                      verified=verify, escalated=escalated, check=check) | _cost_headers(row)
             headers |= request.state.triage_headers
             completion = {"id": request_id, "object": "chat.completion", "created": created, "model": served_model,
                           "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
@@ -935,6 +987,10 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
 
         include_usage = bool(body.stream_options and body.stream_options.include_usage)
         streamed = []                                         # the answer, in memory only, for a background label
+        # The routing is known now (the first token exists); cost only at the end. The first chunk carries the
+        # "triage" object without cost, the finish_reason chunk the complete one, as a non-streaming response has
+        cache_status = "hit" if routed.cached else ("miss" if is_cacheable(temperature) else "bypass")
+        start_headers = _triage_headers(decision, cache_status) | request.state.triage_headers
 
         async def events():
             try:
@@ -942,10 +998,18 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                     yield event
             finally:
                 with anyio.CancelScope(shield=True):           # a disconnect cancels the stream; still log it
-                    await finish("error", 499, "client_disconnected")    # no-op if the row was already written
+                    if not logged:
+                        # The client went away (the web chat's Stop): end the provider's stream so the model
+                        # stops generating, and record what the answer cost so far as an estimate
+                        await routed.pieces.aclose()
+                        _estimate_stopped_cost(row, decision, routed, "".join(streamed), messages, deps,
+                                               baseline_providers, prefer, started)
+                    # Not a failure: its own outcome, counted apart from errors in every stat
+                    await finish("stopped", 499, "client_disconnected")    # no-op if the row was already written
 
         async def stream_events():
-            yield _chunk(request_id, created, decision.model, {"role": "assistant", "content": ""})
+            yield _chunk(request_id, created, decision.model, {"role": "assistant", "content": ""},
+                         triage=triage_body(start_headers))
             try:
                 async for piece in routed.pieces:
                     streamed.append(piece)
@@ -961,7 +1025,8 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             _apply_costs(row, response, deps, baseline_providers, prefer)
             _add_truncated_costs(row, decision.attempts)
             await finish()
-            yield _chunk(request_id, created, decision.model, {}, finish=(response and response.finish_reason) or "stop")
+            yield _chunk(request_id, created, decision.model, {}, finish=(response and response.finish_reason) or "stop",
+                         triage=triage_body(start_headers | _cost_headers(row)))
             if include_usage and response is not None:
                 yield _chunk(request_id, created, decision.model, None, usage=_usage(response), choices=False)
             yield "data: [DONE]\n\n"
@@ -971,8 +1036,7 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
                 await deps.labeler.run(deps, row, messages, "".join(streamed) if row.status == "ok" else None)
 
         return StreamingResponse(events(), media_type="text/event-stream",
-                                 headers=_triage_headers(decision, "bypass") | {"Cache-Control": "no-cache"}
-                                 | request.state.triage_headers,
+                                 headers=start_headers | {"Cache-Control": "no-cache"},
                                  background=BackgroundTask(stream_background))
 
     if app.state.accounts:
@@ -1049,7 +1113,19 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         return JSONResponse(result, headers={"Cache-Control": f"public, max-age={public_stats.TTL_SECONDS}"})
 
     @app.get("/v1/requests/{request_id}")
-    async def get_request(request_id: str, who: Caller = Depends(caller)):
+    async def get_request(request_id: str, authorization: Optional[str] = Header(None)):
+        """A logged request, for the key (or account) that made it. Public access on, and no key sent: only a
+        request made without a key (the demo or public BYOK), only while it's recent (TRIAGE_KEYLESS_LOOKUP_MINUTES,
+        default 10), and only its outcome and cost (REQUEST_COST_FIELDS), so the web chat can show what a stopped
+        answer cost. Request ids are random UUIDs: unguessable."""
+        if authorization is None and app.state.public:
+            row = await anyio.to_thread.run_sync(lambda: app.state.deps.log.get(request_id, include_vectors=False))
+            oldest = (datetime.now(timezone.utc) - timedelta(minutes=app.state.keyless_lookup_minutes)).isoformat()
+            if (row is None or row.user_id is not None or row.key_id not in PUBLIC_KEY_IDS.values()
+                    or row.timestamp < oldest):                # too old: the same 404 as an unknown id
+                raise APIError(404, f"No request {request_id!r} without a key.", param="request_id", code="not_found")
+            return {name: getattr(row, name) for name in REQUEST_COST_FIELDS}
+        who = await caller(authorization)
         row = await anyio.to_thread.run_sync(lambda: app.state.deps.log.get(request_id, include_vectors=False))
         owner = (row.user_id == who.user_id) if (row is not None and who.kind == "account") else \
             (row is not None and row.user_id is None and row.key_id == who.key_id)

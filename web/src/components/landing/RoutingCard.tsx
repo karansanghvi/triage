@@ -7,26 +7,31 @@ type Scene = {
   probs: string
   result: string
   winner: 0 | 1 | 2 // which model node lights up
+  saving: number // % saved vs the most powerful model (0: it was needed). Illustrative, but in line with the
+  // benchmark: always using the cheapest model costs about 91% less, the mid-range one about 61% less
 }
 
 const SCENES: Scene[] = [
   {
     prompt: "What is 15% of 80?",
     probs: "Cheapest 92% likely to answer well · needed 86%",
-    result: "Cheapest model answered · saved 75%",
+    result: "Needed the cheapest model",
     winner: 0,
+    saving: 90,
   },
   {
     prompt: "Explain how a hash map works",
     probs: "Cheapest 45% · Mid-range 88% · needed 86%",
-    result: "Mid-range model answered · saved 50%",
+    result: "Needed the mid-range model",
     winner: 1,
+    saving: 60,
   },
   {
     prompt: "Implement an LRU cache with per-key TTL",
     probs: "Cheapest 28% · Mid-range 72% · needed 86%",
     result: "Needed the most powerful model",
     winner: 2,
+    saving: 0,
   },
 ]
 
@@ -64,12 +69,22 @@ export default function RoutingCard() {
       aria-label="Example: Triage sends each prompt to the cheapest model that can answer it well."
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
-      className="relative h-[460px] w-full max-w-[500px] rounded-[28px] border border-[#1F2130] bg-gradient-to-b from-[#12131A]/95 to-[#0A0A0F]/95 shadow-[0_30px_120px_rgba(37,99,235,0.18)]"
+      className="relative h-[528px] w-full max-w-[500px] rounded-[28px] border border-[#1F2130] bg-gradient-to-b from-[#12131A]/95 to-[#0A0A0F]/95 shadow-[0_30px_120px_rgba(37,99,235,0.18)] sm:h-[492px]"
     >
       <div aria-hidden="true">
         {/* Connecting lines */}
-        <svg viewBox="0 0 500 460" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
-          <path d="M250 112 L250 168" fill="none" stroke="#3B82F6" strokeWidth="2" className="triage-flow" />
+        <svg
+          viewBox="0 0 500 460"
+          preserveAspectRatio="none"
+          className="absolute inset-x-0 top-0 h-[460px] w-full"
+        >
+          <path
+            d="M250 112 L250 168"
+            fill="none"
+            stroke="#3B82F6"
+            strokeWidth="2"
+            className="triage-flow"
+          />
           {BRANCHES.map((d, i) => {
             const active = i === scene.winner
             return (
@@ -79,59 +94,89 @@ export default function RoutingCard() {
                 fill="none"
                 stroke={active ? "#3B82F6" : "#1F2130"}
                 strokeWidth={active ? 2.5 : 1.5}
-                className={cn("transition-[stroke] duration-500", active && "triage-flow")}
+                className={cn(
+                  "transition-[stroke] duration-500",
+                  active && "triage-flow"
+                )}
               />
             )
           })}
         </svg>
 
         {/* Incoming prompt */}
-        <div className="absolute left-1/2 top-10 flex w-[82%] -translate-x-1/2 items-center gap-3 rounded-[14px] border border-[#2A2D3D] bg-[#0E0F15] px-4 py-3.5">
-          <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#8B90A0]">Prompt</span>
-          <span key={sceneIndex} className="animate-in fade-in truncate text-sm duration-500">
+        <div className="absolute top-10 left-1/2 flex w-[82%] -translate-x-1/2 items-center gap-3 rounded-[14px] border border-[#2A2D3D] bg-[#0E0F15] px-4 py-3.5">
+          <span className="shrink-0 text-[11px] font-semibold tracking-[0.08em] text-[#8B90A0] uppercase">
+            Prompt
+          </span>
+          <span
+            key={sceneIndex}
+            className="animate-in truncate text-sm duration-500 fade-in"
+          >
             {scene.prompt}
           </span>
         </div>
 
         {/* Triage node */}
-        <div className="absolute left-1/2 top-[168px] w-[64%] -translate-x-1/2 rounded-2xl border border-[#60A5FA]/45 bg-[#2563EB]/12 px-4 py-3.5 text-center shadow-[0_0_40px_rgba(37,99,235,0.25)]">
+        <div className="absolute top-[168px] left-1/2 w-[64%] -translate-x-1/2 rounded-2xl border border-[#60A5FA]/45 bg-[#2563EB]/12 px-4 py-3.5 text-center shadow-[0_0_40px_rgba(37,99,235,0.25)]">
           <div className="flex items-center justify-center gap-2">
             <Split className="h-4 w-4 text-[#93C5FD]" />
             <span className="text-sm font-semibold">Triage</span>
           </div>
-          <p key={sceneIndex} className="animate-in fade-in mt-1.5 text-xs text-[#A7ACBA] duration-500">
+          <p
+            key={sceneIndex}
+            className="mt-1.5 animate-in text-xs text-[#A7ACBA] duration-500 fade-in"
+          >
             {scene.probs}
           </p>
         </div>
 
-        {/* Three models */}
-        <div className="absolute inset-x-0 top-[352px] grid grid-cols-3 gap-2.5 px-4">
-          {MODELS.map((m, i) => {
-            const active = i === scene.winner
-            return (
-              <div
-                key={m.tier}
-                className={cn(
-                  "rounded-[14px] border px-2 py-3 text-center transition-all duration-500",
-                  active
-                    ? "border-[#60A5FA]/70 bg-[#2563EB]/16 opacity-100 shadow-[0_0_30px_rgba(37,99,235,0.35)]"
-                    : "border-[#1F2130] bg-[#0E0F15] opacity-55"
-                )}
-              >
-                <p className={cn("text-xs font-semibold", m.color)}>{m.tier}</p>
-                <p className="mt-0.5 text-[11px] text-[#A7ACBA]">{m.model}</p>
-              </div>
-            )
-          })}
-        </div>
+        {/* Three models, then the result under them (in flow, so it clears boxes that wrap on a phone) */}
+        <div className="absolute inset-x-0 top-[352px] px-4">
+          <div className="grid grid-cols-3 gap-2.5">
+            {MODELS.map((m, i) => {
+              const active = i === scene.winner
+              return (
+                <div
+                  key={m.tier}
+                  className={cn(
+                    "rounded-[14px] border px-2 py-3 text-center transition-all duration-500",
+                    active
+                      ? "border-[#60A5FA]/70 bg-[#2563EB]/16 opacity-100 shadow-[0_0_30px_rgba(37,99,235,0.35)]"
+                      : "border-[#1F2130] bg-[#0E0F15] opacity-55"
+                  )}
+                >
+                  <p className={cn("text-xs font-semibold", m.color)}>
+                    {m.tier}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-[#A7ACBA]">{m.model}</p>
+                </div>
+              )
+            })}
+          </div>
 
-        {/* Result */}
-        <p
-          key={`result-${sceneIndex}`}
-          className="animate-in fade-in absolute inset-x-0 bottom-[22px] text-center text-[13px] text-[#A7ACBA] duration-500"
-        >
-          {scene.result}
-        </p>
+          {/* Result, then the outcome once the chosen model has lit up */}
+          <div key={`result-${sceneIndex}`} className="mt-4 text-center">
+            <p className="animate-in text-[13px] text-[#A7ACBA] duration-500 fade-in">
+              {scene.result}
+            </p>
+            <p
+              className={cn(
+                "mt-1 animate-in text-[13px] duration-500 fade-in motion-reduce:animate-none",
+                scene.saving > 0
+                  ? "font-medium text-[#4ADE80]"
+                  : "text-[#8B90A0]"
+              )}
+              style={{
+                animationDelay: "450ms",
+                animationFillMode: "backwards",
+              }}
+            >
+              {scene.saving > 0
+                ? `Saved ${scene.saving}% vs the most powerful model`
+                : "No savings: this one needed the most powerful model"}
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   )

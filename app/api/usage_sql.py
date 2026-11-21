@@ -108,16 +108,19 @@ def count(connection, where) -> int:
 def totals(connection, where) -> dict:
     """Counts and money. cost_usd: every priced request. strong_model_cost_usd, saved_usd, saved_share: only the
     credited ones (credited_requests; see the savings rule), so saved_usd is not strong - cost_usd when named
-    models are in `where`. fallback_rate: among requests whose fallback is known (a model was tried)."""
+    models are in `where`. fallback_rate: among requests whose fallback is known (a model was tried).
+    requests = ok + errors + stopped: a stopped request (the client went away part-way) isn't an error, but its
+    estimated cost is in the money like any other priced request."""
     credited = _credited()
     found = connection.execute(select(
-        func.count(), _count_if(c.status == "ok"), _count_if(c.stream.is_(True)),
+        func.count(), _count_if(c.status == "ok"), _count_if(c.status == "stopped"), _count_if(c.stream.is_(True)),
         _count_if(c.cache_hit.is_(True)), _count_if(c.fell_back.is_(True)), _count_if(c.fell_back.isnot(None)),
         _count_if(_priced()), _sum_if(_priced(), c.price_as_cost),
         _count_if(credited), _sum_if(credited, c.strong_cost), _sum_if(credited, c.price_as_cost),
     ).select_from(requests_table).where(where)).one()
-    requests, ok, streams, cache_hits, fallbacks, tried, priced, cost, credited_n, strong, credited_cost = found
-    return {"requests": int(requests), "ok": int(ok), "errors": int(requests) - int(ok), "streams": int(streams),
+    requests, ok, stopped, streams, cache_hits, fallbacks, tried, priced, cost, credited_n, strong, credited_cost = found
+    return {"requests": int(requests), "ok": int(ok), "errors": int(requests) - int(ok) - int(stopped),
+            "stopped": int(stopped), "streams": int(streams),
             "cache_hits": int(cache_hits), "fallbacks": int(fallbacks),
             "fallback_rate": round(int(fallbacks) / int(tried), SHARE_DIGITS) if tried else None,
             "priced_requests": int(priced), "cost_usd": _money(cost), "credited_requests": int(credited_n),
@@ -134,7 +137,7 @@ def shares(connection, where, column) -> dict:
 
 def errors_by_kind(connection, where) -> dict:
     kind = func.coalesce(c.error_kind, "unknown")
-    found = connection.execute(select(kind, func.count()).where(and_(where, c.status != "ok")).group_by(kind)).all()
+    found = connection.execute(select(kind, func.count()).where(and_(where, c.status == "error")).group_by(kind)).all()
     return {k: int(n) for k, n in sorted(found)}
 
 

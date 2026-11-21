@@ -16,7 +16,8 @@ def summarize(connection, where) -> dict:
     totals = usage_sql.totals(connection, counted)
     small_talk = usage_sql.count(connection, and_(where, usage_sql.c.routed_by == "small_talk"))
     return {
-        "requests": totals["requests"], "ok": totals["ok"], "errors": totals["errors"], "streams": totals["streams"],
+        "requests": totals["requests"], "ok": totals["ok"], "errors": totals["errors"], "stopped": totals["stopped"],
+        "streams": totals["streams"],
         "priced_requests": totals["priced_requests"], "cost_usd": totals["cost_usd"],
         "credited_requests": totals["credited_requests"],
         "strong_model_cost_usd": totals["strong_model_cost_usd"], "saved_usd": totals["saved_usd"],
