@@ -1,11 +1,14 @@
-"""GET /healthz: is this server ready to route requests?
+"""GET /healthz (liveness) and GET /readyz (readiness).
 
-Ready means the classifier and the embedding model are loaded in this process (checked on every call: it's free),
-and the database answered `SELECT 1` within DB_TIMEOUT seconds. The database result is cached for DB_TTL seconds:
-the host's health checks come every few seconds, and without the cache each one would be a database round trip
-(keeping a serverless database awake) and a brief network blip would flip the server to unhealthy and back.
+/healthz: the classifier and the embedding model are loaded in this process. It never touches the database, so
+Docker's healthcheck and uptime monitors (every 30 seconds or so) can't keep a serverless database awake: Neon
+scales to zero after 5 idle minutes, and an always-awake compute would use more than the Free plan's CU-hours.
 
-Never calls a model provider, and never returns anything but status words (no URLs, versions or errors).
+/readyz: the same, plus the database answered `SELECT 1` within DB_TIMEOUT seconds. For the deploy smoke test and
+manual checks only; each call can wake the database. A result is reused for DB_TTL seconds, so a burst of checks
+runs one query.
+
+Neither calls a model provider, and neither returns anything but status words (no URLs, versions or errors).
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ from typing import Callable, Optional
 
 from sqlalchemy import text
 
-DB_TTL = 60.0       # seconds a database result is reused
+DB_TTL = 10.0       # seconds a /readyz database result is reused
 DB_TIMEOUT = 2.0    # seconds the database gets to answer
 
 
@@ -81,15 +84,22 @@ def model_status(deps) -> tuple[bool, bool]:
     return True, is_loaded()
 
 
-def health_report(deps, db_cache: Optional[DbHealthCache]) -> tuple[int, dict]:
-    """(HTTP status, body). 200 only when everything is ready."""
+def liveness_report(deps) -> tuple[int, dict]:
+    """/healthz: (HTTP status, body). 200 when the classifier and embedding model are loaded. No database."""
     classifier, embeddings = model_status(deps)
-    database = db_cache.status().ok if db_cache is not None else False
-    ready = classifier and embeddings and database
+    alive = classifier and embeddings
     body = {
-        "status": "ok" if ready else "unavailable",
+        "status": "ok" if alive else "unavailable",
         "classifier": "ready" if classifier else "not loaded",
         "embedding_model": "ready" if embeddings else "not loaded",
-        "database": "ok" if database else "unreachable",
     }
-    return (200 if ready else 503), body
+    return (200 if alive else 503), body
+
+
+def readiness_report(deps, db_cache: Optional[DbHealthCache]) -> tuple[int, dict]:
+    """/readyz: (HTTP status, body). 200 only when the models are loaded and the database answered."""
+    code, body = liveness_report(deps)
+    database = db_cache.status().ok if db_cache is not None else False
+    ready = code == 200 and database
+    return (200 if ready else 503), {**body, "status": "ok" if ready else "unavailable",
+                                     "database": "ok" if database else "unreachable"}

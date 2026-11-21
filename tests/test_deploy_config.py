@@ -52,7 +52,7 @@ def test_both_services_restart_log_with_limits_and_the_api_is_health_checked():
         assert service["restart"] == "unless-stopped", name
         assert service["logging"]["options"] == {"max-size": "10m", "max-file": "3"}, name
     check = " ".join(COMPOSE["services"]["api"]["healthcheck"]["test"])
-    assert "/healthz" in check
+    assert "/healthz" in check and "/readyz" not in check       # liveness only: never wakes the database
     assert COMPOSE["services"]["caddy"]["depends_on"]["api"]["condition"] == "service_healthy"
 
 

@@ -217,12 +217,14 @@ What runs:
   outside: only Caddy can talk to it, over Docker's private network.
 - **Caddy**: the only thing listening on 80 and 443. It gets and renews the certificate, redirects HTTP to HTTPS,
   streams answers through as they arrive, and writes no access log.
-- **Health check:** `GET /healthz` returns 200 when the classifier and embedding model are loaded and the database
-  answered `SELECT 1` within 2 seconds, else 503. The database result is cached for 60 seconds. Docker checks it
-  every 30 seconds; Caddy starts only once the API is healthy.
-
-  A check every 60 seconds counts as database activity, so Neon's compute won't scale to zero while the API runs
-  (Neon suspends after 5 idle minutes by default).
+- **Health checks:** two endpoints, neither needing a key and both returning status words only.
+  - `GET /healthz` (liveness): 200 once the classifier and embedding model are loaded, else 503. It **never touches
+    the database**. Docker checks it every 30 seconds, and Caddy starts only once it passes. Point any uptime
+    monitor here.
+  - `GET /readyz` (readiness): the same, plus `SELECT 1` on the database within 2 seconds. A result is reused for
+    10 seconds. Use it for the smoke test and manual checks only: **never point a monitor at `/readyz`**, since every
+    check can wake Neon (section 3). The first check after Neon has slept can take a second longer than usual, and
+    occasionally a 503; check again.
 - **Restarts and logs:** both containers restart unless you stop them, including after a reboot. Each keeps at most
   3 log files of 10 MB.
 
@@ -309,7 +311,8 @@ Check it after the first deploy:
 
 ## 10. Smoke test after each deploy
 
-- [ ] `curl -s https://api.gettriage.dev/healthz` returns `"status": "ok"`; `docker compose ps` shows the API healthy.
+- [ ] `curl -s https://api.gettriage.dev/readyz` returns `"status": "ok"` with `"database": "ok"`;
+      `docker compose ps` shows the API healthy.
 - [ ] `docker compose logs api`: no "refusing to start", no warnings about the email sender or logo.
 - [ ] `http://api.gettriage.dev` redirects to https, and the certificate is valid.
 - [ ] Website loads; refresh `/case-study`, `/chat` and `/settings/api-keys` directly: each loads (no 404).
