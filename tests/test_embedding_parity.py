@@ -184,3 +184,24 @@ def test_the_server_never_imports_torch_or_transformers():
     result = subprocess.run([sys.executable, "-c", code], cwd=PROJECT_ROOT, capture_output=True, text=True,
                             env={**__import__("os").environ, "HF_HUB_OFFLINE": "1"})
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_onnxruntime_telemetry_is_off_before_it_loads():
+    """onnxruntime's official builds send telemetry to Microsoft by default; ORT_DISABLE_TELEMETRY=1 must be set
+    before it initializes. A fresh process that only imports the server's modules has it set, even if the
+    environment said otherwise, and onnxruntime isn't loaded before the encoder needs it."""
+    import os
+    import subprocess
+    import sys
+    code = ("import os, sys; import app.api.main; from app.router import embeddings; "
+            "assert os.environ['ORT_DISABLE_TELEMETRY'] == '1'; "
+            "assert 'onnxruntime' not in sys.modules or os.environ['ORT_DISABLE_TELEMETRY'] == '1'; "
+            "embeddings.embed_one('hi'); print('ok')")
+    env = {**os.environ, "HF_HUB_OFFLINE": "1", "ORT_DISABLE_TELEMETRY": "0"}
+    result = subprocess.run([sys.executable, "-c", code], cwd=PROJECT_ROOT, capture_output=True, text=True, env=env)
+    assert result.returncode == 0 and "ok" in result.stdout, result.stdout + result.stderr
+    assert "telemetry" not in result.stderr.lower()
+
+
+def test_the_image_turns_telemetry_off_too():
+    assert "ORT_DISABLE_TELEMETRY=1" in (PROJECT_ROOT / "Dockerfile").read_text()

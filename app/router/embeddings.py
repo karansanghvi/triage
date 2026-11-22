@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse 
 import json 
+import os
 import time 
 from functools import lru_cache
 from pathlib import Path
@@ -57,6 +58,12 @@ LIVE_BATCH_SIZE = 4     # live requests: a long prompt's chunks go through a few
 CHUNK_MARGIN = 16   # tokens kept free in each chunk (see chunk_text)
 THREADS_ENV = "TRIAGE_EMBEDDING_THREADS"
 
+# onnxruntime's official builds send usage telemetry to Microsoft by default (its Privacy.md). This turns all of it
+# off (no uploader, no events, no device identifier) and must be set before onnxruntime first loads, so it is set
+# here, before this module ever imports it. Forced, not a default: the privacy policy says Triage shares nothing
+# with anyone beyond the model providers. The Dockerfile sets it too.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+
 
 class EmbeddingModelMissing(RuntimeError):
     """The model files aren't in the Hugging Face cache and downloading is off (a deployed server)"""
@@ -65,7 +72,6 @@ class EmbeddingModelMissing(RuntimeError):
 def model_file(filename: str, name: str = MODEL_NAME, revision: str = MODEL_REVISION) -> str:
     """Local path of one model file at `revision`, from the Hugging Face cache (downloaded first unless
     HF_HUB_OFFLINE=1). Missing: EmbeddingModelMissing, naming the fetch script."""
-    import os
     from huggingface_hub import hf_hub_download
     try:
         return hf_hub_download(name, filename, revision=revision)
@@ -80,7 +86,6 @@ def model_file(filename: str, name: str = MODEL_NAME, revision: str = MODEL_REVI
 def embedding_threads(default: int = 1) -> int:
     """TRIAGE_EMBEDDING_THREADS (default 1): onnxruntime's threads for the model. One request's embedding takes
     milliseconds either way, and each extra thread keeps its own working memory. Bad values raise ValueError."""
-    import os
     raw = os.environ.get(THREADS_ENV, str(default)).strip() or str(default)
     try:
         threads = int(raw)
@@ -96,8 +101,10 @@ class MiniLMEncoder:
     onnxruntime on the CPU, fp32, TRIAGE_EMBEDDING_THREADS threads."""
 
     def __init__(self, name: str = MODEL_NAME, revision: str = MODEL_REVISION, threads: int | None = None):
+        os.environ["ORT_DISABLE_TELEMETRY"] = "1"          # in case something reset it after this module loaded
         import onnxruntime as ort
         from tokenizers import Tokenizer
+        ort.disable_telemetry_events()
         onnx_path = model_file(ONNX_FILE, name, revision)
         tokenizer_path = model_file(TOKENIZER_FILE, name, revision)
         self.max_seq_length = MAX_SEQ_LENGTH

@@ -30,8 +30,9 @@ RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin tria
     && mkdir -p /app/data/cache && chown -R triage:triage /app/data
 USER triage
 
-# Never download at runtime; small memory footprint (DEPLOY.md, "Memory"); routing among the providers on this host
+# Never download at runtime; no onnxruntime telemetry to Microsoft (on by default in its builds); small memory footprint (DEPLOY.md, "Memory"); routing among the providers on this host
 ENV HF_HUB_OFFLINE=1 \
+    ORT_DISABLE_TELEMETRY=1 \
     MALLOC_ARENA_MAX=2 \
     TRIAGE_EMBEDDING_THREADS=1 \
     TRIAGE_SERVER_PROVIDERS=groq,gemini
