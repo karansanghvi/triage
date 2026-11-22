@@ -13,6 +13,8 @@ import { useChats } from "@/context/ChatsContext"
 import { useAuth } from "@/context/AuthContext"
 import { isUsableKey, useProviderKeys } from "@/context/ProviderKeysContext"
 import { fetchStoppedCost, streamChat } from "@/lib/api"
+import { server } from "@/lib/server"
+import { isLongPrompt } from "@/lib/wake"
 import { TriageError } from "@/lib/errors"
 import { DEFAULT_QUALITY } from "@/lib/quality"
 import { PROVIDERS, type ProviderKey } from "@/lib/account"
@@ -90,7 +92,10 @@ export default function ChatPage() {
   // Sends a conversation to Triage and fills in the answer
   async function requestAnswer(history: Message[], chatId: string | null, mode: SendMode) {
     const pendingId = crypto.randomUUID()
-    const pending: AssistantMessage = { id: pendingId, role: "assistant", content: "", status: "pending" }
+    const pending: AssistantMessage = {
+      id: pendingId, role: "assistant", content: "", status: "pending",
+      ...(isLongPrompt(history) ? { longPrompt: true } : {}),
+    }
 
     // Passing null starts a new chat; keep its id so the answer lands in the same chat
     const id = updateMessages(chatId, () => [...history, pending])
@@ -118,6 +123,11 @@ export default function ChatPage() {
       )
 
     try {
+      // The API may be asleep (it sleeps when idle): wait until it answers, while the answer shows it's waking up
+      if (!(await server.ensureAwake(controller.signal))) {
+        if (controller.signal.aborted) throw new DOMException("Stopped while the server was waking up", "AbortError")
+        throw new TriageError("server_unreachable", "The server didn't wake up. Please try again in a minute.")
+      }
       const result = await streamChat(history, quality, { sessionToken }, {
         signal: controller.signal,
         onStart: (routing, demo) => {

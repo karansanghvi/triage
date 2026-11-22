@@ -51,6 +51,7 @@ export type AssistantMessage = {
   error?: ChatError
   truncated?: boolean         // the answer stopped at the length limit
   stopped?: boolean           // the visitor pressed Stop: content is the part that arrived
+  longPrompt?: boolean        // a long message: the pending answer says routing it can take a while
 }
 
 export type Message = UserMessage | AssistantMessage
