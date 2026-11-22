@@ -502,8 +502,9 @@ Keep them in your host's secret settings (the server's `.env`, see [DEPLOY.md](D
 
 ### Deploying
 
-Production runs in Docker on one small server (a Google Cloud e2-micro or an Oracle Cloud ARM VM; the image builds
-for x86_64 and ARM), with Caddy for HTTPS: the whole setup, every variable, updates and rollback are in
+Production runs in Docker on one small server (a Google Cloud e2-micro or an Oracle Cloud ARM VM), with Caddy for
+HTTPS. GitHub Actions builds and tests the image for x86_64 and ARM on every push to `main` and publishes it to
+GitHub's container registry; the server only pulls it. The whole setup, every variable, updates and rollback are in
 [DEPLOY.md](DEPLOY.md). What any host needs:
 
 1. Install exactly the tested versions: `pip install -r requirements.lock` on Linux (every package pinned; only

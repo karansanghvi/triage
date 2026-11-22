@@ -2,7 +2,8 @@
 
 | Piece | Where | Config in this repo |
 |---|---|---|
-| API (FastAPI) | One small free-tier VM, Ubuntu 24.04 and Docker: **Google Cloud e2-micro** (x86_64, 1 GB) or **Oracle Cloud Ampere A1** (ARM, 3 GB). The same image builds for both | `Dockerfile`, `docker-compose.yml`, `deploy/` |
+| API (FastAPI) | One small free-tier VM, Ubuntu 24.04 and Docker: **Google Cloud e2-micro** (x86_64, 1 GB) or **Oracle Cloud Ampere A1** (ARM, 3 GB). It pulls a ready-made image; it never builds | `Dockerfile`, `docker-compose.yml`, `deploy/` |
+| API image | GitHub Actions builds and tests it for amd64 and arm64 on every push to `main`, and publishes `ghcr.io/karansanghvi/triage-api:<commit SHA>` (and `:main`) | `.github/workflows/image.yml`, `deploy/smoke_test_image.sh` |
 | HTTPS | Caddy on the same VM, automatic Let's Encrypt certificates for `api.gettriage.dev` | `deploy/Caddyfile` |
 | Database | Neon Postgres (pooled connection for the app, direct for migrations) | `migrations/` (Alembic) |
 | Website (React) | Vercel, root directory `web/` | `web/vercel.json` |
@@ -35,15 +36,21 @@ From Google's [Free Tier page](https://docs.cloud.google.com/free/docs/free-clou
   "standard" is named as free, and the console may default to a different type.
 - **1 GB of outbound data a month** from North America (excluding China and Australia). Answers streamed to
   visitors, prompts sent to Groq and Gemini, and Neon queries all count. Beyond 1 GB it's billed, so check
-  Billing > Reports after launch.
-- **Not confirmed from Google's pages:** whether the VM's external IPv4 address is free. Check the
-  [VPC network pricing](https://cloud.google.com/vpc/network-pricing) page (IP addresses) before creating the VM.
+  Billing > Reports after launch. Pulling images is inbound data.
+
+> **The external IPv4 address is not free.** The Free Tier page doesn't list it. Google's
+> [VPC network pricing](https://cloud.google.com/vpc/network-pricing) page (External IP address pricing, checked
+> 2026-11-22) charges "$0.005 / 1 hour" for "Static and ephemeral IP addresses in use on standard VM instances", and
+> says "Both static and ephemeral IP addresses assigned to standard VM instances are offered with a free tier. This
+> free usage is limited to one hour per month per account." So a VM with an external IP all month costs about
+> **$3.65 a month** (730 hours × $0.005, less the free hour). The VM, disk and the first 1 GB of egress are free.
 
 The machine: e2-micro has 2 vCPUs sharing a quarter of a core (it can burst briefly) and 1 GB of memory
 ([machine types](https://docs.cloud.google.com/compute/docs/general-purpose-machines), E2 shared-core). That's
-enough for Triage's single worker, with two settings: a swap file (section 2C) and `TRIAGE_API_MEM_LIMIT=640m` in
-`.env` (section 4). Most prompts embed in milliseconds; a very long one (18,000 characters, 9 chunks) took about 1 to
-2.6 seconds on a full laptop core and will take several times that on a quarter of a core.
+enough for Triage's single worker, with `TRIAGE_API_MEM_LIMIT=640m` in `.env` (section 4) and a swap file as a
+safety net (section 2C). The VM never builds the image: it pulls the one GitHub Actions built (section 6).
+Most prompts embed in milliseconds; a very long one (18,000 characters, 9 chunks) took about 1 to 2.6 seconds on a
+full laptop core and will take several times that on a quarter of a core.
 
 ### 1B. Oracle Cloud Ampere A1: stay inside Always Free
 
@@ -88,8 +95,8 @@ Do 2A or 2B for your host, then 2C on either.
      **Standard persistent disk**, 30 GB at most.
    - Your **SSH public key** (no password login).
    - Firewall: allow HTTP and HTTPS traffic.
-2. **External IP:** *to be filled in* (ephemeral or reserved static; check the pricing note in section 1A first).
-   DNS will point at it.
+2. **External IP:** *to be filled in* (ephemeral or reserved static; either costs about $3.65 a month, section 1A).
+   DNS will point at it, so a reserved static address survives recreating the VM.
 3. **Open UDP 443 (HTTP/3):** *to be filled in.* The HTTP/HTTPS checkboxes open TCP 80 and 443; add a VPC firewall
    rule for UDP 443 with the same target. Keep SSH (TCP 22), ideally limited to your own IP.
 4. Ubuntu's own firewall is off on Google's images, so nothing else to open. Docker adds its own rules for the
@@ -160,9 +167,10 @@ Do 2A or 2B for your host, then 2C on either.
    docker run --rm hello-world
    ```
 
-4. **Swap file** (needed on the 1 GB e2-micro, harmless on Oracle). The running stack fits in 1 GB, but an update
-   builds the new image while the old one still runs, and that build needs a few hundred MB more (section 7).
-   Without swap the kernel would kill something; with it the build is just slower:
+4. **Swap file** (recommended on the 1 GB e2-micro, harmless on Oracle). The running stack fits in 1 GB and updates
+   only pull an image, so normally nothing swaps. It's the safety net for a memory spike, and it's what makes the
+   fallback of building on the server (`deploy/update.sh --build`, section 6) possible: a build needs a few hundred
+   MB more while the old stack still runs (section 7). Without swap the kernel would kill something:
 
    ```bash
    sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
@@ -173,8 +181,8 @@ Do 2A or 2B for your host, then 2C on either.
    swapon --show && free -m
    ```
 
-   2 GB is the recommendation: comfortably more than a build needs on top of the running stack, and a small share
-   of the 30 GB disk. Low swappiness keeps the API itself in memory during normal running.
+   2 GB is the recommendation: enough for the build fallback on top of the running stack, and a small share of the
+   30 GB disk. Low swappiness keeps the API itself in memory during normal running.
 
 ## 3. Neon (database)
 
@@ -318,10 +326,11 @@ cp deploy/.env.example .env && chmod 600 .env && nano .env      # section 4
 ./deploy/update.sh
 ```
 
-`deploy/update.sh` builds the image for the VM's own architecture (several minutes the first time: it downloads
-and installs every package and the embedding model; on e2-micro set up the swap file first, section 2C), starts the
-API and Caddy, and waits until `/healthz` reports healthy. On a 1 GB VM, put `TRIAGE_API_MEM_LIMIT=640m` in `.env`
-before the first run.
+Before the first run, `main` must have a published image (section 6: GitHub Actions builds one on every push to
+`main`, and the package must be public). On a 1 GB VM, put `TRIAGE_API_MEM_LIMIT=640m` in `.env` first.
+
+`deploy/update.sh` pulls the image for `main`'s latest commit (Docker picks the VM's architecture from the
+multi-architecture image), starts the API and Caddy, and waits until `/healthz` reports healthy.
 
 Then point DNS at the VM: at your DNS provider, add an **A record** `api` (for `api.gettriage.dev`) with the VM's
 reserved public IP. Once it resolves (`dig +short api.gettriage.dev`), Caddy gets its certificate by itself within a
@@ -329,7 +338,7 @@ minute; `docker compose logs caddy` shows "certificate obtained successfully".
 
 What runs:
 
-- **The API container** (`Dockerfile`, the same for `linux/amd64` and `linux/arm64`): every package from
+- **The API container** (`Dockerfile`, built by GitHub Actions for `linux/amd64` and `linux/arm64`): every package from
   `requirements.lock` at the exact tested version (no torch: the embedding model runs on onnxruntime), the embedding
   model's ONNX file and tokenizer baked in at build time from one pinned revision, and the network never used for
   models at runtime (`HF_HUB_OFFLINE=1`). It runs as a plain user on a read-only filesystem (only the response cache's volume is
@@ -352,30 +361,66 @@ What runs:
 
 ## 6. Updating and rolling back
 
-**Update:**
+### How images are built
+
+On every push to `main`, `.github/workflows/image.yml` builds the API image on two native GitHub runners
+(`ubuntu-24.04` for amd64, `ubuntu-24.04-arm` for arm64). Each one is checked by `deploy/smoke_test_image.sh` before
+anything is pushed:
+- **Offline model check:** with networking off, the embedding model loads from the image and returns a vector.
+  onnxruntime telemetry is off, torch isn't installed, and the image runs as uid 10001.
+- **Startup smoke test:** run like compose runs it, with fake models and a throwaway SQLite database. `/healthz` and
+  `/readyz` report ok, a short and an 18,000-character prompt are routed and answered, and the logs show no
+  traceback.
+
+Then the two are joined into one image, `ghcr.io/karansanghvi/triage-api:<full commit SHA>`, and `:main` moves to
+it. A failed check means no image for that commit, so nothing broken can reach the server. Public repositories get
+these runners and the registry free.
+
+**Once, after the first run:** on GitHub, open the `triage-api` package (your profile > Packages), then Package
+settings > Change visibility > **Public**, so the server can pull without a login. New packages start private;
+`deploy/update.sh` tells you if the registry refuses the pull.
+
+You can run the same checks on any image yourself: `deploy/smoke_test_image.sh <image>`.
+
+### Update
 
 ```bash
 cd ~/triage && ./deploy/update.sh
 ```
 
-It checks out `main`, runs `git pull`, builds an image tagged with the new commit, restarts, and waits for a healthy
-API. Then it deletes old images to keep the disk from filling up: it keeps the image now running and the one before
-it (for rollback), removes every other `triage-api` image, and prunes unused layers and build cache
-(`docker image prune`, `docker builder prune`).
+It checks out `main` and pulls, then waits until the image for that exact commit exists (usually a few minutes after
+the push; it gives up after 30 minutes, `WAIT_MINUTES` to change). It checks that the image's label names that
+commit, restarts with it, and waits for a healthy API. Then it deletes this image repository's other local images,
+keeping the one now running and the one before it, and prunes unused layers. Any older image can be pulled again.
 
-**Roll back** to the previous image, without rebuilding:
+If two pushes land close together, the workflow builds the newest and may skip the one in between. That commit then
+has no image; `update.sh` always deploys the newest, so this only matters for a rollback to that exact commit.
+
+**Fallback, building on the server** (GitHub Actions down, or a fork without it):
 
 ```bash
-cd ~/triage && ./deploy/rollback.sh
+cd ~/triage && ./deploy/update.sh --build
 ```
 
-It switches to the previous image and checks out that commit (so the compose file and Caddyfile match). The next
-`./deploy/update.sh` goes back to `main`.
+It builds the image locally from the checked-out `main`, under the same name, and deploys it. On a 1 GB VM this
+needs the swap file (section 2C), and the first build takes several minutes.
+
+### Roll back
+
+```bash
+cd ~/triage && ./deploy/rollback.sh              # the previous image
+cd ~/triage && ./deploy/rollback.sh <commit>     # any earlier commit on main that has an image
+```
+
+It uses the local image or pulls it again, checks out that commit (so the compose file and Caddyfile match), and
+restarts. The next `./deploy/update.sh` goes back to `main`. Rollbacks work for commits from this setup onward;
+earlier commits' compose files expect locally built images.
 
 **Database changes don't roll back by themselves.** Each start runs `alembic upgrade head`, which only moves forward.
-If the release you're undoing added a migration, first downgrade the database while the new image is still running:
-`docker compose exec api alembic downgrade -1`, then roll back. Most releases add no migration
-(`git diff <old>..<new> -- migrations/versions` is empty).
+`rollback.sh` compares the newest migration in the running commit with the target's. If they differ, it stops and
+prints the command to run first, with the newer image still running (it has the way down):
+`docker compose exec api alembic downgrade <target's revision>`. Then run `./deploy/rollback.sh <commit>
+--migrations-done`. Most releases add no migration.
 
 Useful commands: `docker compose ps`, `docker compose logs -f api`, `docker compose restart api`, `df -h /`.
 
@@ -413,10 +458,10 @@ It fits, without much room. Two settings make it safe:
 - **`TRIAGE_API_MEM_LIMIT=640m`** in `.env`: the API stays well under it (checked: the amd64 stack served the long
   prompts under a 640m cap with no out-of-memory kill), and if something ever runs away, Docker restarts the API
   instead of the whole VM starving. The default, 1536m, is for a 3 GB VM.
-- **A 2 GB swap file** (section 2C). An update builds the new image while the old stack still runs: `pip install`
-  (184 MB) and the build's offline model check (261 MB), plus BuildKit itself, on top of the 800 MB or so already in
-  use. That's over 1 GB for a few minutes, so without swap the kernel would kill something. With swap (and
-  `vm.swappiness=10`) the build is just slower, and the running API stays in memory.
+- **A 2 GB swap file** (section 2C). Updates only pull an image, so this is a safety net. It's what makes the
+  build fallback (`deploy/update.sh --build`) possible: a build runs `pip install` (184 MB) and the offline model
+  check (261 MB), plus BuildKit itself, on top of the 800 MB or so already in use. That's over 1 GB for a few
+  minutes. With swap (and `vm.swappiness=10`) the build is just slower, and the running API stays in memory.
 
 **On a 3 GB VM (Oracle):** the stack is about 14% of memory, and about 25% with Ubuntu, Oracle's agent and Docker.
 That's above the 20% idle line, but with less margin than with torch: see section 1B.
@@ -458,6 +503,8 @@ Check it after the first deploy:
 
 ## 10. Smoke test after each deploy
 
+- [ ] GitHub Actions: the Image workflow for the deployed commit is green (both architectures tested), and
+      `docker compose ps` shows `ghcr.io/karansanghvi/triage-api:<that commit>` running.
 - [ ] `curl -s https://api.gettriage.dev/readyz` returns `"status": "ok"` with `"database": "ok"`;
       `docker compose ps` shows the API healthy.
 - [ ] `docker compose logs api`: no "refusing to start", no warnings about the email sender or logo.
