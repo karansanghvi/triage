@@ -2,7 +2,7 @@
 
 | Piece | Where | Config in this repo |
 |---|---|---|
-| API (FastAPI) | One Oracle Cloud **Always Free** VM: Ampere A1 (ARM), Ubuntu, Docker | `Dockerfile`, `docker-compose.yml`, `deploy/` |
+| API (FastAPI) | One small free-tier VM, Ubuntu 24.04 and Docker: **Google Cloud e2-micro** (x86_64, 1 GB) or **Oracle Cloud Ampere A1** (ARM, 3 GB). The same image builds for both | `Dockerfile`, `docker-compose.yml`, `deploy/` |
 | HTTPS | Caddy on the same VM, automatic Let's Encrypt certificates for `api.gettriage.dev` | `deploy/Caddyfile` |
 | Database | Neon Postgres (pooled connection for the app, direct for migrations) | `migrations/` (Alembic) |
 | Website (React) | Vercel, root directory `web/` | `web/vercel.json` |
@@ -13,7 +13,39 @@ in the Vercel dashboard.
 
 ---
 
-## 1. Oracle Cloud: stay inside Always Free
+## 1. Pick a host
+
+Triage runs on either; everything after section 2 is the same for both.
+
+| | Google Cloud e2-micro (1A) | Oracle Cloud Ampere A1 (1B) |
+|---|---|---|
+| Architecture | x86_64 (`linux/amd64`) | ARM (`linux/arm64`) |
+| Memory | 1 GB: fits with a swap file (sections 2C and 7) | 3 GB: comfortable |
+| CPU | 2 shared vCPUs, about a quarter of a core sustained | 1 OCPU, dedicated |
+| Free outbound data | 1 GB a month | 10 TB a month |
+| Main risk | Memory is tight; very long prompts are slow to embed | Going over the allowance disables every A1 instance |
+
+### 1A. Google Cloud e2-micro: stay inside the Free Tier
+
+From Google's [Free Tier page](https://docs.cloud.google.com/free/docs/free-cloud-features) (Compute Engine):
+
+- **One e2-micro VM** ("non-preemptible") free each month, in **us-west1 (Oregon)**, us-central1 (Iowa) or us-east1
+  (South Carolina). Use **us-west1**: Neon's AWS US West 2 is in Oregon too (section 3).
+- **30 GB-months of standard persistent disk.** Pick **Standard persistent disk** for the boot disk explicitly: only
+  "standard" is named as free, and the console may default to a different type.
+- **1 GB of outbound data a month** from North America (excluding China and Australia). Answers streamed to
+  visitors, prompts sent to Groq and Gemini, and Neon queries all count. Beyond 1 GB it's billed, so check
+  Billing > Reports after launch.
+- **Not confirmed from Google's pages:** whether the VM's external IPv4 address is free. Check the
+  [VPC network pricing](https://cloud.google.com/vpc/network-pricing) page (IP addresses) before creating the VM.
+
+The machine: e2-micro has 2 vCPUs sharing a quarter of a core (it can burst briefly) and 1 GB of memory
+([machine types](https://docs.cloud.google.com/compute/docs/general-purpose-machines), E2 shared-core). That's
+enough for Triage's single worker, with two settings: a swap file (section 2C) and `TRIAGE_API_MEM_LIMIT=640m` in
+`.env` (section 4). Most prompts embed in milliseconds; a very long one (18,000 characters, 9 chunks) took about 1 to
+2.6 seconds on a full laptop core and will take several times that on a quarter of a core.
+
+### 1B. Oracle Cloud Ampere A1: stay inside Always Free
 
 The Always Free allowance for Ampere A1 is **1,500 OCPU hours and 9,000 GB hours per month**, which for an Always
 Free tenancy equals 2 OCPUs and 12 GB of memory running all month
@@ -33,14 +65,37 @@ inside the allowance, and it fits Triage comfortably (section 7).
 CPU below 20%, network below 20% **and** memory below 20% (the memory rule applies to A1 shapes only)
 ([Always Free Resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)).
 A quiet API will be under 20% CPU and network, so memory is what keeps it from looking idle. On 3 GB, the 20% line is
-about 615 MB; the running stack uses more than that on its own (section 7). This is why the VM is sized at 3 GB and not
-12 GB: on 12 GB the same usage would be under 20%. If the API stops (crashes and stays down), memory drops and the VM
-can look idle: check it after any outage.
+about 615 MB. The stack itself now uses about 420 MB (section 7: the embedding model runs on onnxruntime, not
+torch), so it's Ubuntu, Oracle's cloud agent and Docker's daemons on top that carry the VM over the line: roughly
+700 to 800 MB in all, about 25%. That margin is thinner than it was with torch. Check `free -m` on the VM after the
+first deploy: if "used" is under about 700 MB, consider **1 OCPU and 2 GB** instead (the same stack is then about 40%
+of memory, and still fits with room for builds). On 12 GB the same usage would be far under 20%. If the API stops
+(crashes and stays down), memory drops and the VM can look idle: check it after any outage.
 
 Other Always Free limits that matter here: 200 GB of block storage in total (the boot volume defaults to 50 GB, which
 is plenty) and 10 TB of outbound data a month.
 
 ## 2. Create and secure the VM
+
+Do 2A or 2B for your host, then 2C on either.
+
+### 2A. Google Cloud e2-micro
+
+1. **Create the instance** (Compute Engine > VM instances > Create instance). *Console steps to be filled in.* What
+   to choose:
+   - Region **us-west1** (or another Free Tier region, section 1A); machine type **e2-micro**.
+   - Boot disk: **Ubuntu 24.04 LTS** (x86/64, not "Minimal" unless you're comfortable without the usual tools),
+     **Standard persistent disk**, 30 GB at most.
+   - Your **SSH public key** (no password login).
+   - Firewall: allow HTTP and HTTPS traffic.
+2. **External IP:** *to be filled in* (ephemeral or reserved static; check the pricing note in section 1A first).
+   DNS will point at it.
+3. **Open UDP 443 (HTTP/3):** *to be filled in.* The HTTP/HTTPS checkboxes open TCP 80 and 443; add a VPC firewall
+   rule for UDP 443 with the same target. Keep SSH (TCP 22), ideally limited to your own IP.
+4. Ubuntu's own firewall is off on Google's images, so nothing else to open. Docker adds its own rules for the
+   containers' ports.
+
+### 2B. Oracle Cloud Ampere A1
 
 1. **Create the instance:** Compute > Instances > Create. Image: **Canonical Ubuntu** (latest LTS, aarch64). Shape:
    **VM.Standard.A1.Flex**, **1 OCPU, 3 GB**. It's marked "Always Free-eligible". Use your **home region** (Always Free
@@ -70,7 +125,10 @@ is plenty) and 10 TB of outbound data a month.
 
    Oracle advises against enabling `ufw` on its Ubuntu images; edit iptables as above. Docker adds its own rules for
    the containers' ports when it starts.
-6. **SSH: keys only.** Oracle's Ubuntu images already disable passwords; make it explicit, and turn off root login:
+### 2C. Every host
+
+1. **SSH: keys only.** Both providers' Ubuntu images already disable passwords; make it explicit, and turn off root
+   login:
 
    ```bash
    printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n' \
@@ -80,7 +138,7 @@ is plenty) and 10 TB of outbound data a month.
    ```
 
    Keep your current SSH session open and check that a new one still logs in before closing it.
-7. **Security updates, automatically:**
+2. **Security updates, automatically:**
 
    ```bash
    sudo apt update && sudo apt install -y unattended-upgrades
@@ -90,7 +148,7 @@ is plenty) and 10 TB of outbound data a month.
 
    It installs security updates daily. Kernel updates need a reboot: check for `/var/run/reboot-required` now and
    then, and reboot in a quiet moment (the stack restarts by itself).
-8. **Install Docker** (Engine and the Compose plugin, from Docker's own repository):
+3. **Install Docker** (Engine and the Compose plugin, from Docker's own repository):
 
    ```bash
    sudo install -m 0755 -d /etc/apt/keyrings
@@ -98,9 +156,25 @@ is plenty) and 10 TB of outbound data a month.
    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
      | sudo tee /etc/apt/sources.list.d/docker.list
    sudo apt update && sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-   sudo usermod -aG docker ubuntu      # then log out and back in
+   sudo usermod -aG docker "$USER"     # then log out and back in
    docker run --rm hello-world
    ```
+
+4. **Swap file** (needed on the 1 GB e2-micro, harmless on Oracle). The running stack fits in 1 GB, but an update
+   builds the new image while the old one still runs, and that build needs a few hundred MB more (section 7).
+   Without swap the kernel would kill something; with it the build is just slower:
+
+   ```bash
+   sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+   sudo mkswap /swapfile && sudo swapon /swapfile
+   echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab               # keep it after a reboot
+   echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swappiness.conf     # use swap only when memory runs short
+   sudo sysctl -p /etc/sysctl.d/99-swappiness.conf
+   swapon --show && free -m
+   ```
+
+   2 GB is the recommendation: comfortably more than a build needs on top of the running stack, and a small share
+   of the 30 GB disk. Low swappiness keeps the API itself in memory during normal running.
 
 ## 3. Neon (database)
 
@@ -191,9 +265,11 @@ only lives on the server. `chmod 600 .env` so only your user can read it.
 | `TRIAGE_REQUEST_LOG_RETENTION_DAYS` | Request-log retention | empty (365) | Keep the default; the privacy policy says 12 months |
 | `TRIAGE_PUBLIC_STATS_MIN_REQUESTS` | Overview tab threshold | empty (100) | Keep the default in production |
 | `TRIAGE_KEYLESS_LOOKUP_MINUTES` | How long a keyless request's cost can be read back | empty (10) | |
+| `TRIAGE_API_MEM_LIMIT` | The API container's memory cap | `640m` on a 1 GB VM | Empty: `1536m` (a 3 GB VM). Section 7 |
 
 Set in the image or the compose file, not in `.env`: `TRIAGE_TRUSTED_PROXY_HOPS=1` (section 8), `HF_HOME`,
-`HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`, `MALLOC_ARENA_MAX`, `OMP_NUM_THREADS`, `TRIAGE_TORCH_THREADS` and
+`HF_HUB_OFFLINE=1`, `ORT_DISABLE_TELEMETRY=1` (onnxruntime's official builds otherwise send usage telemetry to
+Microsoft; the code forces it off too), `MALLOC_ARENA_MAX=2`, `TRIAGE_EMBEDDING_THREADS=1` and
 `TRIAGE_SERVER_PROVIDERS=groq,gemini` (no Ollama on the server).
 
 Never set in production: `TRIAGE_FAKE_MODELS`, `TRIAGE_FAKE_DB`, `TRIAGE_DEV_EMAIL_LOG`, `TRIAGE_TEST_DATABASE_URL`,
@@ -242,8 +318,10 @@ cp deploy/.env.example .env && chmod 600 .env && nano .env      # section 4
 ./deploy/update.sh
 ```
 
-`deploy/update.sh` builds the image (several minutes the first time on 1 OCPU: it downloads and installs every
-package and the embedding model), starts the API and Caddy, and waits until `/healthz` reports healthy.
+`deploy/update.sh` builds the image for the VM's own architecture (several minutes the first time: it downloads
+and installs every package and the embedding model; on e2-micro set up the swap file first, section 2C), starts the
+API and Caddy, and waits until `/healthz` reports healthy. On a 1 GB VM, put `TRIAGE_API_MEM_LIMIT=640m` in `.env`
+before the first run.
 
 Then point DNS at the VM: at your DNS provider, add an **A record** `api` (for `api.gettriage.dev`) with the VM's
 reserved public IP. Once it resolves (`dig +short api.gettriage.dev`), Caddy gets its certificate by itself within a
@@ -251,9 +329,10 @@ minute; `docker compose logs caddy` shows "certificate obtained successfully".
 
 What runs:
 
-- **The API container** (`Dockerfile`): every package from `requirements.lock` at the exact tested version (CPU-only
-  torch), the embedding model baked in at build time, and the network never used for models at runtime
-  (`HF_HUB_OFFLINE=1`). It runs as a plain user on a read-only filesystem (only the response cache's volume is
+- **The API container** (`Dockerfile`, the same for `linux/amd64` and `linux/arm64`): every package from
+  `requirements.lock` at the exact tested version (no torch: the embedding model runs on onnxruntime), the embedding
+  model's ONNX file and tokenizer baked in at build time from one pinned revision, and the network never used for
+  models at runtime (`HF_HUB_OFFLINE=1`). It runs as a plain user on a read-only filesystem (only the response cache's volume is
   writable). On start it runs `alembic upgrade head` (on `DATABASE_URL_UNPOOLED`), then uvicorn with **one worker**:
   the demo, sign-in and per-minute limits, the circuit breakers and the response cache live in that process's
   memory. `--no-access-log` keeps client IPs out of the logs, as the privacy policy promises. It isn't reachable from
@@ -302,28 +381,53 @@ Useful commands: `docker compose ps`, `docker compose logs -f api`, `docker comp
 
 ## 7. Memory
 
-Measured on Linux arm64, natively, with the production image and `docker-compose.yml` (one worker,
-`MALLOC_ARENA_MAX=2`, one torch thread), after routed requests including 18,000-character prompts:
+Measured with the production image and `docker-compose.yml` (one worker, `MALLOC_ARENA_MAX=2`, one onnxruntime
+thread), after routed requests including two 17,907-character prompts (9 chunks each). arm64 natively; amd64 on an
+Apple-silicon Mac under **Rosetta 2** emulation, whose own translation memory is counted in the process, so a real
+x86_64 server should be at or below these numbers:
+
+| What | linux/arm64 (native) | linux/amd64 (Rosetta 2) |
+|---|---|---|
+| API process at startup (peak during startup) | 333 MB (344 MB) | 378 MB (390 MB) |
+| API process after the requests (peak) | 396 MB (396 MB) | 436 MB (436 MB) |
+| Caddy | 20 MB | 20 MB |
+| Building the image: `pip install` / the model check | not measured | 184 MB / 261 MB |
+
+With torch, the API was 649 MB (peak 671 MB). Where it goes now (arm64): Python, onnxruntime, the tokenizer and the
+loaded embedding model about 210 MB; the rest of the app's imports (FastAPI, SQLAlchemy, provider SDKs) about
+120 MB; embedding a long prompt about 55 MB more. It doesn't shrink when idle. onnxruntime's memory arena is left on: turning it off saved 11 MB on arm64 but cost 50 MB on
+amd64.
+
+**On a 1 GB VM (e2-micro):**
 
 | What | Memory |
 |---|---|
-| API process, after requests (peak) | 649 MB (671 MB) |
-| Caddy | 20 MB |
-| Whole Docker host, increase when the stack starts | 741 MB |
+| Ubuntu 24.04, Google's guest agent, sshd, journald | about 250 to 350 MB (estimate, not measured: check `free -m` on a fresh VM) |
+| Docker's daemons (dockerd, containerd) | about 60 to 100 MB (estimate) |
+| Caddy | 20 MB (measured) |
+| API | up to about 440 MB (measured) |
+| **Total** | **about 770 to 910 MB** of a little under 1 GB |
 
-Where the API's memory goes: its own imports (FastAPI, SQLAlchemy, provider SDKs) ~130 MB, torch ~200 MB,
-transformers ~25 MB, the embedding model ~160 MB, embedding a long prompt ~60 MB. It doesn't shrink when idle.
+It fits, without much room. Two settings make it safe:
 
-On a 3 GB VM the stack alone is about 24% of memory, before Ubuntu, Oracle's cloud agent and Docker's own daemons,
-which add a few hundred MB more. So the VM stays clearly above the 20% idle line (section 1) and has plenty of room
-below 3 GB. The compose file caps the API at 1.5 GB so a runaway process can't starve the VM. Check the real numbers on
-the VM with `free -m` and `docker stats --no-stream`.
+- **`TRIAGE_API_MEM_LIMIT=640m`** in `.env`: the API stays well under it (checked: the amd64 stack served the long
+  prompts under a 640m cap with no out-of-memory kill), and if something ever runs away, Docker restarts the API
+  instead of the whole VM starving. The default, 1536m, is for a 3 GB VM.
+- **A 2 GB swap file** (section 2C). An update builds the new image while the old stack still runs: `pip install`
+  (184 MB) and the build's offline model check (261 MB), plus BuildKit itself, on top of the 800 MB or so already in
+  use. That's over 1 GB for a few minutes, so without swap the kernel would kill something. With swap (and
+  `vm.swappiness=10`) the build is just slower, and the running API stays in memory.
 
-The memory reductions already in place: CPU-only torch, one torch thread, `MALLOC_ARENA_MAX=2`, long prompts embedded
-4 chunks at a time, the classifier run as numpy instead of scikit-learn, and the embedding model run on plain
-`transformers` instead of sentence-transformers. Tests check both against the originals: classifier probabilities
-within 1e-9, embeddings within 1e-6, and identical routing decisions at every quality preset. Running the embedding
-model on ONNX Runtime would cut about 200 MB more; it's an optional future optimization.
+**On a 3 GB VM (Oracle):** the stack is about 14% of memory, and about 25% with Ubuntu, Oracle's agent and Docker.
+That's above the 20% idle line, but with less margin than with torch: see section 1B.
+
+Check the real numbers on the VM with `free -m` and `docker stats --no-stream`.
+
+The memory reductions in place: the embedding model on onnxruntime (no torch or transformers), one thread,
+`MALLOC_ARENA_MAX=2`, long prompts embedded 4 chunks at a time, and the classifier run as numpy instead of
+scikit-learn. Tests check both against the originals: classifier probabilities within 1e-9; embeddings within 1e-5 of
+the torch pipeline (largest difference measured: 3.9e-7) with identical chunking on all 762 dataset prompts; and
+identical routing decisions at every quality preset.
 
 ## 8. Client IPs behind Caddy: `TRIAGE_TRUSTED_PROXY_HOPS=1`
 
@@ -376,21 +480,25 @@ Check it after the first deploy:
 
 ## 11. Maintenance
 
-**Updating dependencies.** Change a pin in `requirements.txt`, reinstall locally, run the tests
-(`set -o pipefail; venv/bin/python -m pytest` and `-m postgres`), then regenerate `requirements.lock` on Linux with
-your tested versions as constraints:
+**Updating dependencies.** The server's packages are in `requirements.txt`; training, evaluation and test tools
+(torch, transformers, sentence-transformers, datasets, pytest) are in `requirements-dev.txt`, which includes it.
+Change a pin, reinstall locally (`venv/bin/pip install -r requirements-dev.txt`), run the tests
+(`set -o pipefail; venv/bin/python -m pytest` and `-m postgres`), then regenerate `requirements.lock` on Linux from
+`requirements.txt` only, with your tested versions as constraints, and check it on the other architecture:
 
 ```bash
-venv/bin/pip freeze --exclude pip | grep -v -i -E "^(torch|setuptools)==" > /tmp/constraints.txt
-docker run --rm --platform linux/arm64 -v "$PWD:/src" -v /tmp/constraints.txt:/c.txt python:3.14.7-slim sh -c '
-  pip install -q torch==2.15.0+cpu --index-url https://download.pytorch.org/whl/cpu &&
-  pip install -q -r /src/requirements.txt -c /c.txt && pip check &&
-  pip freeze --exclude pip --exclude setuptools' | sort -f
+venv/bin/pip freeze --exclude pip | grep -v -i -E "^setuptools==" > /tmp/constraints.txt
+docker run --rm --platform linux/amd64 -v "$PWD:/src" -v /tmp/constraints.txt:/c.txt python:3.14.7-slim sh -c '
+  pip install -q -r /src/requirements.txt -c /c.txt && pip check >&2 &&
+  pip freeze --exclude pip --exclude setuptools'
+# put that output under the header lines of requirements.lock, then:
+docker run --rm --platform linux/arm64 -v "$PWD:/src" python:3.14.7-slim sh -c '
+  pip install -q -r /src/requirements.lock && pip check >&2 && pip freeze --exclude pip --exclude setuptools' \
+  | diff - <(grep -v '^#' requirements.lock) && echo "arm64 matches"
 ```
 
-Put that output under the header lines of `requirements.lock` (they keep the CPU index line). The lock installs
-identically on arm64 and x86_64: PyTorch's CPU index has `torch 2.15.0+cpu` for both, and the arm64 image's installed
-packages match the lock exactly (only `setuptools`, which comes with the Python image, is extra).
+`tests/test_requirements.py` checks that every server pin is in the lock at the same version and that nothing
+development-only reaches it.
 
 **Retraining.** A retrained classifier gets new `.joblib`/`.json`/`.npz` files. Commit all three for the version
 `config/routing.yaml` names, un-ignore its `.joblib` in `.gitignore` the way v2's are, and add the files to
