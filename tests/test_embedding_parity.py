@@ -207,39 +207,52 @@ def test_the_image_turns_telemetry_off_too():
     assert "ORT_DISABLE_TELEMETRY=1" in (PROJECT_ROOT / "Dockerfile").read_text()
 
 
-def test_only_one_embedding_runs_at_a_time():
-    """Two requests embedding at once would each hold a long prompt's working memory (Render's free plan has
-    512 MB); embed_texts lets one encode run at a time, and the other waits rather than failing."""
+def test_long_embeddings_run_one_at_a_time_and_short_ones_dont_wait():
+    """Two long prompts embedding at once would each hold a lot of working memory (Render's free plan has 512 MB),
+    so long ones (more than one chunk) run one at a time. A short prompt is one small chunk and doesn't queue."""
     import threading
     import time
 
     class SlowModel:
-        max_seq_length = 256
+        max_seq_length = 32                                  # chunks of 14 tokens: long text means several
 
         def __init__(self):
-            self.active, self.most, self.lock = 0, 0, threading.Lock()
+            self.lock = threading.Lock()
+            self.long_active = self.most_long = 0
+            self.short_ran_during_long = False
 
         def token_ids(self, text):
             return list(range(len(text.split())))
 
         def decode(self, ids):
-            return "x " * len(ids)
+            return "w " * len(ids)
 
         def encode(self, pieces, batch_size=4):
+            long = len(pieces) > 1
             with self.lock:
-                self.active += 1
-                self.most = max(self.most, self.active)
-            time.sleep(0.05)
+                if long:
+                    self.long_active += 1
+                    self.most_long = max(self.most_long, self.long_active)
+                elif self.long_active:
+                    self.short_ran_during_long = True
+            time.sleep(0.15 if long else 0.01)
             with self.lock:
-                self.active -= 1
+                if long:
+                    self.long_active -= 1
             v = np.ones((len(pieces), 384), dtype=np.float32)
             return v / np.linalg.norm(v, axis=1, keepdims=True)
 
-    model, results = SlowModel(), []
-    threads = [threading.Thread(target=lambda: results.append(embeddings.embed_texts(["some text"], model)[0]))
-               for _ in range(6)]
-    for t in threads:
+    model, done = SlowModel(), []
+    long_text, short_text = "word " * 100, "hello there"
+    assert len(embeddings.chunk_text(long_text, model)) > 1 and embeddings.chunk_text(short_text, model) == [short_text]
+    jobs = [long_text] * 3 + [short_text] * 3
+    threads = [threading.Thread(target=lambda t=t: done.append(embeddings.embed_texts([t], model)[0])) for t in jobs]
+    threads[0].start()
+    time.sleep(0.03)                                          # a long one is running
+    for t in threads[1:]:
         t.start()
     for t in threads:
         t.join()
-    assert len(results) == 6 and model.most == 1
+    assert len(done) == 6
+    assert model.most_long == 1                               # never two long embeddings at once
+    assert model.short_ran_during_long                        # short prompts didn't wait for them

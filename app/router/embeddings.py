@@ -59,9 +59,10 @@ LIVE_BATCH_SIZE = 4     # live requests: a long prompt's chunks go through a few
 CHUNK_MARGIN = 16   # tokens kept free in each chunk (see chunk_text)
 THREADS_ENV = "TRIAGE_EMBEDDING_THREADS"
 
-# One embedding at a time in this process. A long prompt's embedding holds about 55 MB of working memory while it
-# runs; on a 512 MB server (Render's free plan) two at once could push the API past its limit and get it killed.
-# Running them one after another costs nothing on a small CPU share, where two at once wouldn't finish sooner.
+# One LONG embedding at a time in this process. A long prompt (several chunks) holds about 55 MB of working memory
+# while it embeds; on a 512 MB server (Render's free plan) two at once could push the API past its limit and get it
+# killed. A short prompt is one chunk (at most MAX_SEQ_LENGTH tokens, a fraction of that memory) and skips the
+# queue: measured at a tenth of a CPU, a short prompt queued behind two long ones took 160 s instead of about 4.
 EMBED_LOCK = threading.Lock()
 
 # onnxruntime's official builds send usage telemetry to Microsoft by default (its Privacy.md). This turns all of it
@@ -182,7 +183,10 @@ def embed_texts(texts: list[str], model=None, batch_size: int = BATCH_SIZE) -> t
             pieces.append(piece)
             owner.append(i)
     
-    with EMBED_LOCK:                    # one embedding at a time (memory; see EMBED_LOCK)
+    if len(pieces) > len(texts):        # some text is long (more than one chunk): one at a time (see EMBED_LOCK)
+        with EMBED_LOCK:
+            piece_vecs = model.encode(pieces, batch_size=batch_size)
+    else:
         piece_vecs = model.encode(pieces, batch_size=batch_size)
     weights = np.array([max(len(p), 1) for p in pieces], dtype=np.float64) # longer chunk counts more 
     owner = np.array(owner)
