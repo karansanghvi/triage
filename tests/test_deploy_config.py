@@ -68,7 +68,7 @@ def test_images_are_pinned_by_digest():
 
 def test_the_image_runs_as_a_plain_user_offline_with_the_memory_settings():
     assert re.search(r"^USER triage$", DOCKERFILE, re.M)
-    for setting in ("HF_HUB_OFFLINE=1", "MALLOC_ARENA_MAX=2", "TRIAGE_TORCH_THREADS=1"):
+    for setting in ("HF_HUB_OFFLINE=1", "MALLOC_ARENA_MAX=2", "TRIAGE_EMBEDDING_THREADS=1"):
         assert setting in DOCKERFILE
     cmd = [l for l in DOCKERFILE.splitlines() if l.startswith("CMD ")][0]
     assert cmd.index("alembic upgrade head") < cmd.index("uvicorn")

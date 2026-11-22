@@ -31,10 +31,8 @@ USER triage
 
 # Never download at runtime; small memory footprint (DEPLOY.md, "Memory"); routing among the providers on this host
 ENV HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1 \
     MALLOC_ARENA_MAX=2 \
-    OMP_NUM_THREADS=1 \
-    TRIAGE_TORCH_THREADS=1 \
+    TRIAGE_EMBEDDING_THREADS=1 \
     TRIAGE_SERVER_PROVIDERS=groq,gemini
 
 EXPOSE 8000
