@@ -1,5 +1,6 @@
-# The Triage API, for an ARM (aarch64) Linux server: Oracle Cloud Ampere A1. Built and run by docker-compose.yml;
-# setup and updates: DEPLOY.md. Builds on x86_64 too (requirements.lock has CPU-only torch for both).
+# The Triage API, for a small Linux server on either architecture: linux/amd64 (e.g. Google Cloud e2-micro) or
+# linux/arm64 (e.g. Oracle Cloud Ampere A1). Nothing here is architecture-specific: the base image is multi-arch and
+# every package in requirements.lock has wheels for both. Built and run by docker-compose.yml; setup: DEPLOY.md.
 FROM python:3.14.7-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -10,7 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Every package at the exact tested version, CPU-only torch
+# Every package at the exact tested version (no torch: the embedding model runs on onnxruntime)
 COPY requirements.lock .
 RUN pip install --root-user-action=ignore -r requirements.lock
 
