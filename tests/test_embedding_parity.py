@@ -205,3 +205,41 @@ def test_onnxruntime_telemetry_is_off_before_it_loads():
 
 def test_the_image_turns_telemetry_off_too():
     assert "ORT_DISABLE_TELEMETRY=1" in (PROJECT_ROOT / "Dockerfile").read_text()
+
+
+def test_only_one_embedding_runs_at_a_time():
+    """Two requests embedding at once would each hold a long prompt's working memory (Render's free plan has
+    512 MB); embed_texts lets one encode run at a time, and the other waits rather than failing."""
+    import threading
+    import time
+
+    class SlowModel:
+        max_seq_length = 256
+
+        def __init__(self):
+            self.active, self.most, self.lock = 0, 0, threading.Lock()
+
+        def token_ids(self, text):
+            return list(range(len(text.split())))
+
+        def decode(self, ids):
+            return "x " * len(ids)
+
+        def encode(self, pieces, batch_size=4):
+            with self.lock:
+                self.active += 1
+                self.most = max(self.most, self.active)
+            time.sleep(0.05)
+            with self.lock:
+                self.active -= 1
+            v = np.ones((len(pieces), 384), dtype=np.float32)
+            return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+    model, results = SlowModel(), []
+    threads = [threading.Thread(target=lambda: results.append(embeddings.embed_texts(["some text"], model)[0]))
+               for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(results) == 6 and model.most == 1
