@@ -74,6 +74,7 @@ def test_the_image_runs_as_a_plain_user_offline_with_the_memory_settings():
     assert "alembic" not in cmd                         # the app upgrades the schema itself, only when behind
     assert "--workers 1" in cmd and "--no-access-log" in cmd and "--host 0.0.0.0" in cmd
     assert "db.SCHEMA_HEAD_FILE.write_text(db.head_revision()" in DOCKERFILE        # recorded at build time
+    assert "RUN python -m compileall -q app migrations" in DOCKERFILE                # no compiling at each start
 
 
 def test_the_image_gets_the_live_model_files_and_never_the_env_file():

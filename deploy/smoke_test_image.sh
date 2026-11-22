@@ -27,6 +27,8 @@ assert get_model().session.get_providers() == ["CPUExecutionProvider"]
 for module in ("torch", "transformers", "sentence_transformers"):
     assert importlib.util.find_spec(module) is None, module + " is installed"
 assert os.getuid() == 10001, os.getuid()
+import app.api.main, pathlib
+assert app.api.main.__cached__ and pathlib.Path(app.api.main.__cached__).exists(), "app/ has no precompiled bytecode"
 print("offline model check ok")
 '
 

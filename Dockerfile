@@ -26,6 +26,9 @@ COPY alembic.ini .
 # The schema's head revision, so startup can check the database with one SELECT and import Alembic only when it
 # must upgrade (app/db.py, migrate_or_check)
 RUN python -c "from app import db; db.SCHEMA_HEAD_FILE.write_text(db.head_revision() + '\n')"
+# Bytecode for our own code, compiled once here: the filesystem is read-only at runtime, so without it every start
+# would compile app/ from source (about 10 s at a tenth of a CPU). Installed packages already have theirs.
+RUN python -m compileall -q app migrations
 COPY models/ models/
 
 # Runs as a plain user. It owns only the response cache's folder; the code, models and embedding model are read-only.
