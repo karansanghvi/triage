@@ -95,3 +95,8 @@ def test_caddy_streams_and_keeps_no_access_log():
 
 def test_there_is_one_deploy_config():
     assert not (PROJECT_ROOT / "render.yaml").exists()
+
+
+def test_the_api_memory_cap_is_set_per_host():
+    assert COMPOSE["services"]["api"]["mem_limit"] == "${TRIAGE_API_MEM_LIMIT:-1536m}"
+    assert re.search(r"^TRIAGE_API_MEM_LIMIT=$", (PROJECT_ROOT / "deploy" / ".env.example").read_text(), re.M)

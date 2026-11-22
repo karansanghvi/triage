@@ -27,7 +27,9 @@ services:
     expose:
       - "8000"
     restart: unless-stopped
-    mem_limit: 1536m            # peak is about 660 MB (DEPLOY.md, "Memory"); a runaway can't starve the VM
+    # The API peaks at about 400-440 MB (DEPLOY.md, "Memory"); the cap means a runaway restarts the container
+    # instead of starving the VM. 1536m suits a 3 GB VM; on a 1 GB VM set TRIAGE_API_MEM_LIMIT=640m in .env.
+    mem_limit: ${TRIAGE_API_MEM_LIMIT:-1536m}
     read_only: true
     tmpfs:
       - /tmp
