@@ -62,6 +62,7 @@ from app.accounts.limits import AccountLimitError
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.router.small_talk import is_small_talk
 from app.api import health, maintenance
+from app.providers import lazy as lazy_providers
 from app.api import public_stats, usage_sql
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
@@ -604,6 +605,9 @@ def demo_usage(row: RequestRow, reserved: int) -> tuple:
 
 # ---------- the app ----------
 
+SDK_IMPORT_DELAY = 0.5      # seconds after startup: uvicorn binds the port first
+
+
 def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = None,
                cors_origins: Optional[list] = None, accounts: Optional[bool] = None) -> FastAPI:
     """deps / auth given: use them (tests). Otherwise load both at startup from config and the environment,
@@ -631,6 +635,9 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             set_up_email(app.state.deps)          # refuses TRIAGE_DEV_EMAIL_LOG=on outside local development
         # Housekeeping (privacy policy retention): now, then cache hourly, database daily; stopped at shutdown
         housekeeping = asyncio.create_task(maintenance.run_forever(app.state.deps, retention_days))
+        # The OpenAI and Gemini SDKs (the server's own providers) load in a background thread once uvicorn is
+        # listening, so /healthz answers sooner; a request that needs one first waits for it (app/providers/lazy.py)
+        asyncio.get_running_loop().call_later(SDK_IMPORT_DELAY, lazy_providers.warm_in_background)
         try:
             yield
         finally:

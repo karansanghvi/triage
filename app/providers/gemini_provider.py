@@ -1,11 +1,15 @@
 """Adapter for Google Gemini, using Googl'es own library"""
 import httpx
-from google import genai
-from google.genai import errors, types
 
 from app.providers.common import (
     ProviderError, RawResult, Usage, kind_from_status, server_or_given_key, split_system,
 )
+from app.providers.lazy import LazyModule
+
+# Imported in the background after startup (app/providers/lazy.py)
+genai = LazyModule("google.genai")
+errors = LazyModule("google.genai.errors")
+types = LazyModule("google.genai.types")
 
 PROVIDER = "gemini"
 # Tests set this to an httpx client with a MockTransport to see the exact request; None = the SDK's own client

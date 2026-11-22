@@ -107,7 +107,7 @@ def test_the_gemini_sdk_is_told_to_make_one_attempt(monkeypatch):
 def test_the_openai_and_anthropic_clients_are_built_with_max_retries_0(monkeypatch, module, kwargs):
     seen = []
     cls_name = "OpenAI" if module is openai_provider else "Anthropic"
-    owner = module if module is openai_provider else module.anthropic
+    owner = module.openai if module is openai_provider else module.anthropic     # the SDKs (lazy modules)
     real = getattr(owner, cls_name)
 
     def spy(*args, **kw):
