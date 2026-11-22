@@ -100,3 +100,81 @@ def test_there_is_one_deploy_config():
 def test_the_api_memory_cap_is_set_per_host():
     assert COMPOSE["services"]["api"]["mem_limit"] == "${TRIAGE_API_MEM_LIMIT:-1536m}"
     assert re.search(r"^TRIAGE_API_MEM_LIMIT=$", (PROJECT_ROOT / "deploy" / ".env.example").read_text(), re.M)
+
+
+# ---------- images built by GitHub Actions, pulled by the server ----------
+
+WORKFLOW = yaml.safe_load((PROJECT_ROOT / ".github" / "workflows" / "image.yml").read_text())
+REGISTRY_IMAGE = "ghcr.io/karansanghvi/triage-api"
+
+
+def _steps(job):
+    return WORKFLOW["jobs"][job]["steps"]
+
+
+def test_images_are_built_on_pushes_to_main_only():
+    triggers = WORKFLOW.get("on", WORKFLOW.get(True))          # PyYAML reads the key `on` as True
+    assert triggers == {"push": {"branches": ["main"]}}
+
+
+def test_actions_are_pinned_by_commit_sha():
+    uses = [s["uses"] for job in WORKFLOW["jobs"].values() for s in job["steps"] if "uses" in s]
+    assert uses
+    for ref in uses:
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", ref), ref
+
+
+def test_the_token_can_write_packages_only_where_images_are_pushed():
+    assert WORKFLOW["permissions"] == {}
+    assert WORKFLOW["jobs"]["build"]["permissions"] == {"contents": "read", "packages": "write"}
+    assert WORKFLOW["jobs"]["publish"]["permissions"] == {"packages": "write"}
+    for job in WORKFLOW["jobs"]:
+        for step in _steps(job):
+            mentions_token = "GITHUB_TOKEN" in yaml.safe_dump(step)
+            assert mentions_token == ("docker login" in step.get("run", "")), step.get("name")
+    checkout = next(s for s in _steps("build") if "uses" in s)
+    assert checkout["with"]["persist-credentials"] is False
+
+
+def test_each_architecture_builds_natively_and_is_tested_before_it_is_pushed():
+    matrix = WORKFLOW["jobs"]["build"]["strategy"]["matrix"]["include"]
+    assert {(m["arch"], m["runner"]) for m in matrix} == {("amd64", "ubuntu-24.04"), ("arm64", "ubuntu-24.04-arm")}
+    runs = [s.get("run", "") for s in _steps("build")]
+    build = next(i for i, r in enumerate(runs) if "docker build" in r)
+    test = next(i for i, r in enumerate(runs) if "deploy/smoke_test_image.sh" in r)
+    push = next(i for i, r in enumerate(runs) if "docker push" in r)
+    assert build < test < push
+    assert "org.opencontainers.image.revision=${GITHUB_SHA}" in runs[build]
+
+
+def test_the_published_image_is_tagged_with_the_commit_and_main_for_both_architectures():
+    assert WORKFLOW["env"]["IMAGE"] == REGISTRY_IMAGE
+    assert WORKFLOW["jobs"]["publish"]["needs"] == "build"
+    run = _steps("publish")[0]["run"]
+    assert '-t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:main"' in run
+    assert '"$IMAGE:$GITHUB_SHA-amd64" "$IMAGE:$GITHUB_SHA-arm64"' in run
+    assert WORKFLOW["concurrency"]["cancel-in-progress"] is False      # :main never moves backwards
+
+
+def test_the_server_pulls_the_registry_image_and_can_still_build():
+    api = COMPOSE["services"]["api"]
+    assert api["image"] == "${TRIAGE_IMAGE_REPO:-" + REGISTRY_IMAGE + "}:${TRIAGE_IMAGE_TAG:-main}"
+    assert api["build"]["context"] == "."
+    assert re.search(r"^TRIAGE_IMAGE_REPO=$", SERVER_ENV.read_text(), re.M)
+    update = (PROJECT_ROOT / "deploy" / "update.sh").read_text()
+    rollback = (PROJECT_ROOT / "deploy" / "rollback.sh").read_text()
+    for script in (update, rollback):
+        assert "IMAGE=${IMAGE:-" + REGISTRY_IMAGE + "}" in script
+        assert "docker compose up -d --no-build" in script
+    assert 'docker pull -q "$IMAGE:$new"' in update and "org.opencontainers.image.revision" in update
+    assert "--build) build=yes" in update                              # the documented fallback
+    assert 'target=${1:-$(get TRIAGE_PREVIOUS_IMAGE_TAG)}' in rollback  # any earlier commit, or the previous one
+    assert "alembic downgrade" in rollback
+
+
+def test_the_smoke_test_script_is_executable():
+    import os
+    script = PROJECT_ROOT / "deploy" / "smoke_test_image.sh"
+    assert os.access(script, os.X_OK)
+    text = script.read_text()
+    assert "--network none" in text and "/readyz" in text and "TRIAGE_FAKE_MODELS=1" in text
