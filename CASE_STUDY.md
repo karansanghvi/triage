@@ -584,7 +584,7 @@ The cheapest model is bilingual and sometimes replied to "hello" in Arabic. The 
 | Data | SQLAlchemy, Alembic, SQLite, Postgres |
 | Security | argon2 password hashing, AES-GCM encryption, HMAC fingerprints |
 | Web | React, TypeScript, Vite, Tailwind CSS, shadcn/ui, Recharts |
-| Hosting | Oracle Cloud (API, in Docker behind Caddy), Vercel (website), Neon (database) and Resend (email) |
+| Hosting | Render (API, a Docker image built and tested by GitHub Actions), Vercel (website), Neon (database) and Resend (email) |
 | Charts | matplotlib, generated from the evaluation results |
 
 ### Testing
