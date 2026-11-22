@@ -157,7 +157,9 @@ when you name a model, the choice was yours, so Triage claims no saving for it (
 `GET /v1/requests/{id}` (one of your own requests; with public access on, a request made without a key can be
 read without one, by its id, for 10 minutes (`TRIAGE_KEYLESS_LOOKUP_MINUTES`), but only its outcome and cost), and for admin keys `GET`/`PUT /v1/routing-config`, which
 changes the quality presets and backup models without a restart. Those changes are kept in memory only. The
-first model of each tier can't be changed, because the classifier predicts for that exact model.
+first model of each tier can't be changed, because the classifier predicts for that exact model. Admin keys can also
+read `GET /v1/admin/forwarded-for`: their own request's proxy headers, to set `TRIAGE_TRUSTED_PROXY_HOPS` behind a
+host that doesn't document them (DEPLOY.md, section 8).
 
 **Settings:** `temperature` and `max_tokens` are honoured. The classifier learned from temperature 0 and
 max_tokens 4000, so `auto` requests with other values are logged with `settings_match_training: false`.
@@ -503,9 +505,10 @@ Keep them in your host's secret settings (the server's `.env`, see [DEPLOY.md](D
 
 ### Deploying
 
-Production runs in Docker on one small server (a Google Cloud e2-micro or an Oracle Cloud ARM VM), with Caddy for
-HTTPS. GitHub Actions builds and tests the image for x86_64 and ARM on every push to `main` and publishes it to
-GitHub's container registry; the server only pulls it. The whole setup, every variable, updates and rollback are in
+The API runs on Render's free plan (`render.yaml`): GitHub Actions builds and tests the Docker image for x86_64 and
+ARM on every push to `main`, publishes it to GitHub's container registry, then has Render deploy exactly that image.
+Render handles HTTPS; the free plan sleeps when idle, and the website wakes it. Your own VM (a Google Cloud e2-micro or
+an Oracle Cloud ARM VM, with Caddy for HTTPS) is the documented alternative. The whole setup, every variable, updates and rollback are in
 [DEPLOY.md](DEPLOY.md). What any host needs:
 
 1. Install exactly the tested versions: `pip install -r requirements.lock` on Linux (every package pinned; only

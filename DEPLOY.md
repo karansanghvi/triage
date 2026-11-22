@@ -2,29 +2,57 @@
 
 | Piece | Where | Config in this repo |
 |---|---|---|
-| API (FastAPI) | One small free-tier VM, Ubuntu 24.04 and Docker: **Google Cloud e2-micro** (x86_64, 1 GB) or **Oracle Cloud Ampere A1** (ARM, 3 GB). It pulls a ready-made image; it never builds | `Dockerfile`, `docker-compose.yml`, `deploy/` |
-| API image | GitHub Actions builds and tests it for amd64 and arm64 on every push to `main`, and publishes `ghcr.io/karansanghvi/triage-api:<commit SHA>` (and `:main`) | `.github/workflows/image.yml`, `deploy/smoke_test_image.sh` |
-| HTTPS | Caddy on the same VM, automatic Let's Encrypt certificates for `api.gettriage.dev` | `deploy/Caddyfile` |
+| API (FastAPI) | **Render**, a free web service in Oregon (512 MB). It runs a ready-made image; it never builds. Alternative: your own VM (Google Cloud e2-micro or Oracle Cloud A1) with Docker | `render.yaml`; for a VM `Dockerfile`, `docker-compose.yml`, `deploy/` |
+| API image | GitHub Actions builds and tests it for amd64 and arm64 on every push to `main`, publishes `ghcr.io/karansanghvi/triage-api:<commit SHA>` (and `:main`), then deploys that commit to Render | `.github/workflows/image.yml`, `deploy/smoke_test_image.sh` |
+| HTTPS | Render: custom domain `api.gettriage.dev` with Render's managed certificate. On a VM: Caddy, with Let's Encrypt | `deploy/Caddyfile` (VM only) |
 | Database | Neon Postgres (pooled connection for the app, direct for migrations) | `migrations/` (Alembic) |
 | Website (React) | Vercel, root directory `web/` | `web/vercel.json` |
 | Email | Resend | environment variables only |
 
-Never put real values in this file or anywhere in the repo. Secrets live in `.env` on the server (git-ignored) and
-in the Vercel dashboard.
+Never put real values in this file or anywhere in the repo. Secrets live in the Render Dashboard (or `.env` on a
+VM, git-ignored), the Vercel dashboard, and one GitHub Actions secret (`RENDER_DEPLOY_HOOK_URL`).
 
 ---
 
 ## 1. Pick a host
 
-Triage runs on either; everything after section 2 is the same for both.
+The API runs on **Render's free plan** (1R), the default. Your own VM (1A, 1B) is the alternative: it never sleeps
+and has more CPU, but you run the server yourself. Everything from section 3 on applies to all three; where a step
+differs, it says so.
 
-| | Google Cloud e2-micro (1A) | Oracle Cloud Ampere A1 (1B) |
+| | Render free web service (1R) | Google Cloud e2-micro (1A) | Oracle Cloud Ampere A1 (1B) |
+|---|---|---|---|
+| Architecture | x86_64 (`linux/amd64`) | x86_64 (`linux/amd64`) | ARM (`linux/arm64`) |
+| Memory | 512 MB: fits, one long prompt at a time (section 7) | 1 GB: fits with a swap file (sections 2C and 7) | 3 GB: comfortable |
+| CPU | a fraction of one ("less than 1 CPU") | 2 shared vCPUs, about a quarter of a core sustained | 1 OCPU, dedicated |
+| Sleeps when idle | Yes: after 15 minutes; waking takes about 2 minutes | No | No |
+| Free outbound data | 5 GB a month (workspace) | 1 GB a month | 10 TB a month |
+| HTTPS | Render's | Caddy (this repo) | Caddy (this repo) |
+| Main risk | Cold starts and slow long prompts | Memory is tight; the external IP costs about $3.65 a month | Going over the allowance disables every A1 instance |
+
+### 1R. Render free web service: what the free plan means
+
+From Render's own docs ([free instances](https://render.com/docs/free), [pricing](https://render.com/pricing), [health
+checks](https://render.com/docs/health-checks), [deploying an image](https://render.com/docs/deploying-an-image)),
+checked 2026-11-22:
+
+| Limit | What Render says | What it means here |
 |---|---|---|
-| Architecture | x86_64 (`linux/amd64`) | ARM (`linux/arm64`) |
-| Memory | 1 GB: fits with a swap file (sections 2C and 7) | 3 GB: comfortable |
-| CPU | 2 shared vCPUs, about a quarter of a core sustained | 1 OCPU, dedicated |
-| Free outbound data | 1 GB a month | 10 TB a month |
-| Main risk | Memory is tight; very long prompts are slow to embed | Going over the allowance disables every A1 instance |
+| Memory and CPU | 512 MB RAM, "Less than 1 CPU" | The API peaks at about 440 MB; embeddings run one at a time so memory stays bounded (section 7) |
+| Sleeping | Spins down after **15 minutes** without inbound traffic; spinning up "takes about one minute"; browsers see a loading page meanwhile | A visitor after a quiet spell waits about 2 minutes (Render's spin-up plus the API's own start). The website pings `/healthz` on every page load and the chat says "Waking up the server" meanwhile |
+| Free instance hours | **750 a month per workspace**; spun-down time doesn't count; all used: free services suspended until next month | One service, even awake all month (at most 744 hours), fits |
+| Outbound bandwidth | Hobby workspace: **5 GB a month** included; over it, without a payment method, free services are suspended for the rest of the month | Answers are small; watch Billing > Monthly Included Usage after launch |
+| Build pipeline minutes | A monthly included amount (the number isn't in the docs pages; see the Dashboard) | Render builds nothing here: it pulls the image GitHub Actions built |
+| Filesystem | Ephemeral: lost on every redeploy, restart or spin-down | Only the response cache (24-hour answers) lives on disk; it starts empty after each wake |
+| Restarts | "Render might restart a Free web service at any time" | The API is stateless apart from in-memory rate limits, which reset |
+| Health checks | HTTP 2xx within 5 seconds; failing for 60 seconds restarts the instance; a deploy has 15 minutes to become healthy | `/healthz` stays fast even while a long prompt embeds (measured: slowest 0.29 s) |
+| Rollbacks | Only to the two most recent previous deploys | Any older commit: `deploy/render_deploy.sh <commit>` (section 6) |
+| Custom domains | Supported on free, with managed TLS | `api.gettriage.dev` points at Render (section 2R) |
+| Other | Outbound SMTP ports blocked; a free service that sends "an uncommonly high volume" of traffic can be suspended | Email goes to Resend over HTTPS (fine). Calls to Groq and Gemini are normal traffic; the demo's daily limits keep them modest |
+
+The image must be `linux/amd64`: the published image includes it. CPU is the real constraint: at a tenth of a core
+(how it was measured, section 7), an 18,000-character prompt (accounts and the API) took about 80 seconds to route,
+so a 4,000-character demo prompt should take about 20 (estimated from that). The chat shows a "long message" note.
 
 ### 1A. Google Cloud e2-micro: stay inside the Free Tier
 
@@ -82,9 +110,27 @@ of memory, and still fits with room for builds). On 12 GB the same usage would b
 Other Always Free limits that matter here: 200 GB of block storage in total (the boot volume defaults to 50 GB, which
 is plenty) and 10 TB of outbound data a month.
 
-## 2. Create and secure the VM
+## 2. Create the service
 
-Do 2A or 2B for your host, then 2C on either.
+On Render: 2R only. On a VM: 2A or 2B, then 2C.
+
+### 2R. Render
+
+1. **Make the image public, once.** Push to `main` and let the Image workflow finish (section 6), then on GitHub open
+   the `triage-api` package > Package settings > Change visibility > **Public**. Render pulls it without credentials.
+2. **Create the service from the Blueprint:** Render Dashboard > New > Blueprint, pick this repository. It reads
+   `render.yaml`: a **free** web service named `triage-api` in **Oregon** (next to Neon's AWS US West 2), running
+   `ghcr.io/karansanghvi/triage-api:main`, with health check `/healthz` and the start command (migrations, then one
+   worker on Render's `$PORT`).
+3. **Fill in the environment variables** it asks for (names only in `render.yaml`; values and formats in section 4).
+   Set `TRIAGE_TRUSTED_PROXY_HOPS` to `1` for now (section 8 measures the right value).
+4. **Custom domain:** the service's Settings > Custom Domains > add `api.gettriage.dev`, then at your DNS provider
+   add the CNAME record Render shows. Render issues the certificate itself.
+5. **Deploys from GitHub:** copy the service's **Deploy Hook** URL (Settings > Deploy Hook) into a GitHub Actions
+   secret named `RENDER_DEPLOY_HOOK_URL` (repository Settings > Secrets and variables > Actions). From then on, every
+   green push to `main` deploys that commit's image (section 6). The URL can deploy your service: keep it only there.
+
+### Your own VM (alternative)
 
 ### 2A. Google Cloud e2-micro
 
@@ -186,8 +232,8 @@ Do 2A or 2B for your host, then 2C on either.
 
 ## 3. Neon (database)
 
-1. Create a project in the AWS region closest to your Oracle home region (for example AWS US West 2, Oregon, for
-   Oracle's US West regions).
+1. Create a project in the AWS region closest to the API: **AWS US West 2 (Oregon)** for Render's Oregon region (or a
+   VM in us-west1 or Oracle's US West regions).
 2. From **Connect**, copy two connection strings for the same database and role:
    - **Pooled** (host contains `-pooler`): this is `DATABASE_URL`.
    - **Direct** (no `-pooler`): this is `DATABASE_URL_UNPOOLED`, used only for migrations.
@@ -243,10 +289,13 @@ Check usage now and then in the Neon console's usage page, especially after laun
 
 ## 4. Environment variables and secrets
 
-### The server's `.env`
+### Where they go
 
-On the VM, in the repo folder: `cp deploy/.env.example .env`, then fill it in (`nano .env`). It's git-ignored and
-only lives on the server. `chmod 600 .env` so only your user can read it.
+- **Render:** the service's Environment page in the Render Dashboard. `render.yaml` lists the names; Render asks for
+  the values when the Blueprint is created. The first three rows below (image tags, `API_DOMAIN`, `ACME_EMAIL`) and
+  `TRIAGE_API_MEM_LIMIT` are for a VM only.
+- **A VM:** in the repo folder, `cp deploy/.env.example .env`, then fill it in (`nano .env`). It's git-ignored and
+  only lives on the server. `chmod 600 .env` so only your user can read it.
 
 | Name | Purpose | Example format | Notes |
 |---|---|---|---|
@@ -273,18 +322,19 @@ only lives on the server. `chmod 600 .env` so only your user can read it.
 | `TRIAGE_REQUEST_LOG_RETENTION_DAYS` | Request-log retention | empty (365) | Keep the default; the privacy policy says 12 months |
 | `TRIAGE_PUBLIC_STATS_MIN_REQUESTS` | Overview tab threshold | empty (100) | Keep the default in production |
 | `TRIAGE_KEYLESS_LOOKUP_MINUTES` | How long a keyless request's cost can be read back | empty (10) | |
+| `TRIAGE_TRUSTED_PROXY_HOPS` | Which `X-Forwarded-For` entry is the visitor | `1` | **Render only** (a VM's compose file sets it). `1` until measured: section 8 |
 | `TRIAGE_API_MEM_LIMIT` | The API container's memory cap | `640m` on a 1 GB VM | Empty: `1536m` (a 3 GB VM). Section 7 |
 
-Set in the image or the compose file, not in `.env`: `TRIAGE_TRUSTED_PROXY_HOPS=1` (section 8), `HF_HOME`,
-`HF_HUB_OFFLINE=1`, `ORT_DISABLE_TELEMETRY=1` (onnxruntime's official builds otherwise send usage telemetry to
-Microsoft; the code forces it off too), `MALLOC_ARENA_MAX=2`, `TRIAGE_EMBEDDING_THREADS=1` and
+Set in the image (or, on a VM, the compose file), not by you: `TRIAGE_TRUSTED_PROXY_HOPS=1` on a VM (section 8),
+`HF_HOME`, `HF_HUB_OFFLINE=1`, `ORT_DISABLE_TELEMETRY=1` (onnxruntime's official builds otherwise send usage telemetry
+to Microsoft; the code forces it off too), `MALLOC_ARENA_MAX=2`, `TRIAGE_EMBEDDING_THREADS=1` and
 `TRIAGE_SERVER_PROVIDERS=groq,gemini` (no Ollama on the server).
 
 Never set in production: `TRIAGE_FAKE_MODELS`, `TRIAGE_FAKE_DB`, `TRIAGE_DEV_EMAIL_LOG`, `TRIAGE_TEST_DATABASE_URL`,
 `TRIAGE_CACHE_PATH`, `TRIAGE_LOG`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL`
 (paid providers are used only with a user's own key).
 
-Only `API_DOMAIN` and `ACME_EMAIL` reach the Caddy container; the API container reads the whole file.
+On a VM, only `API_DOMAIN` and `ACME_EMAIL` reach the Caddy container; the API container reads the whole file.
 
 ### Generating the secrets
 
@@ -318,7 +368,12 @@ on (the build copies `CASE_STUDY.md`, `docs/` and `reports/` images from the rep
 
 ## 5. First deploy
 
-On the VM:
+**On Render:** after section 2R, the Blueprint's first deploy pulls `:main`. Later pushes deploy by themselves
+(section 6). Watch it in the Dashboard (Events, Logs): migrations run, then uvicorn starts, and Render marks the
+deploy live once `/healthz` answers 200. At a fraction of a CPU that takes about two minutes. Then run the smoke test
+(section 10).
+
+**On a VM:**
 
 ```bash
 git clone <repository URL> triage && cd triage
@@ -341,11 +396,11 @@ What runs:
 - **The API container** (`Dockerfile`, built by GitHub Actions for `linux/amd64` and `linux/arm64`): every package from
   `requirements.lock` at the exact tested version (no torch: the embedding model runs on onnxruntime), the embedding
   model's ONNX file and tokenizer baked in at build time from one pinned revision, and the network never used for
-  models at runtime (`HF_HUB_OFFLINE=1`). It runs as a plain user on a read-only filesystem (only the response cache's volume is
-  writable). On start it runs `alembic upgrade head` (on `DATABASE_URL_UNPOOLED`), then uvicorn with **one worker**:
-  the demo, sign-in and per-minute limits, the circuit breakers and the response cache live in that process's
-  memory. `--no-access-log` keeps client IPs out of the logs, as the privacy policy promises. It isn't reachable from
-  outside: only Caddy can talk to it, over Docker's private network.
+  models at runtime (`HF_HUB_OFFLINE=1`). It runs as a plain user on a read-only filesystem (only the response cache's
+  volume is writable). On start it runs `alembic upgrade head` (on `DATABASE_URL_UNPOOLED`), then uvicorn with **one
+  worker**: the demo, sign-in and per-minute limits, the circuit breakers and the response cache live in that
+  process's memory. `--no-access-log` keeps client IPs out of the logs, as the privacy policy promises. It isn't
+  reachable from outside: only Caddy can talk to it, over Docker's private network.
 - **Caddy**: the only thing listening on 80 and 443. It gets and renews the certificate, redirects HTTP to HTTPS,
   streams answers through as they arrive, and writes no access log.
 - **Health checks:** two endpoints, neither needing a key and both returning status words only.
@@ -382,7 +437,29 @@ settings > Change visibility > **Public**, so the server can pull without a logi
 
 You can run the same checks on any image yourself: `deploy/smoke_test_image.sh <image>`.
 
-### Update
+### Update on Render
+
+Nothing to run: after a push to `main`, the workflow's last job asks Render (through `RENDER_DEPLOY_HOOK_URL`) to
+deploy exactly that commit's image, `imgURL=ghcr.io/karansanghvi/triage-api:<commit SHA>`. A commit whose checks
+fail never reaches Render. Until the secret exists, the job says so and skips.
+
+### Roll back on Render
+
+- The last two deploys: the Dashboard's Rollback button (all a free service gets).
+- Any earlier commit that has an image:
+
+  ```bash
+  RENDER_DEPLOY_HOOK_URL='<the hook URL>' ./deploy/render_deploy.sh <commit>
+  ```
+
+  It checks that the image exists, then asks Render to deploy it. The service's own setting stays `:main`, so the
+  next push deploys `main` again.
+
+The database caveat below applies here too: on Render, run a downgrade from your machine with the direct database
+URL (`DATABASE_URL=<DATABASE_URL_UNPOOLED value> venv/bin/alembic downgrade <revision>`) before rolling back past a
+migration.
+
+### Update (VM)
 
 ```bash
 cd ~/triage && ./deploy/update.sh
@@ -405,7 +482,7 @@ cd ~/triage && ./deploy/update.sh --build
 It builds the image locally from the checked-out `main`, under the same name, and deploys it. On a 1 GB VM this
 needs the swap file (section 2C), and the first build takes several minutes.
 
-### Roll back
+### Roll back (VM)
 
 ```bash
 cd ~/triage && ./deploy/rollback.sh              # the previous image
@@ -426,6 +503,35 @@ Useful commands: `docker compose ps`, `docker compose logs -f api`, `docker comp
 
 ## 7. Memory
 
+### On Render's free plan (512 MB)
+
+Measured in a container limited like Render's free plan: `--memory 512m --memory-swap 512m --cpus 0.1`,
+`linux/amd64` (under Rosetta 2 on an Apple-silicon Mac, so real x86 should be a little faster), fake models and
+SQLite. Render doesn't publish its free CPU share beyond "less than 1 CPU"; a tenth of one is a cautious guess.
+
+| What | Result |
+|---|---|
+| Cold start: container start to `/healthz` 200 | 135 s (of which `alembic upgrade head` about 30 s) |
+| Short prompt | 0.3 to 0.5 s |
+| 18,000-character prompt (9 chunks) | 82 to 84 s |
+| `/healthz` while long prompts embed (Render restarts after 60 s of failed checks) | slowest 0.29 s |
+| API process peak, one long prompt | 438 MB (container peak 444 MB of 512) |
+
+Two 18,000-character prompts at the same moment, plus a short one, before and after limiting long embeddings to one
+at a time (`EMBED_LOCK` in `app/router/embeddings.py`):
+
+| | No limit | Long prompts one at a time (in place) |
+|---|---|---|
+| API process peak | 474 MB | 438 MB: the same as one long prompt |
+| The short prompt, sent meanwhile | 3.6 s | 1.6 s: short prompts don't queue |
+| The two long prompts | 156 s and 158 s (sharing the CPU) | 83 s and 160 s (one after the other) |
+| Killed for memory | No | No |
+
+So memory stays about 70 MB under the limit however many long prompts arrive together; each extra one waits its
+turn. The demo's 4,000-character limit keeps demo prompts short.
+
+### On a VM
+
 Measured with the production image and `docker-compose.yml` (one worker, `MALLOC_ARENA_MAX=2`, one onnxruntime
 thread), after routed requests including two 17,907-character prompts (9 chunks each). arm64 natively; amd64 on an
 Apple-silicon Mac under **Rosetta 2** emulation, whose own translation memory is counted in the process, so a real
@@ -439,9 +545,9 @@ x86_64 server should be at or below these numbers:
 | Building the image: `pip install` / the model check | not measured | 184 MB / 261 MB |
 
 With torch, the API was 649 MB (peak 671 MB). Where it goes now (arm64): Python, onnxruntime, the tokenizer and the
-loaded embedding model about 210 MB; the rest of the app's imports (FastAPI, SQLAlchemy, provider SDKs) about
-120 MB; embedding a long prompt about 55 MB more. It doesn't shrink when idle. onnxruntime's memory arena is left on: turning it off saved 11 MB on arm64 but cost 50 MB on
-amd64.
+loaded embedding model about 210 MB; the rest of the app's imports (FastAPI, SQLAlchemy, provider SDKs) about 120 MB;
+embedding a long prompt about 55 MB more. It doesn't shrink when idle. onnxruntime's memory arena is left on: turning
+it off saved 11 MB on arm64 but cost 50 MB on amd64.
 
 **On a 1 GB VM (e2-micro):**
 
@@ -474,17 +580,32 @@ scikit-learn. Tests check both against the originals: classifier probabilities w
 the torch pipeline (largest difference measured: 3.9e-7) with identical chunking on all 762 dataset prompts; and
 identical routing decisions at every quality preset.
 
-## 8. Client IPs behind Caddy: `TRIAGE_TRUSTED_PROXY_HOPS=1`
+## 8. Client IPs behind a proxy: `TRIAGE_TRUSTED_PROXY_HOPS`
 
 The demo's per-visitor limit and sign-in rate limits use the visitor's IP (stored only as an HMAC). Behind a proxy
 the API sees the proxy's address, and the visitor's arrives in `X-Forwarded-For`. `TRIAGE_TRUSTED_PROXY_HOPS=N` takes
 the N-th address from the right, so anything a client adds itself (further left) can't choose the address.
 
-Caddy is the only proxy in front of the API, and it sets `X-Forwarded-For` to the address it received the connection
-from, ignoring any value the client sent (Caddy trusts no upstream proxies by default). So the rightmost entry is the
-visitor, which is what `1` reads. `0` would make every visitor look like Caddy's container and share one allowance;
-`2` would let a client pick its own address. `docker-compose.yml` sets the value, since it follows from that layout.
-If you ever put another proxy or CDN in front of Caddy, this changes.
+**On Render: measure it.** Render's docs don't say how its proxies set `X-Forwarded-For` (checked 2026-11-22: not
+described anywhere in them; Cloudflare sits in front of Render for DDoS protection, so there may be more than one
+hop). Start with `1`: if that's too few, visitors share an allowance (annoying, not unsafe); too many would let a
+visitor pick their own address. After the first deploy, from your own machine:
+
+```bash
+curl -s -H "Authorization: Bearer <an admin key>" https://api.gettriage.dev/v1/admin/forwarded-for
+```
+
+It returns this request's `x_forwarded_for` list (and any `cf-connecting-ip` or `true-client-ip`), as the API saw it.
+Find your own public IP (`curl -s https://api.ipify.org`) in the list and count its position from the right: last is
+`1`, second-to-last is `2`. Set `TRIAGE_TRUSTED_PROXY_HOPS` to that in the Render Dashboard (it restarts the
+service), call the endpoint again (`client_ip_used` should be your IP), then do the two checks below. The endpoint
+needs an admin key and logs nothing.
+
+**On a VM: `1`, set by `docker-compose.yml`.** Caddy is the only proxy in front of the API, and it sets
+`X-Forwarded-For` to the address it received the connection from, ignoring any value the client sent (Caddy trusts no
+upstream proxies by default). So the rightmost entry is the visitor, which is what `1` reads. `0` would make every
+visitor look like Caddy's container and share one allowance; `2` would let a client pick its own address. If you ever
+put another proxy or CDN in front of Caddy, this changes.
 
 Check it after the first deploy:
 
@@ -503,12 +624,15 @@ Check it after the first deploy:
 
 ## 10. Smoke test after each deploy
 
-- [ ] GitHub Actions: the Image workflow for the deployed commit is green (both architectures tested), and
-      `docker compose ps` shows `ghcr.io/karansanghvi/triage-api:<that commit>` running.
-- [ ] `curl -s https://api.gettriage.dev/readyz` returns `"status": "ok"` with `"database": "ok"`;
-      `docker compose ps` shows the API healthy.
-- [ ] `docker compose logs api`: no "refusing to start", no warnings about the email sender or logo.
+- [ ] GitHub Actions: the Image workflow for the deployed commit is green (both architectures tested, and on Render the
+      deploy job answered 200 or 202). The running image is that commit's: Render's Events, or `docker compose ps` on
+      a VM.
+- [ ] `curl -s https://api.gettriage.dev/readyz` returns `"status": "ok"` with `"database": "ok"`.
+- [ ] Logs (Render's Logs page, or `docker compose logs api`): no "refusing to start", no warnings about the email
+      sender or logo.
 - [ ] `http://api.gettriage.dev` redirects to https, and the certificate is valid.
+- [ ] Render: after 20 minutes with no visitors, open the website and send a message: the answer shows "Waking up the
+      server" with a counter, and the answer arrives once it's up (about 2 minutes).
 - [ ] Website loads; refresh `/case-study`, `/chat` and `/settings/api-keys` directly: each loads (no 404).
 - [ ] Browser console on the website: no CORS errors.
 - [ ] Demo chat (logged out): an answer streams in, the routing panel shows model, tier and cost.
@@ -523,7 +647,7 @@ Check it after the first deploy:
 - [ ] Neon: the tables exist (`alembic_version` at the latest revision).
 - [ ] Neon: the production compute is a fixed 0.25 CU, and after 10 minutes with no visitors the console
       shows it suspended (idle).
-- [ ] On the VM: `free -m` and `df -h /` look healthy.
+- [ ] Render: the Metrics page shows memory under 512 MB. On a VM: `free -m` and `df -h /` look healthy.
 
 ## 11. Maintenance
 
