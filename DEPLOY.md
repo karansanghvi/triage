@@ -120,8 +120,8 @@ On Render: 2R only. On a VM: 2A or 2B, then 2C.
    the `triage-api` package > Package settings > Change visibility > **Public**. Render pulls it without credentials.
 2. **Create the service from the Blueprint:** Render Dashboard > New > Blueprint, pick this repository. It reads
    `render.yaml`: a **free** web service named `triage-api` in **Oregon** (next to Neon's AWS US West 2), running
-   `ghcr.io/karansanghvi/triage-api:main`, with health check `/healthz` and the start command (migrations, then one
-   worker on Render's `$PORT`).
+   `ghcr.io/karansanghvi/triage-api:main`, with health check `/healthz` and the start command (one uvicorn worker on
+   Render's `$PORT`; the server upgrades the database itself when it's behind).
 3. **Fill in the environment variables** it asks for (names only in `render.yaml`; values and formats in section 4).
    Set `TRIAGE_TRUSTED_PROXY_HOPS` to `1` for now (section 8 measures the right value).
 4. **Custom domain:** the service's Settings > Custom Domains > add `api.gettriage.dev`, then at your DNS provider
@@ -265,7 +265,7 @@ at 0.25 CU). What touches the database:
 | Real requests: demo chat, sign-in, account pages, API calls | When people use the site | Yes: that's the point |
 | `GET /readyz` | Only when you run it | Yes: never point a monitor at it |
 | Request-log retention (12 months) | At startup, then once a day | Yes: about 2.5 hours awake a month, about 0.6 CU-hours |
-| `alembic upgrade head` and the schema check | Each deploy or restart | Yes, once |
+| The schema check (one query; a migration only when the database is behind) | Each deploy or restart | Yes, once |
 | `GET /healthz`, Docker's healthcheck, uptime monitors | Every 30 seconds | **No**: never touches the database |
 | Response-cache purge | Hourly | **No**: a local file |
 | Open but idle pooled connections | Between requests | **No** (measured below) |
@@ -393,14 +393,15 @@ minute; `docker compose logs caddy` shows "certificate obtained successfully".
 
 What runs:
 
-- **The API container** (`Dockerfile`, built by GitHub Actions for `linux/amd64` and `linux/arm64`): every package from
-  `requirements.lock` at the exact tested version (no torch: the embedding model runs on onnxruntime), the embedding
-  model's ONNX file and tokenizer baked in at build time from one pinned revision, and the network never used for
-  models at runtime (`HF_HUB_OFFLINE=1`). It runs as a plain user on a read-only filesystem (only the response cache's
-  volume is writable). On start it runs `alembic upgrade head` (on `DATABASE_URL_UNPOOLED`), then uvicorn with **one
-  worker**: the demo, sign-in and per-minute limits, the circuit breakers and the response cache live in that
-  process's memory. `--no-access-log` keeps client IPs out of the logs, as the privacy policy promises. It isn't
-  reachable from outside: only Caddy can talk to it, over Docker's private network.
+- **The API container** (`Dockerfile`, built by GitHub Actions for `linux/amd64` and `linux/arm64`): every package
+  from `requirements.lock` at the exact tested version (no torch: the embedding model runs on onnxruntime), the
+  embedding model's ONNX file and tokenizer baked in at build time from one pinned revision, and the network never
+  used for models at runtime (`HF_HUB_OFFLINE=1`). It runs as a plain user on a read-only filesystem (only the
+  response cache's volume is writable). On start it checks the schema with one query and migrates only if behind (on
+  `DATABASE_URL_UNPOOLED`), then serves with **one worker**: the demo, sign-in and per-minute limits, the circuit
+  breakers and the response cache live in that process's memory. `--no-access-log` keeps client IPs out of the logs,
+  as the privacy policy promises. It isn't reachable from outside: only Caddy can talk to it, over Docker's private
+  network.
 - **Caddy**: the only thing listening on 80 and 443. It gets and renews the certificate, redirects HTTP to HTTPS,
   streams answers through as they arrive, and writes no access log.
 - **Health checks:** two endpoints, neither needing a key and both returning status words only.
@@ -493,7 +494,8 @@ It uses the local image or pulls it again, checks out that commit (so the compos
 restarts. The next `./deploy/update.sh` goes back to `main`. Rollbacks work for commits from this setup onward;
 earlier commits' compose files expect locally built images.
 
-**Database changes don't roll back by themselves.** Each start runs `alembic upgrade head`, which only moves forward.
+**Database changes don't roll back by themselves.** Each start upgrades a database that's behind, and only forward;
+a database newer than the code is refused at startup.
 `rollback.sh` compares the newest migration in the running commit with the target's. If they differ, it stops and
 prints the command to run first, with the newer image still running (it has the way down):
 `docker compose exec api alembic downgrade <target's revision>`. Then run `./deploy/rollback.sh <commit>
@@ -511,7 +513,7 @@ SQLite. Render doesn't publish its free CPU share beyond "less than 1 CPU"; a te
 
 | What | Result |
 |---|---|
-| Cold start: container start to `/healthz` 200 | 135 s (of which `alembic upgrade head` about 30 s) |
+| Cold start: container start to `/healthz` 200 (database already at the latest migration) | 26 to 27 s (was 101 to 108 s; see below) |
 | Short prompt | 0.3 to 0.5 s |
 | 18,000-character prompt (9 chunks) | 82 to 84 s |
 | `/healthz` while long prompts embed (Render restarts after 60 s of failed checks) | slowest 0.29 s |
@@ -529,6 +531,24 @@ at a time (`EMBED_LOCK` in `app/router/embeddings.py`):
 
 So memory stays about 70 MB under the limit however many long prompts arrive together; each extra one waits its
 turn. The demo's 4,000-character limit keeps demo prompts short.
+
+**Cold start, cut by cut** (same limits; each image measured twice, container start to the first `/healthz` 200,
+with the database already at the latest migration, as Neon will be):
+
+| Change | Cold start |
+|---|---|
+| Before | 101 s, 108 s |
+| Schema check with one query; migrate in-process only when behind (no separate `alembic upgrade head`) | 82 s, 86 s |
+| App bytecode compiled when the image is built (the filesystem is read-only at runtime) | 44 s, 62 s |
+| Anthropic SDK imported on first use (it's bring-your-own-key only) | 31 s, 30 s |
+| OpenAI and Gemini SDKs imported in a background thread once the port is open | **26 s, 27 s** |
+
+Where the remaining start goes (one process, timed phase by phase): Python itself about 1 s; uvicorn 4.9 s (mostly
+the standard library's asyncio and logging, which FastAPI needs anyway); FastAPI and SQLAlchemy 4.4 s; the rest of
+the app 3.1 s; the schema check 0.3 s; configs 0.4 s; onnxruntime and the tokenizer library 1.2 s; loading the ONNX
+model 4.4 s; the classifier 3.0 s; a warm-up prediction 0.4 s. After the port opens, the OpenAI and Gemini SDKs take
+about 18 s more in the background: a request that needs one in that window waits for it. Render's own spin-up
+comes on top of all this.
 
 ### On a VM
 

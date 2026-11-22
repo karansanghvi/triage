@@ -515,10 +515,10 @@ an Oracle Cloud ARM VM, with Caddy for HTTPS) is the documented alternative. The
    what the server runs, so no torch: the embedding model runs on onnxruntime). `requirements.txt` lists the
    server's direct dependencies and `requirements-dev.txt` adds training, evaluation and tests. To upgrade one,
    change its pin, run the tests (including `pytest -m postgres`), regenerate the lock (DEPLOY.md), then commit.
-2. **Migrate before the new code starts:** `DATABASE_URL=... venv/bin/alembic upgrade head`, as your host's
-   pre-deploy step if it has one, or at the front of the start command (`alembic upgrade head && uvicorn ... --no-access-log`).
-   The server never migrates Postgres itself, and refuses to start if the database isn't at the latest
-   migration. A local SQLite file is migrated automatically when opened.
+2. **Migrations run themselves at startup, only when needed:** the server reads `alembic_version` with one query
+   and compares it with the latest revision (recorded in `migrations/HEAD` when the image is built). If the
+   database is behind, it upgrades it before serving (Postgres on `DATABASE_URL_UNPOOLED`, the direct
+   connection); if it's newer than the code, it refuses to start. `alembic upgrade head` still works by hand.
 3. Start: `uvicorn app.api.main:app --host 0.0.0.0 --port $PORT --no-access-log`. `--no-access-log` is required:
    uvicorn's access log prints each client's IP address, and the privacy policy says Triage logs none (its own
    request lines carry no IP). With `TRIAGE_ACCOUNTS=on` it refuses to start without valid `TRIAGE_ENCRYPTION_KEYS`.
@@ -575,8 +575,9 @@ localhost, or `TRIAGE_TRUSTED_PROXY_HOPS` above 0.
 - **Production:** use Neon's **pooled** connection string (its host contains `-pooler`) in `DATABASE_URL`, as
   `postgresql+psycopg://USER:PASSWORD@HOST/DB?sslmode=require`. Neon suspends idle databases: the first query
   after a pause is slower, and the server re-checks pooled connections before using them.
-- **Migrations:** run `alembic upgrade head` with the **direct** connection string (the same host without
-  `-pooler`); schema changes are safest without the pooler in between.
+- **Migrations:** set `DATABASE_URL_UNPOOLED` to the **direct** connection string (the same host without
+  `-pooler`): the server migrates on it when it starts behind, and `alembic upgrade head` by hand uses it too.
+  Schema changes are safest without the pooler in between.
 - **Tests:** point `TRIAGE_TEST_DATABASE_URL` at a separate **test branch**, never production, and run
   `venv/bin/python -m pytest -m postgres`. Each test works in its own throwaway schema. The tests switch a pooled
   host to its direct host automatically, because the pooler rejects the `search_path` option they use. A plain
