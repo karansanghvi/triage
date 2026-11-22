@@ -86,13 +86,83 @@ def test_a_pre_alembic_log_is_refused_with_the_import_command(tmp_path):
         ["schema_version", "requests"]                              # nothing was changed
 
 
-def test_a_database_behind_the_code_is_refused_unless_sqlite(tmp_path, monkeypatch):
+def test_a_database_newer_than_the_code_is_refused(tmp_path, monkeypatch):
     engine = engine_at(tmp_path)
-    monkeypatch.setattr(db, "head_revision", lambda: "9999")
-    monkeypatch.setattr(engine.dialect, "name", "postgresql")
-    with pytest.raises(RuntimeError, match="revision 0010, this code needs 9999.*alembic upgrade head"):
+    with engine.begin() as connection:
+        connection.exec_driver_sql("UPDATE alembic_version SET version_num = '9999'")
+    with pytest.raises(RuntimeError, match="revision 9999, newer than this code.*alembic downgrade 0010"):
         db.migrate_or_check(engine)
     engine.dispose()
+
+
+def test_the_head_comes_from_the_recorded_file_when_the_image_wrote_one(tmp_path, monkeypatch):
+    recorded = tmp_path / "HEAD"
+    monkeypatch.setattr(db, "SCHEMA_HEAD_FILE", recorded)
+    assert db.expected_head() == db.head_revision()                  # no file (development): Alembic answers
+    recorded.write_text("0010\n")
+    monkeypatch.setattr(db, "head_revision", lambda: pytest.fail("Alembic was asked despite the recorded head"))
+    assert db.expected_head() == "0010"
+
+
+def test_stored_revision_reads_alembic_version_with_plain_sql(tmp_path):
+    engine = engine_at(tmp_path)
+    assert db.stored_revision(engine) == "0010"
+    engine.dispose()
+    empty = db.create_engine(db.sqlite_url(tmp_path / "empty.sqlite3"))
+    assert db.stored_revision(empty) is None
+    empty.dispose()
+
+
+def _run(code: str):
+    import subprocess
+    import sys
+    from app.registry import PROJECT_ROOT
+    result = subprocess.run([sys.executable, "-c", code], cwd=PROJECT_ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout.strip()
+
+
+def test_at_head_startup_never_imports_alembic(tmp_path):
+    """The fast path (every start once deployed): one SELECT, no Alembic import, nothing written."""
+    path = tmp_path / "at_head.sqlite3"
+    engine_at(tmp_path, "at_head.sqlite3").dispose()                 # created and upgraded to head
+    (tmp_path / "HEAD").write_text(db.head_revision() + "\n")
+    out = _run(f"""
+import sys
+from app import db
+db.SCHEMA_HEAD_FILE = __import__("pathlib").Path({str(tmp_path / "HEAD")!r})
+engine = db.open_engine(db.sqlite_url({str(path)!r}))
+print("alembic" in sys.modules, db.stored_revision(engine))
+""")
+    assert out == "False 0010"
+
+
+def test_a_database_behind_is_upgraded_in_process(tmp_path):
+    """Behind (a release with a new migration): Alembic is imported and the database upgraded before serving."""
+    path = tmp_path / "behind.sqlite3"
+    engine = db.create_engine(db.sqlite_url(path))
+    db.upgrade(engine, "0009")
+    assert db.stored_revision(engine) == "0009"
+    engine.dispose()
+    (tmp_path / "HEAD").write_text("0010\n")
+    out = _run(f"""
+import sys
+from app import db
+db.SCHEMA_HEAD_FILE = __import__("pathlib").Path({str(tmp_path / "HEAD")!r})
+engine = db.open_engine(db.sqlite_url({str(path)!r}))
+print("alembic" in sys.modules, db.stored_revision(engine))
+""")
+    assert out == "True 0010"
+
+
+def test_postgres_migrates_on_the_direct_url_when_the_engine_is_database_urls(monkeypatch):
+    pooled = "postgresql+psycopg://u:p@ep-x-pooler.us-west-2.aws.neon.tech/neondb?sslmode=require"
+    direct = "postgresql+psycopg://u:p@ep-x.us-west-2.aws.neon.tech/neondb?sslmode=require"
+    other = "postgresql+psycopg://u:p@localhost/test"
+    monkeypatch.setenv(db.DB_URL_ENV, pooled)
+    monkeypatch.setenv(db.UNPOOLED_URL_ENV, direct)
+    assert db._migration_url_for(db.create_engine(pooled)) == direct
+    assert db._migration_url_for(db.create_engine(other)) == other   # a test database: its own URL
 
 
 # ---------- which database ----------
@@ -240,4 +310,20 @@ def test_0010_turns_old_client_disconnected_errors_into_stopped(tmp_path):
     with engine.begin() as connection:
         command.downgrade(db.alembic_config(connection), "0009")
     assert {r.request_id: r.status for r in log.rows()}["stop"] == "error"
+    engine.dispose()
+
+
+def test_alembic_upgrade_head_still_works_by_hand(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from app.registry import PROJECT_ROOT
+    path = tmp_path / "by_hand.sqlite3"
+    env = {**os.environ, db.DB_URL_ENV: db.sqlite_url(path)}
+    env.pop(db.UNPOOLED_URL_ENV, None)
+    result = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=PROJECT_ROOT, env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    engine = db.create_engine(db.sqlite_url(path))
+    assert db.stored_revision(engine) == db.head_revision()
     engine.dispose()

@@ -15,4 +15,5 @@
 !models/classifier_c_logreg_cv_medium_v2.json
 !models/classifier_c_logreg_cv_medium_v2.npz
 **/__pycache__
+migrations/HEAD
 **/*.pyc

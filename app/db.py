@@ -15,9 +15,11 @@ Postgres connections get a CONNECT_TIMEOUT-second connect timeout (unless the UR
 app's engine retries a failed connect once after CONNECT_RETRY_DELAY seconds, so the first request after a sleep
 waits for the wake instead of failing.
 
-The schema is owned by Alembic (migrations/). A SQLite database is upgraded to the latest revision when it is
-opened (local files and tests need no extra step); any other database must already be at the latest revision
-(run `alembic upgrade head` as a deploy step) or Triage refuses to start.
+The schema is owned by Alembic (migrations/). Opening a database checks it is at the latest revision, cheaply: one
+SELECT on alembic_version, compared with migrations/HEAD (the head revision, written when the Docker image is built;
+without it, Alembic is asked). Alembic itself is imported only when the database is behind, and then upgrades it in
+this process: SQLite on its own connection, Postgres on DATABASE_URL_UNPOOLED (Neon's direct connection) when the
+engine is DATABASE_URL's. A database newer than this code is refused. `alembic upgrade head` still works by hand.
 
 Tables here are what the code reads and writes (the request log and labels; the demo counters);
 migrations/versions/ is what creates them. A test checks that the two match.
@@ -42,6 +44,7 @@ UNPOOLED_URL_ENV, PREPARED_ENV = "DATABASE_URL_UNPOOLED", "TRIAGE_DB_PREPARED_ST
 DEFAULT_DB = PROJECT_ROOT / "data" / "triage.sqlite3"
 FAKE_DB = PROJECT_ROOT / "data" / "fake.sqlite3"
 MIGRATIONS_DIR = PROJECT_ROOT / "migrations"
+SCHEMA_HEAD_FILE = MIGRATIONS_DIR / "HEAD"       # written at image build time (Dockerfile); absent in development
 CONNECT_TIMEOUT = 10            # seconds per connection attempt (Neon suggests about 10 for a waking compute)
 CONNECT_RETRY_DELAY = 1.0       # seconds before the one retry
 
@@ -320,21 +323,67 @@ def is_legacy_log(engine: Engine) -> Optional[int]:
     return found[0] if found else 0
 
 
+def expected_head() -> str:
+    """The latest revision this code knows: migrations/HEAD when the image recorded it (no Alembic import), else
+    Alembic's own answer (development)."""
+    try:
+        recorded = SCHEMA_HEAD_FILE.read_text().strip()
+    except OSError:
+        recorded = ""
+    return recorded or head_revision()
+
+
+def stored_revision(engine: Engine) -> Optional[str]:
+    """The revision recorded in the database (alembic_version), with plain SQL; None if it has none yet."""
+    if not inspect(engine).has_table("alembic_version"):
+        return None
+    with engine.connect() as connection:
+        row = connection.exec_driver_sql("SELECT version_num FROM alembic_version").fetchone()
+    return row[0] if row else None
+
+
 def migrate_or_check(engine: Engine) -> None:
-    """SQLite: upgrade to the latest revision. Others: refuse unless already there. A pre-Alembic SQLite log is
-    refused either way, with the way to import it."""
+    """At the latest revision: nothing to do (and Alembic is never imported). Behind: upgrade it here. Ahead of this
+    code (e.g. a rollback that skipped the downgrade): refuse. A pre-Alembic SQLite log is refused, with the way to
+    import it."""
     legacy = is_legacy_log(engine)
     if legacy is not None:
         raise RuntimeError(f"{engine.url.database} is a request log from before the database layer (schema version "
                            f"{legacy}). Import it with: venv/bin/python scripts/import_sqlite_log.py "
                            f"{engine.url.database}  (it copies the rows into {DB_URL_ENV}; the file is only read)")
+    head, found = expected_head(), stored_revision(engine)
+    if found == head:
+        return
+    if found is not None and found not in known_revisions():
+        raise RuntimeError(f"refusing to start: the database is at revision {found}, newer than this code (which "
+                           f"knows up to {head}). Run the newer code's `alembic downgrade {head}` first.")
+    logger.warning("database at revision %s, upgrading to %s", found or "none", head)
     if engine.dialect.name == "sqlite":
         upgrade(engine)
-        return
-    found, head = current_revision(engine), head_revision()
-    if found != head:
-        raise RuntimeError(f"refusing to start: the database is at revision {found or 'none'}, this code needs "
-                           f"{head}. Run `alembic upgrade head` with {DB_URL_ENV} set (a deploy step).")
+    else:
+        url = _migration_url_for(engine)
+        migrations = create_engine(url, connect_args=postgres_connect_args(url))
+        try:
+            upgrade(migrations)
+        finally:
+            migrations.dispose()
+    after = stored_revision(engine)
+    if after != head:
+        raise RuntimeError(f"refusing to start: the upgrade left the database at {after or 'none'}, not {head}")
+
+
+def known_revisions() -> set:
+    from alembic.script import ScriptDirectory
+    return {script.revision for script in ScriptDirectory.from_config(alembic_config()).walk_revisions()}
+
+
+def _migration_url_for(engine: Engine) -> str:
+    """DATABASE_URL_UNPOOLED when this engine is DATABASE_URL's (Neon: schema changes on the direct connection), else
+    the engine's own URL (a test database, a URL given in code)."""
+    configured = os.environ.get(DB_URL_ENV)
+    same = configured and make_url(configured).render_as_string(hide_password=False) == \
+        engine.url.render_as_string(hide_password=False)
+    return migration_url() if same else engine.url.render_as_string(hide_password=False)
 
 
 def upgrade(engine: Engine, revision: str = "head") -> None:

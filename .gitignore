@@ -72,3 +72,6 @@ web/design-refs/
 
 # The embedding model, downloaded by the deploy build (scripts/fetch_embedding_model.py, HF_HOME=.hf-cache)
 .hf-cache/
+
+# Written when the Docker image is built (app/db.py, SCHEMA_HEAD_FILE)
+migrations/HEAD

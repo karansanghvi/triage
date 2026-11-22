@@ -23,6 +23,9 @@ RUN python -m scripts.fetch_embedding_model
 COPY config/ config/
 COPY migrations/ migrations/
 COPY alembic.ini .
+# The schema's head revision, so startup can check the database with one SELECT and import Alembic only when it
+# must upgrade (app/db.py, migrate_or_check)
+RUN python -c "from app import db; db.SCHEMA_HEAD_FILE.write_text(db.head_revision() + '\n')"
 COPY models/ models/
 
 # Runs as a plain user. It owns only the response cache's folder; the code, models and embedding model are read-only.
@@ -39,7 +42,8 @@ ENV HF_HUB_OFFLINE=1 \
 
 EXPOSE 8000
 
-# Schema first, then ONE worker (the demo, sign-in and per-minute limits, breakers and caches live in this process).
+# ONE worker (the demo, sign-in and per-minute limits, breakers and caches live in this process). It brings the
+# database schema up to date itself at startup, only when it's behind (app/db.py), so no separate alembic run.
 # --no-access-log: uvicorn's access log prints client IPs, and the privacy policy says Triage logs none.
 # The port: $PORT where the host sets it (Render: 10000), else 8000 (docker-compose.yml).
-CMD alembic upgrade head && exec uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --no-access-log
+CMD exec uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --no-access-log

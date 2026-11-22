@@ -13,8 +13,8 @@ services:
     plan: free
     region: oregon
     healthCheckPath: /healthz          # liveness only: never touches the database, so Neon can sleep
-    # Schema first, then one worker on Render's $PORT; no access log (it would print client IPs)
-    dockerCommand: sh -c 'alembic upgrade head && exec uvicorn app.api.main:app --host 0.0.0.0 --port $PORT --workers 1 --no-access-log'
+    # One worker on Render's $PORT (it upgrades the schema itself when behind); no access log (it would print IPs)
+    dockerCommand: sh -c 'exec uvicorn app.api.main:app --host 0.0.0.0 --port $PORT --workers 1 --no-access-log'
     envVars:
       - key: DATABASE_URL
         sync: false

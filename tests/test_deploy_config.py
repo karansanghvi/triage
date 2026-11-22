@@ -71,8 +71,9 @@ def test_the_image_runs_as_a_plain_user_offline_with_the_memory_settings():
     for setting in ("HF_HUB_OFFLINE=1", "MALLOC_ARENA_MAX=2", "TRIAGE_EMBEDDING_THREADS=1"):
         assert setting in DOCKERFILE
     cmd = [l for l in DOCKERFILE.splitlines() if l.startswith("CMD ")][0]
-    assert cmd.index("alembic upgrade head") < cmd.index("uvicorn")
+    assert "alembic" not in cmd                         # the app upgrades the schema itself, only when behind
     assert "--workers 1" in cmd and "--no-access-log" in cmd and "--host 0.0.0.0" in cmd
+    assert "db.SCHEMA_HEAD_FILE.write_text(db.head_revision()" in DOCKERFILE        # recorded at build time
 
 
 def test_the_image_gets_the_live_model_files_and_never_the_env_file():
@@ -107,9 +108,9 @@ def test_render_runs_the_tested_image_on_the_free_plan_in_oregon():
     assert RENDER_API["healthCheckPath"] == "/healthz"
 
 
-def test_render_starts_one_worker_on_its_port_after_the_migrations():
+def test_render_starts_one_worker_on_its_port():
     command = RENDER_API["dockerCommand"]
-    assert command.index("alembic upgrade head") < command.index("uvicorn")
+    assert "alembic" not in command and "exec uvicorn app.api.main:app" in command
     for part in ("--port $PORT", "--host 0.0.0.0", "--workers 1", "--no-access-log"):
         assert part in command
 
