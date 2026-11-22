@@ -183,7 +183,8 @@ An `Authorization` header that is sent but invalid is always a 401. Every other 
 **Demo limits** (`config/demo.yaml`, UTC days):
 - 10 requests per visitor, and 300 requests, 150,000 tokens and 600 model calls per day for all visitors together.
 - 4 requests per minute for all visitors together.
-- 8,000 prompt characters. `max_tokens` is lowered to 2,048, and the response says so in `X-Triage-Max-Tokens`.
+- 4,000 prompt characters (only the demo: your own provider keys, accounts and Triage API keys have no limit).
+  `max_tokens` is lowered to 2,048, and the response says so in `X-Triage-Max-Tokens`.
 - No sync verification.
 
 Refusals are 429s with `Retry-After`: `demo_limit_reached` and `demo_busy` suggest adding a provider key, and

@@ -16,9 +16,10 @@ daily_model_calls: 600
 per_minute_requests: 4
 
 # Per request
-# All messages together. The longest Phase 2 prompt was 7,588 characters (p95 1,907); 8,000 characters is about
-# 2,000 tokens, which leaves room for an answer in groq-allam's 4,096-token context. Longer: 413.
-max_prompt_chars: 8000
+# All messages together. The longest Phase 2 prompt was 7,588 characters (p95 1,907). 4,000 characters (about 1,000
+# tokens) covers well over 95% of them and keeps embedding quick on a small server: on Render's free plan (a fraction
+# of a CPU) an 8,000-character prompt took over half a minute to embed. Longer: 413. Only the demo is limited.
+max_prompt_chars: 4000
 # A larger max_tokens is quietly lowered to this (X-Triage-Max-Tokens says so). In Phase 2, 3.5% of groq-small's
 # and 10.6% of groq-large's answers were longer than 2,048 tokens (15% and 19% longer than 1,024).
 max_tokens: 2048

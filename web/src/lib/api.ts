@@ -5,7 +5,7 @@ import { LANGUAGE_INSTRUCTION, withLanguageInstruction, type ApiMessage } from "
 import { readChatStream, StreamFormatError } from "@/lib/sse"
 
 const BASE_URL = import.meta.env.VITE_TRIAGE_URL ?? "http://localhost:8000"
-const DEFAULT_MAX_PROMPT_CHARS = 8000
+const DEFAULT_MAX_PROMPT_CHARS = 4000   // the demo's limit (config/demo.yaml); accounts send everything
 
 // ---------- What Triage sends back (snake_case, as in the API) ----------
 

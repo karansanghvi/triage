@@ -103,7 +103,7 @@ class DemoSettings:
     daily_tokens: int = 150_000
     daily_model_calls: int = 600
     per_minute_requests: int = 4
-    max_prompt_chars: int = 8_000
+    max_prompt_chars: int = 4_000
     max_tokens: int = 2_048
     public_byok_visitor_daily_requests: int = 200
     retention_days: int = 7
