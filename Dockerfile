@@ -41,4 +41,5 @@ EXPOSE 8000
 
 # Schema first, then ONE worker (the demo, sign-in and per-minute limits, breakers and caches live in this process).
 # --no-access-log: uvicorn's access log prints client IPs, and the privacy policy says Triage logs none.
-CMD alembic upgrade head && exec uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log
+# The port: $PORT where the host sets it (Render: 10000), else 8000 (docker-compose.yml).
+CMD alembic upgrade head && exec uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --no-access-log

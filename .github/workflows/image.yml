@@ -1,9 +1,11 @@
 # Builds the API image for linux/amd64 and linux/arm64 on every push to main, tests each one, and publishes
 #   ghcr.io/karansanghvi/triage-api:<full commit SHA>   (and :main, the latest)
-# The server only pulls these (deploy/update.sh); it never builds. DEPLOY.md, section 6.
+# and then deploys that commit's image to Render through the service's deploy hook. Nothing builds on the host.
+# DEPLOY.md, section 6.
 #
 # Each architecture builds on its own native runner (no emulation), is checked by deploy/smoke_test_image.sh, and only
-# then is pushed as :<sha>-<arch>. The last job joins the two into one multi-architecture :<sha> and moves :main.
+# then is pushed as :<sha>-<arch>. The publish job joins the two into one multi-architecture :<sha> and moves :main;
+# the deploy job asks Render to run exactly :<sha> (skipped while the RENDER_DEPLOY_HOOK_URL secret isn't set).
 # Third-party actions are pinned by commit SHA; the GitHub token can write packages only in the jobs that push.
 name: Image
 
@@ -82,3 +84,23 @@ jobs:
           docker buildx imagetools inspect "$IMAGE:$GITHUB_SHA" | tee manifest.txt
           grep -q "linux/amd64" manifest.txt && grep -q "linux/arm64" manifest.txt
           docker logout ghcr.io
+
+  deploy:
+    name: deploy to Render
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Deploy this commit's image through Render's deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "The RENDER_DEPLOY_HOOK_URL secret isn't set: not deploying (DEPLOY.md, section 6)"
+            exit 0
+          fi
+          encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$IMAGE:$GITHUB_SHA")
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$HOOK&imgURL=$encoded")
+          echo "Render answered HTTP $code for $IMAGE:$GITHUB_SHA (200: deploying now, 202: queued behind a deploy)"
+          [ "$code" = 200 ] || [ "$code" = 202 ]

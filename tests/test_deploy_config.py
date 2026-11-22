@@ -93,8 +93,39 @@ def test_caddy_streams_and_keeps_no_access_log():
     assert "flush_interval" in directives and "log" not in directives and "encode" not in directives
 
 
-def test_there_is_one_deploy_config():
-    assert not (PROJECT_ROOT / "render.yaml").exists()
+# ---------- Render (the API's host): render.yaml ----------
+
+RENDER = yaml.safe_load((PROJECT_ROOT / "render.yaml").read_text())
+RENDER_API = RENDER["services"][0]
+
+
+def test_render_runs_the_tested_image_on_the_free_plan_in_oregon():
+    assert len(RENDER["services"]) == 1
+    assert RENDER_API["type"] == "web" and RENDER_API["runtime"] == "image"
+    assert RENDER_API["image"] == {"url": "ghcr.io/karansanghvi/triage-api:main"}       # public: no credentials
+    assert RENDER_API["plan"] == "free" and RENDER_API["region"] == "oregon"
+    assert RENDER_API["healthCheckPath"] == "/healthz"
+
+
+def test_render_starts_one_worker_on_its_port_after_the_migrations():
+    command = RENDER_API["dockerCommand"]
+    assert command.index("alembic upgrade head") < command.index("uvicorn")
+    for part in ("--port $PORT", "--host 0.0.0.0", "--workers 1", "--no-access-log"):
+        assert part in command
+
+
+def test_render_lists_variable_names_only():
+    names = set()
+    for var in RENDER_API["envVars"]:
+        assert set(var) == {"key", "sync"} and var["sync"] is False, var        # no values in the repo
+        names.add(var["key"])
+    assert PRODUCTION_VARS - {"API_DOMAIN", "ACME_EMAIL"} <= names               # no Caddy on Render
+    assert "TRIAGE_TRUSTED_PROXY_HOPS" in names and not names & DEV_ONLY
+
+
+def test_the_image_listens_on_the_hosts_port():
+    cmd = [l for l in DOCKERFILE.splitlines() if l.startswith("CMD ")][0]
+    assert "--port ${PORT:-8000}" in cmd
 
 
 def test_the_api_memory_cap_is_set_per_host():
@@ -128,6 +159,7 @@ def test_the_token_can_write_packages_only_where_images_are_pushed():
     assert WORKFLOW["permissions"] == {}
     assert WORKFLOW["jobs"]["build"]["permissions"] == {"contents": "read", "packages": "write"}
     assert WORKFLOW["jobs"]["publish"]["permissions"] == {"packages": "write"}
+    assert WORKFLOW["jobs"]["deploy"]["permissions"] == {}
     for job in WORKFLOW["jobs"]:
         for step in _steps(job):
             mentions_token = "GITHUB_TOKEN" in yaml.safe_dump(step)
@@ -178,3 +210,14 @@ def test_the_smoke_test_script_is_executable():
     assert os.access(script, os.X_OK)
     text = script.read_text()
     assert "--network none" in text and "/readyz" in text and "TRIAGE_FAKE_MODELS=1" in text
+
+
+def test_each_green_push_deploys_its_own_image_to_render():
+    job = WORKFLOW["jobs"]["deploy"]
+    assert job["needs"] == "publish"                                   # only after both images passed and joined
+    step = job["steps"][0]
+    assert step["env"] == {"HOOK": "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"}
+    assert '"$IMAGE:$GITHUB_SHA"' in step["run"] and "imgURL=" in step["run"]
+    assert '[ -z "$HOOK" ]' in step["run"]                             # skipped until the secret exists
+    manual = (PROJECT_ROOT / "deploy" / "render_deploy.sh").read_text()
+    assert "RENDER_DEPLOY_HOOK_URL" in manual and "imgURL=" in manual
