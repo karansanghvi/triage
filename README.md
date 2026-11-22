@@ -63,7 +63,7 @@ triage/
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt     # the server's packages plus training, evaluation and tests
 cp .env.example .env           # then add your API keys
 ```
 
@@ -505,9 +505,10 @@ Keep them in your host's secret settings (the server's `.env`, see [DEPLOY.md](D
 Production runs in Docker on one server (an Oracle Cloud VM, with Caddy for HTTPS): the whole setup, every
 variable, updates and rollback are in [DEPLOY.md](DEPLOY.md). What any host needs:
 
-1. Install exactly the tested versions: `pip install -r requirements.lock` on Linux (every package pinned, CPU-only
-   torch; `requirements.txt` lists the direct dependencies). To upgrade one, change its pin in `requirements.txt`,
-   run the tests (including `pytest -m postgres`), regenerate the lock (DEPLOY.md), then commit.
+1. Install exactly the tested versions: `pip install -r requirements.lock` on Linux (every package pinned; only
+   what the server runs, so no torch: the embedding model runs on onnxruntime). `requirements.txt` lists the
+   server's direct dependencies and `requirements-dev.txt` adds training, evaluation and tests. To upgrade one,
+   change its pin, run the tests (including `pytest -m postgres`), regenerate the lock (DEPLOY.md), then commit.
 2. **Migrate before the new code starts:** `DATABASE_URL=... venv/bin/alembic upgrade head`, as your host's
    pre-deploy step if it has one, or at the front of the start command (`alembic upgrade head && uvicorn ... --no-access-log`).
    The server never migrates Postgres itself, and refuses to start if the database isn't at the latest

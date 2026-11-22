@@ -1,0 +1,16 @@
+# Everything for training, evaluation and tests, on top of what the server runs. Never installed on the server.
+#   python -m venv venv && venv/bin/pip install -r requirements-dev.txt
+# Exact versions, as in requirements.txt: change a pin, reinstall, run the tests, commit.
+-r requirements.txt
+
+# The embedding model as it was trained (torch + transformers): tests/reference_encoder.py, the parity reference
+# for the server's onnxruntime pipeline. sentence-transformers: the same comparison against the library itself.
+torch==2.15.0
+transformers==5.22.1
+sentence-transformers==6.2.0
+
+# Data collection and evaluation
+datasets==5.1.0
+
+# Tests
+pytest==9.1.1
