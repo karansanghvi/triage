@@ -1,0 +1,84 @@
+# Builds the API image for linux/amd64 and linux/arm64 on every push to main, tests each one, and publishes
+#   ghcr.io/karansanghvi/triage-api:<full commit SHA>   (and :main, the latest)
+# The server only pulls these (deploy/update.sh); it never builds. DEPLOY.md, section 6.
+#
+# Each architecture builds on its own native runner (no emulation), is checked by deploy/smoke_test_image.sh, and only
+# then is pushed as :<sha>-<arch>. The last job joins the two into one multi-architecture :<sha> and moves :main.
+# Third-party actions are pinned by commit SHA; the GitHub token can write packages only in the jobs that push.
+name: Image
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# One run at a time, in order, so :main never moves back to an older commit. A run waiting behind another is replaced
+# by a newer push; that skipped commit then has no image (deploy/update.sh always deploys main's latest).
+concurrency:
+  group: image-main
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/karansanghvi/triage-api
+
+jobs:
+  build:
+    name: build and test (${{ matrix.arch }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: |
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t triage-api:ci .
+          docker image inspect triage-api:ci --format 'built {{.Os}}/{{.Architecture}}, {{.Size}} bytes'
+
+      - name: Offline model check and startup smoke test
+        run: ./deploy/smoke_test_image.sh triage-api:ci
+
+      - name: Push ${{ matrix.arch }} image
+        env:
+          ARCH: ${{ matrix.arch }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag triage-api:ci "$IMAGE:$GITHUB_SHA-$ARCH"
+          docker push "$IMAGE:$GITHUB_SHA-$ARCH"
+          docker logout ghcr.io
+
+  publish:
+    name: publish multi-architecture image
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    steps:
+      - name: Join amd64 and arm64 as :<sha> and :main
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx imagetools create -t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:main" \
+            "$IMAGE:$GITHUB_SHA-amd64" "$IMAGE:$GITHUB_SHA-arm64"
+          docker buildx imagetools inspect "$IMAGE:$GITHUB_SHA" | tee manifest.txt
+          grep -q "linux/amd64" manifest.txt && grep -q "linux/arm64" manifest.txt
+          docker logout ghcr.io
