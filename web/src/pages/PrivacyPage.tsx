@@ -42,7 +42,7 @@ function markdownComponents(idByLine: Map<number, string>): Components {
     h2: ({ node, children }) => {
       const id = idByLine.get(node?.position?.start.line ?? -1)
       return (
-        <h2 id={id} className="mt-12 scroll-mt-[72px] text-[22px] font-semibold tracking-[-0.01em] text-[#F5F7FA] first:mt-0">
+        <h2 id={id} className="mt-12 scroll-mt-[calc(72px+env(safe-area-inset-top))] text-[22px] font-semibold tracking-[-0.01em] text-[#F5F7FA] first:mt-0">
           {children}
         </h2>
       )

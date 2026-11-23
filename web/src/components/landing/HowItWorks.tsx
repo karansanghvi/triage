@@ -19,7 +19,7 @@ const STEPS: Step[] = [
 
 export default function HowItWorks() {
   return (
-    <section id="how" className="scroll-mt-[72px] px-6 pb-[120px]">
+    <section id="how" className="scroll-mt-[calc(72px+env(safe-area-inset-top))] px-6 pb-[120px]">
       <div className="mx-auto max-w-6xl">
         <SectionHeading eyebrow="How it works" title="A decision for every single prompt." />
 

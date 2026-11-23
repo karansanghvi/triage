@@ -9,7 +9,7 @@ export default function Results() {
   const h = benchmark.headline
 
   return (
-    <section id="results" className="scroll-mt-[72px] px-6 pb-[120px]">
+    <section id="results" className="scroll-mt-[calc(72px+env(safe-area-inset-top))] px-6 pb-[120px]">
       <div className="mx-auto max-w-6xl">
         <div className="flex flex-wrap items-end justify-between gap-5">
           <div className="min-w-0 flex-[1_1_480px]">

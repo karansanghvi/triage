@@ -9,7 +9,7 @@ const STEPS = [
 
 export default function Integrate() {
   return (
-    <section id="integrate" className="relative scroll-mt-[72px] px-6 pb-[120px]">
+    <section id="integrate" className="relative scroll-mt-[calc(72px+env(safe-area-inset-top))] px-6 pb-[120px]">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute right-[2%] top-10 h-[520px] w-[820px] rounded-full"

@@ -1,13 +1,45 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
-    <title>Triage</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="theme-color" content="#0A0A0F" />
+
+  <!-- SEO -->
+  <title>Triage: every prompt, routed to the right model</title>
+  <meta name="description" content="Triage is an OpenAI-compatible LLM router. It sends each request to the cheapest model that can answer it well, keeping 99% of the strongest model's quality at lower cost. Two lines of code to switch." />
+  <meta name="author" content="Karan Sanghvi" />
+  <meta name="robots" content="index, follow" />
+  <link rel="canonical" href="https://gettriage.dev/" />
+
+  <!-- Open Graph (LinkedIn, Slack, WhatsApp, Facebook) -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Triage" />
+  <meta property="og:url" content="https://gettriage.dev/" />
+  <meta property="og:title" content="Triage: every prompt, routed to the right model" />
+  <meta property="og:description" content="An OpenAI-compatible LLM router that keeps 99% of the strongest model's quality at lower cost. Two lines of code to switch." />
+  <meta property="og:image" content="https://gettriage.dev/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Triage: every prompt, routed to the right model" />
+
+  <!-- X / Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Triage: every prompt, routed to the right model" />
+  <meta name="twitter:description" content="An OpenAI-compatible LLM router that keeps 99% of the strongest model's quality at lower cost." />
+  <meta name="twitter:image" content="https://gettriage.dev/og-image.png" />
+
+  <!-- Structured data -->
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Triage",
+      "url": "https://gettriage.dev",
+      "description": "An OpenAI-compatible LLM router that sends each request to the cheapest model that can answer it well.",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Web",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "creator": { "@type": "Person", "name": "Karan Sanghvi" }
+    }
+  </script>
+</head>

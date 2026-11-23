@@ -55,12 +55,12 @@ function markdownComponents(idByLine: Map<number, string>): Components {
     h2: ({ node, children }) => {
       const id = idByLine.get(node?.position?.start.line ?? -1)
       return (
-        <h2 id={id} className="mt-14 scroll-mt-[72px] text-[24px] font-semibold tracking-[-0.01em] text-[#F5F7FA] first:mt-0">
+        <h2 id={id} className="mt-14 scroll-mt-[calc(72px+env(safe-area-inset-top))] text-[24px] font-semibold tracking-[-0.01em] text-[#F5F7FA] first:mt-0">
           {children}
         </h2>
       )
     },
-    h3: ({ children }) => <h3 className="mt-9 scroll-mt-[72px] text-[18px] font-semibold text-[#F5F7FA]">{children}</h3>,
+    h3: ({ children }) => <h3 className="mt-9 scroll-mt-[calc(72px+env(safe-area-inset-top))] text-[18px] font-semibold text-[#F5F7FA]">{children}</h3>,
     h4: ({ children }) => <h4 className="mt-6 text-[15px] font-semibold text-[#F5F7FA]">{children}</h4>,
     p: ({ node, children }) => {
       // An italic line right after an image is its caption
