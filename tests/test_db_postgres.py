@@ -54,12 +54,12 @@ def schema_url():
     admin.dispose()
 
 
-def test_postgres_is_refused_until_migrated_then_matches_the_tables(schema_url):
+def test_postgres_is_upgraded_in_process_then_matches_the_tables(schema_url):
     raw = create_engine(schema_url)
-    with pytest.raises(RuntimeError, match="alembic upgrade head"):
-        db.migrate_or_check(raw)
-    db.upgrade(raw)
-    db.migrate_or_check(raw)                                        # now at head: accepted
+    assert db.stored_revision(raw) is None
+    db.migrate_or_check(raw)                                        # behind (empty): upgraded here, on its own URL
+    assert db.stored_revision(raw) == db.head_revision()
+    db.migrate_or_check(raw)                                        # now at head: nothing to do
     with raw.connect() as connection:
         assert compare_metadata(MigrationContext.configure(connection), db.metadata) == []
         cols = [r[0] for r in connection.execute(text(

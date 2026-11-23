@@ -1,0 +1,60 @@
+# Triage's API on Render's free plan (DEPLOY.md, section 1). A Blueprint: Render Dashboard > New > Blueprint.
+#
+# Render runs the image GitHub Actions already built and tested (.github/workflows/image.yml); it builds nothing.
+# Each green push to main deploys through the service's deploy hook, pinned to that commit's image. HTTPS, the
+# certificate and the custom domain are Render's (no Caddy here). Environment variables: names only; set the values
+# in the Render Dashboard (DEPLOY.md, section 4).
+services:
+  - type: web
+    name: triage-api
+    runtime: image
+    image:
+      url: ghcr.io/karansanghvi/triage-api:main
+    plan: free
+    region: oregon
+    healthCheckPath: /healthz          # liveness only: never touches the database, so Neon can sleep
+    # One worker on Render's $PORT (it upgrades the schema itself when behind); no access log (it would print IPs)
+    dockerCommand: sh -c 'exec uvicorn app.api.main:app --host 0.0.0.0 --port $PORT --workers 1 --no-access-log'
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
+      - key: TRIAGE_DB_PREPARED_STATEMENTS
+        sync: false
+      - key: TRIAGE_HASH_SECRET
+        sync: false
+      - key: TRIAGE_ENCRYPTION_KEYS
+        sync: false
+      - key: TRIAGE_API_KEYS
+        sync: false
+      - key: TRIAGE_ADMIN_KEYS
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TRIAGE_PUBLIC
+        sync: false
+      - key: TRIAGE_ACCOUNTS
+        sync: false
+      - key: TRIAGE_CORS_ORIGINS
+        sync: false
+      - key: TRIAGE_APP_URL
+        sync: false
+      - key: TRIAGE_PUBLIC_API_URL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: TRIAGE_EMAIL_FROM
+        sync: false
+      - key: TRIAGE_EMAIL_LOGO_URL
+        sync: false
+      - key: TRIAGE_TRUSTED_PROXY_HOPS
+        sync: false
+      - key: TRIAGE_REQUEST_LOG_RETENTION_DAYS
+        sync: false
+      - key: TRIAGE_PUBLIC_STATS_MIN_REQUESTS
+        sync: false
+      - key: TRIAGE_KEYLESS_LOOKUP_MINUTES
+        sync: false

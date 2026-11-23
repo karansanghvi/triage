@@ -32,7 +32,7 @@ class Clock:
 
 def settings(**overrides):
     base = dict(visitor_daily_requests=10, daily_requests=300, daily_tokens=150_000, daily_model_calls=600,
-                per_minute_requests=100, max_prompt_chars=8_000, max_tokens=2_048,
+                per_minute_requests=100, max_prompt_chars=4_000, max_tokens=2_048,
                 public_byok_visitor_daily_requests=200, retention_days=7)
     return DemoSettings(**{**base, **overrides})
 
@@ -260,7 +260,7 @@ def test_status_for_a_new_visitor_needs_no_key():
     assert r.status_code == 200
     assert r.json() == {"enabled": True, "paused": False, "paused_reason": None,
                         "visitor": {"limit": 10, "used": 0, "remaining": 10},
-                        "limits": {"max_prompt_chars": 8000, "max_tokens": 2048},
+                        "limits": {"max_prompt_chars": 4000, "max_tokens": 2048},
                         "resets_at": "2026-11-14T00:00:00Z"}
 
 

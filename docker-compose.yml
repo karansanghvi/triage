@@ -1,7 +1,7 @@
 # Triage on one server: the API, with Caddy in front for HTTPS. Setup, updates and rollback: DEPLOY.md.
 #
 #   cp deploy/.env.example .env      # then fill it in (never commit it)
-#   TRIAGE_IMAGE_TAG=$(git rev-parse --short HEAD) docker compose up -d --build
+#   ./deploy/update.sh                # pulls the image GitHub Actions built and tested for main's latest commit
 #
 # Only Caddy is reachable from outside (80/443). The API listens on the private Docker network only.
 
@@ -15,9 +15,14 @@ x-logging: &logging
 
 services:
   api:
-    build: .
-    # Tagged per commit, so the previous image stays available for a rollback (DEPLOY.md)
-    image: triage-api:${TRIAGE_IMAGE_TAG:-latest}
+    # Built and tested for every commit on main by .github/workflows/image.yml (amd64 and arm64), tagged with the full
+    # commit SHA; deploy/update.sh pulls it and deploy/rollback.sh can return to any earlier commit's image.
+    image: ${TRIAGE_IMAGE_REPO:-ghcr.io/karansanghvi/triage-api}:${TRIAGE_IMAGE_TAG:-main}
+    # Fallback, building on this server instead of pulling (DEPLOY.md, section 6): deploy/update.sh --build
+    build:
+      context: .
+      labels:
+        org.opencontainers.image.revision: ${TRIAGE_IMAGE_TAG:-unknown}
     env_file: .env
     environment:
       # Caddy is the one proxy in front of the API, and it sets X-Forwarded-For to the address it received the
@@ -27,7 +32,9 @@ services:
     expose:
       - "8000"
     restart: unless-stopped
-    mem_limit: 1536m            # peak is about 660 MB (DEPLOY.md, "Memory"); a runaway can't starve the VM
+    # The API peaks at about 400-440 MB (DEPLOY.md, "Memory"); the cap means a runaway restarts the container
+    # instead of starving the VM. 1536m suits a 3 GB VM; on a 1 GB VM set TRIAGE_API_MEM_LIMIT=640m in .env.
+    mem_limit: ${TRIAGE_API_MEM_LIMIT:-1536m}
     read_only: true
     tmpfs:
       - /tmp

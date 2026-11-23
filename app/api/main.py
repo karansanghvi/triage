@@ -16,6 +16,7 @@ Endpoints
                                   request's outcome and cost, by its id, without a key)
     GET  /v1/routing-config       the config in use (admin)
     PUT  /v1/routing-config       update quality presets/default and backup models live (admin; not persisted)
+    GET  /v1/admin/forwarded-for  the caller's own proxy headers, to set TRIAGE_TRUSTED_PROXY_HOPS (admin; DEPLOY.md)
 
 Response headers: X-Triage-Request-Id, -Model, -Tier, -Reason, -Fallback, -Cache, -Verified, -Escalated,
 -Check, -P-Low, -P-Medium and -Tau (model "auto" only, 6 decimals), and on non-streaming responses -Cost,
@@ -61,6 +62,7 @@ from app.accounts.limits import AccountLimitError
 from app.api.request_log import RequestRow, embedding_to_bytes, is_training_eligible, prompt_hmac
 from app.router.small_talk import is_small_talk
 from app.api import health, maintenance
+from app.providers import lazy as lazy_providers
 from app.api import public_stats, usage_sql
 from app.api.stats import summarize
 from app.api.verification import Served, verify_sync
@@ -603,6 +605,9 @@ def demo_usage(row: RequestRow, reserved: int) -> tuple:
 
 # ---------- the app ----------
 
+SDK_IMPORT_DELAY = 0.5      # seconds after startup: uvicorn binds the port first
+
+
 def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = None,
                cors_origins: Optional[list] = None, accounts: Optional[bool] = None) -> FastAPI:
     """deps / auth given: use them (tests). Otherwise load both at startup from config and the environment,
@@ -630,6 +635,9 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             set_up_email(app.state.deps)          # refuses TRIAGE_DEV_EMAIL_LOG=on outside local development
         # Housekeeping (privacy policy retention): now, then cache hourly, database daily; stopped at shutdown
         housekeeping = asyncio.create_task(maintenance.run_forever(app.state.deps, retention_days))
+        # The OpenAI and Gemini SDKs (the server's own providers) load in a background thread once uvicorn is
+        # listening, so /healthz answers sooner; a request that needs one first waits for it (app/providers/lazy.py)
+        asyncio.get_running_loop().call_later(SDK_IMPORT_DELAY, lazy_providers.warm_in_background)
         try:
             yield
         finally:
@@ -1153,6 +1161,31 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         if not owner:                                       # someone else's request looks like a missing one
             raise APIError(404, f"No request {request_id!r} for this key.", param="request_id", code="not_found")
         return row.public_dict()
+
+    # ----- proxy check (admin) -----
+
+    @app.get("/v1/admin/forwarded-for", include_in_schema=False)
+    async def forwarded_for(request: Request, who: Caller = Depends(admin)):
+        """The X-Forwarded-For chain (and other client-address headers) of THIS request, as the API received it, to
+        set TRIAGE_TRUSTED_PROXY_HOPS behind a host whose proxies aren't documented (Render): call it from your own
+        machine, find your public IP in the chain, and count its position from the right. Admin key only, never
+        logged; it shows the caller only their own request's addresses."""
+        deps = app.state.deps
+        chain = [part.strip() for part in ",".join(request.headers.getlist("x-forwarded-for")).split(",")
+                 if part.strip()]
+        others = {name: request.headers[name] for name in ("forwarded", "x-real-ip", "true-client-ip",
+                                                             "cf-connecting-ip", "x-forwarded-proto")
+                  if name in request.headers}
+        hops = deps.trusted_proxy_hops
+        return JSONResponse({
+            "x_forwarded_for": chain,
+            "direct_connection": request.client.host if request.client else None,
+            "other_headers": others,
+            "trusted_proxy_hops": hops,
+            "client_ip_used": client_ip(request, hops),
+            "how_to_read": "Find your own public IP in x_forwarded_for. Its position counted from the right "
+                           "(1 = last) is the value for TRIAGE_TRUSTED_PROXY_HOPS.",
+        }, headers={"Cache-Control": "no-store"})
 
     # ----- live routing config -----
 

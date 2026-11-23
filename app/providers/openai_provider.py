@@ -1,8 +1,9 @@
 """Adapter for every provider that uses OpenAI's request format."""
-import openai
-from openai import OpenAI
-
 from app.providers.common import Finish, ProviderError, RawResult, Usage, kind_from_status, server_or_given_key
+
+from app.providers.lazy import LazyModule
+
+openai = LazyModule("openai")          # imported in the background after startup (app/providers/lazy.py)
 
 # Tests set this to an httpx.Client with a MockTransport to see the exact request; None = the SDK's own client
 HTTP_CLIENT = None
@@ -65,7 +66,7 @@ def send_openai_format(
 ):
     # max_retries=0: the library retries on its own by default.
     # Triage's reliability layer decides when to retry instead.
-    client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=0, http_client=HTTP_CLIENT)
+    client = openai.OpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=0, http_client=HTTP_CLIENT)
 
     extra = _generation_params(provider, temperature, max_tokens)
     if reasoning_effort is not None:

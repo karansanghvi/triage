@@ -63,7 +63,7 @@ triage/
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt     # the server's packages plus training, evaluation and tests
 cp .env.example .env           # then add your API keys
 ```
 
@@ -157,7 +157,9 @@ when you name a model, the choice was yours, so Triage claims no saving for it (
 `GET /v1/requests/{id}` (one of your own requests; with public access on, a request made without a key can be
 read without one, by its id, for 10 minutes (`TRIAGE_KEYLESS_LOOKUP_MINUTES`), but only its outcome and cost), and for admin keys `GET`/`PUT /v1/routing-config`, which
 changes the quality presets and backup models without a restart. Those changes are kept in memory only. The
-first model of each tier can't be changed, because the classifier predicts for that exact model.
+first model of each tier can't be changed, because the classifier predicts for that exact model. Admin keys can also
+read `GET /v1/admin/forwarded-for`: their own request's proxy headers, to set `TRIAGE_TRUSTED_PROXY_HOPS` behind a
+host that doesn't document them (DEPLOY.md, section 8).
 
 **Settings:** `temperature` and `max_tokens` are honoured. The classifier learned from temperature 0 and
 max_tokens 4000, so `auto` requests with other values are logged with `settings_match_training: false`.
@@ -183,7 +185,8 @@ An `Authorization` header that is sent but invalid is always a 401. Every other 
 **Demo limits** (`config/demo.yaml`, UTC days):
 - 10 requests per visitor, and 300 requests, 150,000 tokens and 600 model calls per day for all visitors together.
 - 4 requests per minute for all visitors together.
-- 8,000 prompt characters. `max_tokens` is lowered to 2,048, and the response says so in `X-Triage-Max-Tokens`.
+- 4,000 prompt characters (only the demo: your own provider keys, accounts and Triage API keys have no limit).
+  `max_tokens` is lowered to 2,048, and the response says so in `X-Triage-Max-Tokens`.
 - No sync verification.
 
 Refusals are 429s with `Retry-After`: `demo_limit_reached` and `demo_busy` suggest adding a provider key, and
@@ -502,16 +505,20 @@ Keep them in your host's secret settings (the server's `.env`, see [DEPLOY.md](D
 
 ### Deploying
 
-Production runs in Docker on one server (an Oracle Cloud VM, with Caddy for HTTPS): the whole setup, every
-variable, updates and rollback are in [DEPLOY.md](DEPLOY.md). What any host needs:
+The API runs on Render's free plan (`render.yaml`): GitHub Actions builds and tests the Docker image for x86_64 and
+ARM on every push to `main`, publishes it to GitHub's container registry, then has Render deploy exactly that image.
+Render handles HTTPS; the free plan sleeps when idle, and the website wakes it. Your own VM (a Google Cloud e2-micro or
+an Oracle Cloud ARM VM, with Caddy for HTTPS) is the documented alternative. The whole setup, every variable, updates and rollback are in
+[DEPLOY.md](DEPLOY.md). What any host needs:
 
-1. Install exactly the tested versions: `pip install -r requirements.lock` on Linux (every package pinned, CPU-only
-   torch; `requirements.txt` lists the direct dependencies). To upgrade one, change its pin in `requirements.txt`,
-   run the tests (including `pytest -m postgres`), regenerate the lock (DEPLOY.md), then commit.
-2. **Migrate before the new code starts:** `DATABASE_URL=... venv/bin/alembic upgrade head`, as your host's
-   pre-deploy step if it has one, or at the front of the start command (`alembic upgrade head && uvicorn ... --no-access-log`).
-   The server never migrates Postgres itself, and refuses to start if the database isn't at the latest
-   migration. A local SQLite file is migrated automatically when opened.
+1. Install exactly the tested versions: `pip install -r requirements.lock` on Linux (every package pinned; only
+   what the server runs, so no torch: the embedding model runs on onnxruntime). `requirements.txt` lists the
+   server's direct dependencies and `requirements-dev.txt` adds training, evaluation and tests. To upgrade one,
+   change its pin, run the tests (including `pytest -m postgres`), regenerate the lock (DEPLOY.md), then commit.
+2. **Migrations run themselves at startup, only when needed:** the server reads `alembic_version` with one query
+   and compares it with the latest revision (recorded in `migrations/HEAD` when the image is built). If the
+   database is behind, it upgrades it before serving (Postgres on `DATABASE_URL_UNPOOLED`, the direct
+   connection); if it's newer than the code, it refuses to start. `alembic upgrade head` still works by hand.
 3. Start: `uvicorn app.api.main:app --host 0.0.0.0 --port $PORT --no-access-log`. `--no-access-log` is required:
    uvicorn's access log prints each client's IP address, and the privacy policy says Triage logs none (its own
    request lines carry no IP). With `TRIAGE_ACCOUNTS=on` it refuses to start without valid `TRIAGE_ENCRYPTION_KEYS`.
@@ -568,8 +575,9 @@ localhost, or `TRIAGE_TRUSTED_PROXY_HOPS` above 0.
 - **Production:** use Neon's **pooled** connection string (its host contains `-pooler`) in `DATABASE_URL`, as
   `postgresql+psycopg://USER:PASSWORD@HOST/DB?sslmode=require`. Neon suspends idle databases: the first query
   after a pause is slower, and the server re-checks pooled connections before using them.
-- **Migrations:** run `alembic upgrade head` with the **direct** connection string (the same host without
-  `-pooler`); schema changes are safest without the pooler in between.
+- **Migrations:** set `DATABASE_URL_UNPOOLED` to the **direct** connection string (the same host without
+  `-pooler`): the server migrates on it when it starts behind, and `alembic upgrade head` by hand uses it too.
+  Schema changes are safest without the pooler in between.
 - **Tests:** point `TRIAGE_TEST_DATABASE_URL` at a separate **test branch**, never production, and run
   `venv/bin/python -m pytest -m postgres`. Each test works in its own throwaway schema. The tests switch a pooled
   host to its direct host automatically, because the pooler rejects the `search_path` option they use. A plain

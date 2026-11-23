@@ -14,10 +14,14 @@ The model is loaded once (first use) and reused, so live requests don't pay the 
 The first run downloads it (~90 MB); after that it works offline. A deployed server never downloads it: the build
 runs `python -m scripts.fetch_embedding_model`, and the server starts with HF_HUB_OFFLINE=1.
 
-The model runs on plain `transformers` (tokenizer -> transformer -> mean pooling -> L2 normalisation), which is
-exactly the all-MiniLM-L6-v2 sentence-transformers pipeline (modules.json: Transformer, Pooling(mean), Normalize).
-It avoids importing sentence-transformers, which pulls in scikit-learn, scipy, pandas and datasets: about 200 MB
-of memory the server doesn't need. tests/test_embedding_parity.py checks it against sentence-transformers itself.
+The model runs on onnxruntime (the model repo's own fp32 export, onnx/model.onnx, at the pinned revision), with
+the `tokenizers` library and numpy: tokenizer -> transformer -> mean pooling -> L2 normalisation, exactly the
+all-MiniLM-L6-v2 sentence-transformers pipeline (modules.json: Transformer, Pooling(mean), Normalize). No torch or
+transformers at runtime (about 300 MB of memory less); they are test-only now. tests/test_embedding_parity.py
+checks this against the torch/transformers pipeline and against sentence-transformers itself.
+
+The tokenizer.json in the model repo has truncation and padding at 128 tokens built in. The encoder sets both
+itself (truncate at MAX_SEQ_LENGTH = 256, pad to the longest in each batch), as sentence-transformers does.
  
 Usage (batch, for training):
     python -m app.router.embeddings --input data/prompts.jsonl --output data/embeddings.npz
@@ -31,6 +35,8 @@ from __future__ import annotations
 
 import argparse 
 import json 
+import os
+import threading
 import time 
 from functools import lru_cache
 from pathlib import Path
@@ -42,67 +48,110 @@ from app.router.features import prompt_text
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # The exact revision the classifier was evaluated with; the build downloads this one (scripts/fetch_embedding_model)
 MODEL_REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+# Files the server needs, all at MODEL_REVISION: the fp32 ONNX export and the tokenizer that goes with it
+ONNX_FILE = "onnx/model.onnx"
+TOKENIZER_FILE = "tokenizer.json"
+MODEL_FILES = (ONNX_FILE, TOKENIZER_FILE)
 MAX_SEQ_LENGTH = 256    # the model's sentence_bert_config.json: longer input is cut, so chunk_text splits first
+DIM = 384
 BATCH_SIZE = 32         # batch (training) runs
 LIVE_BATCH_SIZE = 4     # live requests: a long prompt's chunks go through a few at a time, to keep memory low
 CHUNK_MARGIN = 16   # tokens kept free in each chunk (see chunk_text)
-TORCH_THREADS_ENV = "TRIAGE_TORCH_THREADS"
+THREADS_ENV = "TRIAGE_EMBEDDING_THREADS"
+
+# One LONG embedding at a time in this process. A long prompt (several chunks) holds about 55 MB of working memory
+# while it embeds; on a 512 MB server (Render's free plan) two at once could push the API past its limit and get it
+# killed. A short prompt is one chunk (at most MAX_SEQ_LENGTH tokens, a fraction of that memory) and skips the
+# queue: measured at a tenth of a CPU, a short prompt queued behind two long ones took 160 s instead of about 4.
+EMBED_LOCK = threading.Lock()
+
+# onnxruntime's official builds send usage telemetry to Microsoft by default (its Privacy.md). This turns all of it
+# off (no uploader, no events, no device identifier) and must be set before onnxruntime first loads, so it is set
+# here, before this module ever imports it. Forced, not a default: the privacy policy says Triage shares nothing
+# with anyone beyond the model providers. The Dockerfile sets it too.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
 
 
 class EmbeddingModelMissing(RuntimeError):
     """The model files aren't in the Hugging Face cache and downloading is off (a deployed server)"""
 
 
-class MiniLMEncoder:
-    """all-MiniLM-L6-v2 as sentence-transformers runs it: transformer, mean pooling over real tokens, unit length"""
-
-    def __init__(self, name: str = MODEL_NAME, revision: str = MODEL_REVISION):
-        import torch
-        from transformers import AutoModel, AutoTokenizer
-        self._torch = torch
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(name, revision=revision)
-            self.model = AutoModel.from_pretrained(name, revision=revision)
-        except OSError as error:
-            import os
-            raise EmbeddingModelMissing(
-                f"the embedding model {name} (revision {revision[:12]}) isn't in the Hugging Face cache "
-                f"(HF_HOME={os.environ.get('HF_HOME', '~/.cache/huggingface')}) and HF_HUB_OFFLINE="
-                f"{os.environ.get('HF_HUB_OFFLINE', '0')}. Run `python -m scripts.fetch_embedding_model` "
-                f"(the deploy build step does this) with the same HF_HOME. ({type(error).__name__})") from None
-        self.model.eval()
-        self.max_seq_length = MAX_SEQ_LENGTH
-
-    def encode(self, pieces: list, batch_size: int = BATCH_SIZE) -> np.ndarray:
-        """Unit-length float32 vectors, one per piece"""
-        torch = self._torch
-        out = []
-        for start in range(0, len(pieces), batch_size):
-            batch = pieces[start:start + batch_size]
-            enc = self.tokenizer(batch, padding=True, truncation="longest_first", max_length=self.max_seq_length,
-                                 return_tensors="pt")
-            with torch.inference_mode():
-                hidden = self.model(**enc).last_hidden_state
-            mask = enc["attention_mask"].unsqueeze(-1).to(hidden.dtype)
-            pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
-            out.append(torch.nn.functional.normalize(pooled, p=2, dim=1).numpy())
-        return np.vstack(out).astype(np.float32) if out else np.zeros((0, 384), dtype=np.float32)
+def model_file(filename: str, name: str = MODEL_NAME, revision: str = MODEL_REVISION) -> str:
+    """Local path of one model file at `revision`, from the Hugging Face cache (downloaded first unless
+    HF_HUB_OFFLINE=1). Missing: EmbeddingModelMissing, naming the fetch script."""
+    from huggingface_hub import hf_hub_download
+    try:
+        return hf_hub_download(name, filename, revision=revision)
+    except Exception as error:
+        raise EmbeddingModelMissing(
+            f"the embedding model {name} (revision {revision[:12]}, {filename}) isn't in the Hugging Face cache "
+            f"(HF_HOME={os.environ.get('HF_HOME', '~/.cache/huggingface')}) and HF_HUB_OFFLINE="
+            f"{os.environ.get('HF_HUB_OFFLINE', '0')}. Run `python -m scripts.fetch_embedding_model` "
+            f"(the deploy build step does this) with the same HF_HOME. ({type(error).__name__})") from None
 
 
-def set_torch_threads(default: int = 1) -> int:
-    """The server runs the model on TRIAGE_TORCH_THREADS threads (default 1): each torch thread keeps its own
-    working memory, and one request's embedding takes milliseconds either way. Returns the number used."""
-    import os
-    import torch
-    raw = os.environ.get(TORCH_THREADS_ENV, str(default)).strip() or str(default)
+def embedding_threads(default: int = 1) -> int:
+    """TRIAGE_EMBEDDING_THREADS (default 1): onnxruntime's threads for the model. One request's embedding takes
+    milliseconds either way, and each extra thread keeps its own working memory. Bad values raise ValueError."""
+    raw = os.environ.get(THREADS_ENV, str(default)).strip() or str(default)
     try:
         threads = int(raw)
     except ValueError:
-        raise ValueError(f"{TORCH_THREADS_ENV} must be a whole number, got {raw!r}") from None
+        raise ValueError(f"{THREADS_ENV} must be a whole number, got {raw!r}") from None
     if threads < 1:
-        raise ValueError(f"{TORCH_THREADS_ENV} must be 1 or more, got {threads}")
-    torch.set_num_threads(threads)
+        raise ValueError(f"{THREADS_ENV} must be 1 or more, got {threads}")
     return threads
+
+
+class MiniLMEncoder:
+    """all-MiniLM-L6-v2 as sentence-transformers runs it: transformer, mean pooling over real tokens, unit length.
+    onnxruntime on the CPU, fp32, TRIAGE_EMBEDDING_THREADS threads."""
+
+    def __init__(self, name: str = MODEL_NAME, revision: str = MODEL_REVISION, threads: int | None = None):
+        os.environ["ORT_DISABLE_TELEMETRY"] = "1"          # in case something reset it after this module loaded
+        import onnxruntime as ort
+        from tokenizers import Tokenizer
+        ort.disable_telemetry_events()
+        onnx_path = model_file(ONNX_FILE, name, revision)
+        tokenizer_path = model_file(TOKENIZER_FILE, name, revision)
+        self.max_seq_length = MAX_SEQ_LENGTH
+        # For chunking: the whole text, no special tokens added, no cut, no padding
+        self.raw_tokenizer = Tokenizer.from_file(tokenizer_path)
+        self.raw_tokenizer.no_truncation()
+        self.raw_tokenizer.no_padding()
+        # For the model: cut at MAX_SEQ_LENGTH, padded to the longest in the batch (overriding the file's 128)
+        self.tokenizer = Tokenizer.from_file(tokenizer_path)
+        self.tokenizer.enable_truncation(MAX_SEQ_LENGTH, strategy="longest_first")
+        self.tokenizer.enable_padding(pad_id=self.tokenizer.token_to_id("[PAD]"), pad_token="[PAD]")
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = threads or embedding_threads()
+        options.inter_op_num_threads = 1
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        self.session = ort.InferenceSession(onnx_path, options, providers=["CPUExecutionProvider"])
+        self.threads = options.intra_op_num_threads
+
+    def token_ids(self, text: str) -> list:
+        """The text's token ids, without special tokens and uncut"""
+        return self.raw_tokenizer.encode(text, add_special_tokens=False).ids
+
+    def decode(self, ids: list) -> str:
+        return self.raw_tokenizer.decode(ids, skip_special_tokens=False)
+
+    def encode(self, pieces: list, batch_size: int = BATCH_SIZE) -> np.ndarray:
+        """Unit-length float32 vectors, one per piece"""
+        out = []
+        for start in range(0, len(pieces), batch_size):
+            encodings = self.tokenizer.encode_batch(pieces[start:start + batch_size])
+            ids = np.array([e.ids for e in encodings], dtype=np.int64)
+            mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
+            types = np.array([e.type_ids for e in encodings], dtype=np.int64)
+            hidden = self.session.run(["last_hidden_state"],
+                                      {"input_ids": ids, "attention_mask": mask, "token_type_ids": types})[0]
+            weights = mask[..., None].astype(hidden.dtype)
+            pooled = (hidden * weights).sum(axis=1) / np.clip(weights.sum(axis=1), 1e-9, None)
+            norms = np.clip(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12, None)   # as F.normalize
+            out.append(pooled / norms)
+        return np.vstack(out).astype(np.float32) if out else np.zeros((0, DIM), dtype=np.float32)
 
 
 @lru_cache(maxsize=1)
@@ -117,14 +166,13 @@ def is_loaded() -> bool:
 
 def chunk_text(text: str, model) -> list[str]:
     """Split text into pieces the model can read whole. Short text comes back as a single piece."""
-    tokenizer = model.tokenizer
     # Room for the model's own start/end tokens, plus a margin: a decoded chunk can re-tokenize a few
     # tokens longer, and the model would silently drop the overflow
     size = model.max_seq_length - 2 - CHUNK_MARGIN
-    ids = tokenizer(text, add_special_tokens=False, truncation=False, verbose=False)["input_ids"]
+    ids = model.token_ids(text)
     if len(ids) <= size:
         return [text]
-    return [tokenizer.decode(ids[i:i + size]) for i in range(0, len(ids), size)]
+    return [model.decode(ids[i:i + size]) for i in range(0, len(ids), size)]
 
 def embed_texts(texts: list[str], model=None, batch_size: int = BATCH_SIZE) -> tuple[np.ndarray, list[int]]:
     """(vectors of shape (n, dim), number of chunks per text). Each vector has length 1"""
@@ -135,7 +183,11 @@ def embed_texts(texts: list[str], model=None, batch_size: int = BATCH_SIZE) -> t
             pieces.append(piece)
             owner.append(i)
     
-    piece_vecs = model.encode(pieces, batch_size=batch_size)
+    if len(pieces) > len(texts):        # some text is long (more than one chunk): one at a time (see EMBED_LOCK)
+        with EMBED_LOCK:
+            piece_vecs = model.encode(pieces, batch_size=batch_size)
+    else:
+        piece_vecs = model.encode(pieces, batch_size=batch_size)
     weights = np.array([max(len(p), 1) for p in pieces], dtype=np.float64) # longer chunk counts more 
     owner = np.array(owner)
     

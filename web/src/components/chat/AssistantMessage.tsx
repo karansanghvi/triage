@@ -1,12 +1,14 @@
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { ChevronRight, Split, Scissors, Square } from "lucide-react"
+import { ChevronRight, Split, Scissors, Square, Clock } from "lucide-react"
 import type { AssistantMessage as AssistantMessageType, Tier } from "@/types/chat"
 import { formatPercent } from "@/lib/format"
 import Usd from "@/components/common/Usd"
 import { cn } from "@/lib/utils"
 import { remarkHtmlBreaks } from "@/lib/remarkHtmlBreaks"
 import ErrorCard from "./ErrorCard"
+import { useServerWake } from "@/lib/server"
+import { WAKE_ESTIMATE_SECONDS } from "@/lib/wake"
 
 type AssistantMessageProps = {
   message: AssistantMessageType
@@ -43,6 +45,36 @@ function Markdown({ text }: { text: string }) {
   )
 }
 
+// Before the first token: dots, plus a note when the server is waking up or the message is long
+function Waiting({ longPrompt }: { longPrompt: boolean }) {
+  const { state, waitingSeconds } = useServerWake()
+  return (
+    <div className="py-3">
+      <div className="flex items-center gap-1.5">
+        <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
+        <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
+        <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" />
+      </div>
+      {state === "waking" && (
+        <p role="status" className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+          <Clock className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span>
+            Waking up the server: it sleeps when nobody has used it for a while, and starting takes about{" "}
+            {Math.round(WAKE_ESTIMATE_SECONDS / 60)} minutes ({waitingSeconds} s so far). Your message is sent as
+            soon as it's up.
+          </span>
+        </p>
+      )}
+      {state !== "waking" && longPrompt && (
+        <p role="status" className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+          <Clock className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span>Long message: on the free server, reading it to pick a model can take up to a minute.</span>
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function AssistantMessage({ message, live, selected, onSelect, onRetry }: AssistantMessageProps) {
   const routing = message.routing
   const savedShare =
@@ -59,14 +91,8 @@ export default function AssistantMessage({ message, live, selected, onSelect, on
         {/* Arriving: the text so far */}
         {message.status === "pending" && live && <Markdown text={displayable(live)} />}
 
-        {/* Thinking (nothing has arrived yet) */}
-        {message.status === "pending" && !live && (
-          <div className="flex items-center gap-1.5 py-3">
-            <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
-            <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
-            <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" />
-          </div>
-        )}
+        {/* Thinking (nothing has arrived yet), saying why when it may take a while */}
+        {message.status === "pending" && !live && <Waiting longPrompt={message.longPrompt === true} />}
 
         {/* Error: whatever arrived before it, then the card */}
         {message.status === "error" && message.content && <Markdown text={displayable(message.content)} />}

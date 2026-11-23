@@ -5,13 +5,16 @@ API version 2026-10-21 any temperature / top_p / top_k is a 400, so none is ever
 of the answer text; their tokens are billed as output and already counted in usage.output_tokens.
 Docs: platform.claude.com/docs/en/build-with-claude/thinking and /effort, /api/versioning (checked 2026-11-12).
 """
-import anthropic
 import httpx
-import httpx2
 
 from app.providers.common import (
     Finish, ProviderError, RawResult, Usage, kind_from_status, server_or_given_key, split_system,
 )
+from app.providers.lazy import LazyModule
+
+# Imported on the first Anthropic request (bring-your-own-key only), not at startup (app/providers/lazy.py)
+anthropic = LazyModule("anthropic")
+httpx2 = LazyModule("httpx2")
 
 PROVIDER = "anthropic"
 # Pinned so a new SDK default can't change request rules under us (2026-10-21: sampling parameters are a 400)

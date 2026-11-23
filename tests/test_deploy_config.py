@@ -68,11 +68,13 @@ def test_images_are_pinned_by_digest():
 
 def test_the_image_runs_as_a_plain_user_offline_with_the_memory_settings():
     assert re.search(r"^USER triage$", DOCKERFILE, re.M)
-    for setting in ("HF_HUB_OFFLINE=1", "MALLOC_ARENA_MAX=2", "TRIAGE_TORCH_THREADS=1"):
+    for setting in ("HF_HUB_OFFLINE=1", "MALLOC_ARENA_MAX=2", "TRIAGE_EMBEDDING_THREADS=1"):
         assert setting in DOCKERFILE
     cmd = [l for l in DOCKERFILE.splitlines() if l.startswith("CMD ")][0]
-    assert cmd.index("alembic upgrade head") < cmd.index("uvicorn")
+    assert "alembic" not in cmd                         # the app upgrades the schema itself, only when behind
     assert "--workers 1" in cmd and "--no-access-log" in cmd and "--host 0.0.0.0" in cmd
+    assert "db.SCHEMA_HEAD_FILE.write_text(db.head_revision()" in DOCKERFILE        # recorded at build time
+    assert "RUN python -m compileall -q app migrations" in DOCKERFILE                # no compiling at each start
 
 
 def test_the_image_gets_the_live_model_files_and_never_the_env_file():
@@ -93,5 +95,131 @@ def test_caddy_streams_and_keeps_no_access_log():
     assert "flush_interval" in directives and "log" not in directives and "encode" not in directives
 
 
-def test_there_is_one_deploy_config():
-    assert not (PROJECT_ROOT / "render.yaml").exists()
+# ---------- Render (the API's host): render.yaml ----------
+
+RENDER = yaml.safe_load((PROJECT_ROOT / "render.yaml").read_text())
+RENDER_API = RENDER["services"][0]
+
+
+def test_render_runs_the_tested_image_on_the_free_plan_in_oregon():
+    assert len(RENDER["services"]) == 1
+    assert RENDER_API["type"] == "web" and RENDER_API["runtime"] == "image"
+    assert RENDER_API["image"] == {"url": "ghcr.io/karansanghvi/triage-api:main"}       # public: no credentials
+    assert RENDER_API["plan"] == "free" and RENDER_API["region"] == "oregon"
+    assert RENDER_API["healthCheckPath"] == "/healthz"
+
+
+def test_render_starts_one_worker_on_its_port():
+    command = RENDER_API["dockerCommand"]
+    assert "alembic" not in command and "exec uvicorn app.api.main:app" in command
+    for part in ("--port $PORT", "--host 0.0.0.0", "--workers 1", "--no-access-log"):
+        assert part in command
+
+
+def test_render_lists_variable_names_only():
+    names = set()
+    for var in RENDER_API["envVars"]:
+        assert set(var) == {"key", "sync"} and var["sync"] is False, var        # no values in the repo
+        names.add(var["key"])
+    assert PRODUCTION_VARS - {"API_DOMAIN", "ACME_EMAIL"} <= names               # no Caddy on Render
+    assert "TRIAGE_TRUSTED_PROXY_HOPS" in names and not names & DEV_ONLY
+
+
+def test_the_image_listens_on_the_hosts_port():
+    cmd = [l for l in DOCKERFILE.splitlines() if l.startswith("CMD ")][0]
+    assert "--port ${PORT:-8000}" in cmd
+
+
+def test_the_api_memory_cap_is_set_per_host():
+    assert COMPOSE["services"]["api"]["mem_limit"] == "${TRIAGE_API_MEM_LIMIT:-1536m}"
+    assert re.search(r"^TRIAGE_API_MEM_LIMIT=$", (PROJECT_ROOT / "deploy" / ".env.example").read_text(), re.M)
+
+
+# ---------- images built by GitHub Actions, pulled by the server ----------
+
+WORKFLOW = yaml.safe_load((PROJECT_ROOT / ".github" / "workflows" / "image.yml").read_text())
+REGISTRY_IMAGE = "ghcr.io/karansanghvi/triage-api"
+
+
+def _steps(job):
+    return WORKFLOW["jobs"][job]["steps"]
+
+
+def test_images_are_built_on_pushes_to_main_only():
+    triggers = WORKFLOW.get("on", WORKFLOW.get(True))          # PyYAML reads the key `on` as True
+    assert triggers == {"push": {"branches": ["main"]}}
+
+
+def test_actions_are_pinned_by_commit_sha():
+    uses = [s["uses"] for job in WORKFLOW["jobs"].values() for s in job["steps"] if "uses" in s]
+    assert uses
+    for ref in uses:
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", ref), ref
+
+
+def test_the_token_can_write_packages_only_where_images_are_pushed():
+    assert WORKFLOW["permissions"] == {}
+    assert WORKFLOW["jobs"]["build"]["permissions"] == {"contents": "read", "packages": "write"}
+    assert WORKFLOW["jobs"]["publish"]["permissions"] == {"packages": "write"}
+    assert WORKFLOW["jobs"]["deploy"]["permissions"] == {}
+    for job in WORKFLOW["jobs"]:
+        for step in _steps(job):
+            mentions_token = "GITHUB_TOKEN" in yaml.safe_dump(step)
+            assert mentions_token == ("docker login" in step.get("run", "")), step.get("name")
+    checkout = next(s for s in _steps("build") if "uses" in s)
+    assert checkout["with"]["persist-credentials"] is False
+
+
+def test_each_architecture_builds_natively_and_is_tested_before_it_is_pushed():
+    matrix = WORKFLOW["jobs"]["build"]["strategy"]["matrix"]["include"]
+    assert {(m["arch"], m["runner"]) for m in matrix} == {("amd64", "ubuntu-24.04"), ("arm64", "ubuntu-24.04-arm")}
+    runs = [s.get("run", "") for s in _steps("build")]
+    build = next(i for i, r in enumerate(runs) if "docker build" in r)
+    test = next(i for i, r in enumerate(runs) if "deploy/smoke_test_image.sh" in r)
+    push = next(i for i, r in enumerate(runs) if "docker push" in r)
+    assert build < test < push
+    assert "org.opencontainers.image.revision=${GITHUB_SHA}" in runs[build]
+
+
+def test_the_published_image_is_tagged_with_the_commit_and_main_for_both_architectures():
+    assert WORKFLOW["env"]["IMAGE"] == REGISTRY_IMAGE
+    assert WORKFLOW["jobs"]["publish"]["needs"] == "build"
+    run = _steps("publish")[0]["run"]
+    assert '-t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:main"' in run
+    assert '"$IMAGE:$GITHUB_SHA-amd64" "$IMAGE:$GITHUB_SHA-arm64"' in run
+    assert WORKFLOW["concurrency"]["cancel-in-progress"] is False      # :main never moves backwards
+
+
+def test_the_server_pulls_the_registry_image_and_can_still_build():
+    api = COMPOSE["services"]["api"]
+    assert api["image"] == "${TRIAGE_IMAGE_REPO:-" + REGISTRY_IMAGE + "}:${TRIAGE_IMAGE_TAG:-main}"
+    assert api["build"]["context"] == "."
+    assert re.search(r"^TRIAGE_IMAGE_REPO=$", SERVER_ENV.read_text(), re.M)
+    update = (PROJECT_ROOT / "deploy" / "update.sh").read_text()
+    rollback = (PROJECT_ROOT / "deploy" / "rollback.sh").read_text()
+    for script in (update, rollback):
+        assert "IMAGE=${IMAGE:-" + REGISTRY_IMAGE + "}" in script
+        assert "docker compose up -d --no-build" in script
+    assert 'docker pull -q "$IMAGE:$new"' in update and "org.opencontainers.image.revision" in update
+    assert "--build) build=yes" in update                              # the documented fallback
+    assert 'target=${1:-$(get TRIAGE_PREVIOUS_IMAGE_TAG)}' in rollback  # any earlier commit, or the previous one
+    assert "alembic downgrade" in rollback
+
+
+def test_the_smoke_test_script_is_executable():
+    import os
+    script = PROJECT_ROOT / "deploy" / "smoke_test_image.sh"
+    assert os.access(script, os.X_OK)
+    text = script.read_text()
+    assert "--network none" in text and "/readyz" in text and "TRIAGE_FAKE_MODELS=1" in text
+
+
+def test_each_green_push_deploys_its_own_image_to_render():
+    job = WORKFLOW["jobs"]["deploy"]
+    assert job["needs"] == "publish"                                   # only after both images passed and joined
+    step = job["steps"][0]
+    assert step["env"] == {"HOOK": "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"}
+    assert '"$IMAGE:$GITHUB_SHA"' in step["run"] and "imgURL=" in step["run"]
+    assert '[ -z "$HOOK" ]' in step["run"]                             # skipped until the secret exists
+    manual = (PROJECT_ROOT / "deploy" / "render_deploy.sh").read_text()
+    assert "RENDER_DEPLOY_HOOK_URL" in manual and "imgURL=" in manual
