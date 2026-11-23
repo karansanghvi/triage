@@ -42,7 +42,7 @@ On the held-out test set, the default setting kept **99.3% of the strongest mode
 | Classifier quality | ROC AUC 0.67 (cheap) / 0.67 (medium), 5-fold cross-validation |
 | AI answer checker on the test set | caught 4 of 12 bad answers, so it stays opt-in |
 | Routing overhead | 2.2–3.6 ms per request |
-| Automated tests | 2,319 Python tests passing, plus Postgres and web tests |
+| Automated tests | 2,417 Python, 31 Postgres and 31 web tests passing |
 
 > **Highlights**
 >
@@ -579,7 +579,7 @@ The cheapest model is bilingual and sometimes replied to "hello" in Arabic. The 
 | Layer | Technology |
 |---|---|
 | API | Python, FastAPI |
-| Machine learning | scikit-learn, sentence-transformers, NumPy |
+| Machine learning | At runtime: ONNX Runtime (sentence embeddings) and NumPy (the classifier). Training and tests: scikit-learn and sentence-transformers. scikit-learn stays installed on the server only as a fallback if the classifier's NumPy export is missing |
 | Providers | the official OpenAI, Anthropic and Google SDKs, plus OpenAI-compatible APIs for Groq |
 | Data | SQLAlchemy, Alembic, SQLite, Postgres |
 | Security | argon2 password hashing, AES-GCM encryption, HMAC fingerprints |
@@ -591,9 +591,9 @@ The cheapest model is bilingual and sometimes replied to "hello" in Arabic. The 
 
 | Suite | Result |
 |---|---|
-| Python unit and integration tests | **2,319 passing** |
-| Postgres tests | 30 tests for behaviour specific to Postgres, run separately |
-| Web tests | 20 passing |
+| Python unit and integration tests | **2,417 passing** |
+| Postgres tests | 31 passing, for behaviour specific to Postgres, run separately |
+| Web tests | 31 passing |
 
 The test suite runs without any network access: providers are simulated. Some of the more interesting kinds of tests:
 
@@ -604,7 +604,7 @@ The test suite runs without any network access: providers are simulated. Some of
 - the served model's settings checked to **match the settings it was trained with**;
 - **concurrency** tests on Postgres for the usage limits.
 
-There's no continuous-integration setup yet; tests run locally.
+GitHub Actions builds the Docker image on every push to `main` and smoke-tests it before publishing; the test suites above run locally.
 
 ---
 
