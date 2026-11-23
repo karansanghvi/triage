@@ -44,10 +44,10 @@ function snippets(baseUrl: string): Record<Tab, Line[]> {
   }
 }
 
-// A tiny highlighter: strings green, comments gray, a few keywords purple
+// A tiny highlighter: strings green, comments gray, a few keywords purple (also used by the /docs code boxes)
 const TOKEN = /("[^"]*"|'[^']*'|#.*$|\/\/.*$|\b(?:from|import|const|await|new)\b)/g
 
-function Highlighted({ text }: { text: string }) {
+export function Highlighted({ text }: { text: string }) {
   return (
     <>
       {text.split(TOKEN).map((part, i) => {

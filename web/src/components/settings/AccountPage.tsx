@@ -5,14 +5,14 @@ import { useAuth } from "@/context/AuthContext"
 import { useChats } from "@/context/ChatsContext"
 import { useAccountApi } from "@/hooks/useAccountApi"
 import { TriageError } from "@/lib/errors"
+import { PASSWORD_MAX, PASSWORD_MIN, passwordLength } from "@/lib/passwordRules"
+import { minutesFrom } from "@/lib/time"
 import { cn } from "@/lib/utils"
 import { PasswordInput, fieldBorder, inputClass } from "../auth/fields"
 import ConfirmDialog from "../common/ConfirmDialog"
 import SettingsCard from "./SettingsCard"
 
 const NAME_MAX = 80
-const PASSWORD_MIN = 10
-const PASSWORD_MAX = 128
 
 const saveButton =
   "mt-2 inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-[10px] bg-[#2563EB] px-4 text-[13px] font-semibold text-white transition-colors hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-60"
@@ -23,14 +23,10 @@ const errorClass = "mt-2 text-xs text-[#FCA5A5]"
 function passwordError(err: unknown, fallback: string): string {
   if (err instanceof TriageError && err.code === "incorrect_password") return "That password isn't right."
   if (err instanceof TriageError && err.retryAfter) {
-    return `Too many attempts. Try again in ${Math.ceil(err.retryAfter / 60)} minutes.`
+    return `Too many attempts. Try again in ${minutesFrom(err.retryAfter)}.`
   }
   if (err instanceof TriageError) return err.message
   return fallback
-}
-
-function chars(text: string): number {
-  return [...text].length
 }
 
 // ---------- Profile ----------
@@ -129,7 +125,7 @@ function PasswordCard() {
 
   function check(): { field: "current" | "new"; message: string } | null {
     if (!currentPassword) return { field: "current", message: "Enter your current password." }
-    const length = chars(newPassword)
+    const length = passwordLength(newPassword)
     if (length < PASSWORD_MIN || length > PASSWORD_MAX) {
       return { field: "new", message: `Your new password must be ${PASSWORD_MIN} to ${PASSWORD_MAX} characters.` }
     }

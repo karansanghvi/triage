@@ -5,6 +5,7 @@ import AuthLayout from "@/components/auth/AuthLayout"
 import { FormError, PasswordInput, fieldBorder, inputClass, primaryButton, secondaryButton } from "@/components/auth/fields"
 import { useAuth } from "@/context/AuthContext"
 import { TriageError } from "@/lib/errors"
+import { minutesFrom } from "@/lib/time"
 import { cn } from "@/lib/utils"
 
 type FieldErrors = { email?: string; password?: string }
@@ -14,12 +15,6 @@ function validate(email: string, password: string): FieldErrors {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) errors.email = "Enter a valid email address."
   if (!password) errors.password = "Enter your password."
   return errors
-}
-
-function minutesFrom(seconds?: number): string {
-  if (!seconds) return "a few minutes"
-  const minutes = Math.ceil(seconds / 60)
-  return minutes === 1 ? "1 minute" : `${minutes} minutes`
 }
 
 export default function LoginPage() {

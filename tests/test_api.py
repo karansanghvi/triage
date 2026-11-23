@@ -459,6 +459,47 @@ def test_models_lists_auto_and_prices(http):
     assert (small["triage"]["price_per_1m_input_usd"], small["triage"]["price_per_1m_output_usd"]) == (0.075, 0.30)
 
 
+RETIRED = ("ollama-qwen", "groq-qwen")
+
+
+def test_retired_models_stay_in_models_yaml_for_evaluation_but_are_not_served():
+    from app.registry import serving_registry
+    full = load_registry()
+    assert all(full[name].retired for name in RETIRED)            # evaluation still prices old data with them
+    served = serving_registry(full)
+    assert not set(RETIRED) & set(served)
+    assert set(served) == {name for name, m in full.items() if not m.retired}
+
+
+def test_models_hides_retired_models(http, app_deps):
+    ids = [m["id"] for m in http.get("/v1/models", headers=auth()).json()["data"]]
+    assert not set(RETIRED) & set(ids)
+    assert not set(RETIRED) & set(app_deps[1].registry)
+    assert "ollama-llama" in ids        # routing.yaml's server_providers has ollama: this server runs it itself
+
+
+@pytest.mark.parametrize("name", RETIRED)
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_retired_model_named_in_a_request_is_unknown(http, name, stream):
+    r = post(http, {"model": name, "messages": ASK, "stream": stream})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "model_not_found" and r.json()["error"]["param"] == "model"
+
+
+def test_models_on_a_host_without_ollama_lists_only_reachable_providers():
+    raw = routing_raw()
+    raw["server_providers"] = ["groq", "gemini"]               # what TRIAGE_SERVER_PROVIDERS=groq,gemini does
+    app, deps = make_app(raw=raw)
+    data = TestClient(app).get("/v1/models", headers=auth()).json()["data"]
+    providers = {m["owned_by"] for m in data if m["id"] != "auto"}
+    assert providers == {"groq", "gemini", "openai", "anthropic"}           # no ollama model at all
+    expected = {n for n, m in deps.registry.items() if m.provider != "ollama"}
+    assert {m["id"] for m in data} == {"auto"} | expected
+    # the BYOK providers are listed, marked as needing the caller's own key
+    assert all(m["triage"]["requires_key"] for m in data if m["owned_by"] in ("openai", "anthropic"))
+    assert not any(m["triage"]["requires_key"] for m in data if m["owned_by"] in ("groq", "gemini"))
+
+
 def test_stats_summarize_savings_per_key(http):
     auto = post(http).headers
     named = post(http, {"model": "groq-large", "messages": ASK}).headers

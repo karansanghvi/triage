@@ -34,6 +34,15 @@ export default function FinalCTA() {
             {user ? "Connect your app" : "Create an account"}
           </Link>
         </div>
+        <p className="mt-6 text-sm text-[#8B90A0]">
+          Building with it?{" "}
+          <Link
+            to="/docs"
+            className="rounded-[4px] font-medium text-[#60A5FA] underline-offset-2 outline-none transition-colors hover:text-[#93C5FD] hover:underline focus-visible:ring-2 focus-visible:ring-[#60A5FA] focus-visible:ring-offset-2 focus-visible:ring-offset-[#07070B] pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center"
+          >
+            Read the docs <span aria-hidden="true">→</span>
+          </Link>
+        </p>
       </div>
     </section>
   )

@@ -5,6 +5,7 @@ import AuthLayout from "@/components/auth/AuthLayout"
 import { FormError, PasswordInput, fieldBorder, inputClass, primaryButton, secondaryButton } from "@/components/auth/fields"
 import { useAuth } from "@/context/AuthContext"
 import { TriageError } from "@/lib/errors"
+import { PASSWORD_MAX, PASSWORD_MIN, passwordLengthProblem } from "@/lib/passwordRules"
 import { cn } from "@/lib/utils"
 
 type FieldErrors = { name?: string; email?: string; password?: string }
@@ -13,8 +14,9 @@ function validate(name: string, email: string, password: string): FieldErrors {
   const errors: FieldErrors = {}
   if (!name.trim()) errors.name = "Enter your name."
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) errors.email = "Enter a valid email address."
-  if (password.length < 10) errors.password = "Use at least 10 characters."
-  else if (password.length > 128) errors.password = "Use 128 characters or fewer."
+  const lengthProblem = passwordLengthProblem(password)
+  if (lengthProblem === "short") errors.password = `Use at least ${PASSWORD_MIN} characters.`
+  else if (lengthProblem === "long") errors.password = `Use ${PASSWORD_MAX} characters or fewer.`
   return errors
 }
 

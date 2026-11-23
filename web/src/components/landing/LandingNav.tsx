@@ -53,7 +53,7 @@ export default function LandingNav() {
             <span className="text-xl font-semibold">Triage</span>
           </Link>
 
-          <nav aria-label="Main" className="hidden items-center gap-7 text-sm md:flex">
+          <nav aria-label="Main" className="hidden items-center gap-4 whitespace-nowrap text-sm md:flex lg:gap-7">
             {landingLinks.map((link) =>
               // Section links need a real anchor (they scroll on the landing page); pages use the router
               link.href.startsWith("/#") ? (

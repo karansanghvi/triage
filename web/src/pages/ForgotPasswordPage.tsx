@@ -6,6 +6,8 @@ import { FormError, PasswordInput, fieldBorder, inputClass, primaryButton } from
 import { useAuth } from "@/context/AuthContext"
 import { requestPasswordReset, verifyResetCode } from "@/lib/auth"
 import { TriageError } from "@/lib/errors"
+import { PASSWORD_MAX, PASSWORD_MIN, passwordLengthProblem } from "@/lib/passwordRules"
+import { minutesFrom } from "@/lib/time"
 import { cn } from "@/lib/utils"
 
 type Step = "email" | "code" | "password"
@@ -15,10 +17,7 @@ const RESEND_SECONDS = 60
 function messageFor(err: unknown, fallback: string): string {
   if (!(err instanceof TriageError)) return fallback
   if (err.code === "email_unavailable") return "Password reset isn't available right now. Please try again later."
-  if (err.retryAfter) {
-    const minutes = Math.ceil(err.retryAfter / 60)
-    return `Too many attempts. Try again in ${minutes === 1 ? "1 minute" : `${minutes} minutes`}.`
-  }
+  if (err.retryAfter) return `Too many attempts. Try again in ${minutesFrom(err.retryAfter)}.`
   return err.message || fallback
 }
 
@@ -118,8 +117,8 @@ export default function ForgotPasswordPage() {
   async function handleSetPassword(e: FormEvent) {
     e.preventDefault()
     setError(null)
-    if (password.length < 10 || password.length > 128) {
-      setFieldError("Use 10 to 128 characters.")
+    if (passwordLengthProblem(password)) {
+      setFieldError(`Use ${PASSWORD_MIN} to ${PASSWORD_MAX} characters.`)
       return
     }
     if (password !== confirm) {

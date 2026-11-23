@@ -10,7 +10,7 @@ from pathlib import Path
 from app.api.demo import DemoLimiter, DemoSettings, load_demo_settings, trusted_hops_from_env
 from app.cache import DEFAULT_CACHE_PATH, FAKE_CACHE_PATH, CachedSender, ResponseCache
 from app.providers.base import send_request
-from app.registry import load_registry
+from app.registry import load_registry, serving_registry
 from app.reliability import ReliableClient
 from app.verifier.ai_checker import CheckerSettings, load_checker_settings
 from app.verifier.judge import JudgeSettings, load_judge_settings
@@ -71,7 +71,7 @@ def build_deps(predictor, send_fn, *, registry=None, config: Optional[ActiveConf
                demo_limiter: Optional[DemoLimiter] = None, trusted_proxy_hops: int = 0,
                engine=None, keyring=None, key_verifier=None, account_limits=None) -> RouterDeps:
     """engine: the database; None = the demo limiter's if one is given, else a new in-memory one (tests)."""
-    registry = registry or load_registry()
+    registry = serving_registry(registry or load_registry())     # retired models are never served
     config = config or ActiveConfig.from_file(registry)
     log = log or InMemoryRequestLog()
     if hash_secret is None:
@@ -178,7 +178,7 @@ def load_deps() -> RouterDeps:
     hash_secret = hash_secret_from_env(required=getattr(log, "persistent", False))   # before loading anything slow
     path = cache_path(fake)
     cache = ResponseCache(path) if path else None
-    registry = load_registry()
+    registry = serving_registry(load_registry())     # retired models are never listed or served
     config = load_config(registry)                    # before the slow predictor, so a bad override fails fast
     demo_settings = load_demo_settings()
     demo_limiter = DemoLimiter(demo_settings, engine=engine)   # survives restarts and redeploys

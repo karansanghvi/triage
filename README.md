@@ -7,6 +7,7 @@ model are to answer correctly, then picks the cheapest one that clears a quality
 the OpenAI SDK switch to it by changing two lines.
 
 - **Website and free demo:** [gettriage.dev](https://gettriage.dev)
+- **Developer docs:** [gettriage.dev/docs](https://gettriage.dev/docs) (source: [docs/DOCS.md](docs/DOCS.md))
 
 ## Why
 
@@ -50,8 +51,8 @@ For each request, Triage:
    `X-Triage-Cost`, `X-Triage-Saved` and more.
 
 Asking for a specific model instead of `auto` also works: Triage calls exactly that model, with retries but no
-routing, and claims no savings for it. Identical repeated requests at temperature 0 are answered from a cache for
-free. Prompts and answers are never stored: the usage log keeps routing details, tokens and costs only.
+routing, and claims no savings for it. Identical repeated requests at temperature 0 (the default) are answered from
+a cache for free, streamed or not. Prompts and answers are never stored: the usage log keeps routing details, tokens and costs only.
 
 | Component | What it does |
 |---|---|
@@ -111,8 +112,20 @@ const stream = await client.chat.completions.create({
 for await (const chunk of stream) process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
 ```
 
-Your **Dashboard** shows spend, savings per API key and recent requests. Every header, endpoint, limit and error
-code is in [docs/REFERENCE.md](docs/REFERENCE.md).
+A stream carries the routing details on its first chunk and the cost on its last one (`chunk.triage`); the cost
+headers are only on non-streaming responses.
+
+**Your own provider keys, per request.** Instead of saved keys (or without an account, up to 200 requests a day),
+send them as headers: `X-OpenAI-Key`, `X-Anthropic-Key`, `X-Groq-Key`, `X-Gemini-Key`. A header replaces the saved
+key for that provider on that request and is never stored.
+
+**Preferred provider.** With keys for several providers, pick the one tried first in each tier: in **Settings →
+Provider keys**, or per request with `X-Triage-Prefer-Provider: openai | anthropic | groq | gemini`. It changes which
+model answers within the chosen tier, never the tier, and applies only to `model="auto"`.
+
+Your **Dashboard** shows spend, savings per API key and recent requests. Every header, the `triage` object,
+streaming, answer checking, errors and limits are in the [developer docs](https://gettriage.dev/docs)
+([docs/DOCS.md](docs/DOCS.md)); running and operating Triage is in [docs/REFERENCE.md](docs/REFERENCE.md).
 
 ## Running it locally
 
@@ -192,7 +205,7 @@ triage/
 ├── deploy/         # image smoke test, update and rollback scripts
 ├── CASE_STUDY.md
 ├── DEPLOY.md
-└── docs/REFERENCE.md
+└── docs/            # DOCS.md (the developer docs, also at /docs) and REFERENCE.md (operating Triage)
 ```
 
 ## Tech stack

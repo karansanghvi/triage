@@ -36,8 +36,9 @@ export default function LandingPage() {
             <Features />
             <Results />
             <Security />
-            <FinalCTA />
             <FAQ />
+            {/* The final call to action is always the last section before the footer */}
+            <FinalCTA />
         </main>
         <Footer />
       </div>

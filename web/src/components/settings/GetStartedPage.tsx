@@ -108,6 +108,16 @@ export default function GetStartedPage() {
         </div>
         <div className="p-6">
             <CodeSnippet />
+            <p className="mt-4 text-[13px] text-muted-foreground">
+                Quality settings, streaming, response headers, errors and limits:{" "}
+                <Link
+                    to="/docs"
+                    className="group inline-flex items-center gap-1 font-medium text-[#60A5FA] underline-offset-2 transition-colors hover:text-[#93C5FD] hover:underline max-md:min-h-11 pointer-coarse:min-h-11"
+                >
+                    Read the docs
+                    <ArrowRight aria-hidden="true" className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                </Link>
+            </p>
         </div>
       </SettingsCard>
     </>

@@ -1100,7 +1100,12 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         data = [{"id": "auto", "object": "model", "created": 0, "owned_by": "triage",
                  "triage": {"description": "Triage picks the cheapest model likely to pass (classifier "
                             f"{deps.classifier or 'configured in routing.yaml'})"}}]
-        for name, m in deps.registry.items():
+        for name, m in deps.registry.items():          # retired models were already left out (serving_registry)
+            # Only models a caller can reach: a provider that takes the caller's own key, or one this server runs
+            # itself (the local Ollama only where server_providers has it, so never on a host without it)
+            if m.provider not in PROVIDER_KEY_HEADERS and server_providers is not None \
+                    and m.provider not in server_providers:
+                continue
             price = m.price_as
             data.append({"id": name, "object": "model", "created": 0, "owned_by": m.provider,
                          "triage": {"tier": m.tier, "provider_model": m.model_id,

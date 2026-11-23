@@ -37,6 +37,9 @@ class ModelConfig:
     # empty answer cut off by the token limit is an error (base.TruncatedAnswer) so the chain falls back.
     # Groq's gpt-oss models also reason but are NOT marked: their requests stay exactly as in Phase 2.
     reasoning: bool = False
+    # No longer served: kept in models.yaml so evaluation scripts can still price the answers collected with it,
+    # but the API leaves it out (serving_registry): not listed in GET /v1/models, and a request naming it is a 404.
+    retired: bool = False
 
     def actual_cost(self, input_tokens: int, output_tokens: int) -> float:
         """What this request really cost you."""
@@ -147,6 +150,7 @@ def _parse_model(entry, index: int) -> ModelConfig:
             entry.get("max_output_tokens"), "max_output_tokens", where
         ),
         reasoning=_parse_optional_bool(entry.get("reasoning"), "reasoning", where),
+        retired=_parse_optional_bool(entry.get("retired"), "retired", where),
     )
 
 
@@ -173,6 +177,11 @@ def load_registry(path=DEFAULT_CONFIG_PATH) -> dict[str, ModelConfig]:
         registry[model.name] = model
 
     return registry
+
+
+def serving_registry(registry: dict[str, ModelConfig]) -> dict[str, ModelConfig]:
+    """The models the API serves: every model except the retired ones."""
+    return {name: model for name, model in registry.items() if not model.retired}
 
 
 def models_in_tier(registry: dict[str, ModelConfig], tier: str) -> list[ModelConfig]:

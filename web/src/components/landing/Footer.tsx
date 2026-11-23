@@ -18,6 +18,7 @@ const COLUMNS: { title: string; links: FooterLink[] }[] = [
   {
     title: "Developers",
     links: [
+      { label: "Docs", to: "/docs" },
       { label: "Connect your app", to: "/settings/get-started" },
       { label: "Case study", to: "/case-study" },
       { label: "GitHub", to: GITHUB_URL, external: true },

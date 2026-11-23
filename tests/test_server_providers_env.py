@@ -71,7 +71,9 @@ def test_models_endpoint_requires_key_follows_the_override(monkeypatch):
     deps = make_deps(raw=raw)
     http = TestClient(create_app(deps=deps, auth=Auth([API_KEY])))
     data = {m["id"]: m for m in http.get("/v1/models", headers={"Authorization": f"Bearer {API_KEY}"}).json()["data"]}
-    assert data["ollama-llama"]["triage"]["requires_key"] is True
+    # Ollama takes no caller key, so on a host without it its models can't be reached at all: not listed
+    assert "ollama-llama" not in data
+    assert data["openai-luna"]["triage"]["requires_key"] is True
     assert data["groq-allam"]["triage"]["requires_key"] is False
 
 

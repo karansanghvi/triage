@@ -1,8 +1,13 @@
 # Triage reference
 
-The details behind the [README](../README.md): every request and response header, the demo and bring-your-own-key
-modes, the account endpoints and error codes, retraining, the database, and running Triage yourself (environment
-variables, secrets, emails, key rotation). Deploying is in [DEPLOY.md](../DEPLOY.md).
+The details behind the [README](../README.md) for running and operating Triage: the demo and bring-your-own-key
+modes, the account endpoints, retraining, the database, and running Triage yourself (environment variables,
+secrets, emails, key rotation). Deploying is in [DEPLOY.md](../DEPLOY.md).
+
+**Using the API from an app?** The [developer docs](DOCS.md) (also at
+[gettriage.dev/docs](https://gettriage.dev/docs)) are the reference for every request and response header, the
+`triage` object, streaming, answer checking, provider keys, every error code a caller can get, and the limits.
+This file links there instead of repeating them, and adds what an operator needs on top.
 
 ## The OpenAI-compatible API
 
@@ -40,33 +45,55 @@ const stream = await client.chat.completions.create({
 for await (const chunk of stream) process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
 ```
 
-**Request headers** (all optional):
+**Request headers** (all optional): `X-Triage-Quality`, `X-Triage-Task`, `X-Triage-Verify`,
+`X-Triage-Prefer-Provider` and the provider key headers; their values are in the
+[developer docs](DOCS.md#2-choosing-quality). A value Triage doesn't accept is a 400 that names the header; headers
+Triage doesn't know are ignored. The quality presets are `quality:` in `config/routing.yaml`, the answer-checking
+policy is `verification:` in the same file.
 
-| header | values | |
-|---|---|---|
-| `X-Triage-Quality` | `cheap`, `balanced`, `high`, or a number from 0 to 1 | the quality dial (tau); default `balanced` |
-| `X-Triage-Task` | `qa`, `coding`, `reasoning`, `extraction`, `summarization`, `classification`, `creative`, `open_ended` | skips the task-type guess |
-| `X-Triage-Verify` | `off`, `sync` | `sync` checks the answer before sending it and escalates a bad one (`model="auto"`, non-streaming only; 400 otherwise). Policy: `verification:` in `config/routing.yaml` |
+**Response headers and the `triage` object:** listed with their meanings in the
+[developer docs](DOCS.md#3-reading-the-response). The `triage` object is built from the headers, so the two can't
+disagree. It has `request_id`, `model`, `tier`, `p_low`, `p_medium`, `tau`, `reason`, `cost`, `strong_cost`, `saved`,
+`cache`, `fallback`, `mode`, `routed_by` and `preferred_provider`, with `null` for a header that was left out. It
+does **not** have the answer-checking results: `X-Triage-Verified`, `X-Triage-Check` and `X-Triage-Escalated` are
+headers only. `Saved` assumes the strong model would have used the same number of tokens, so it's an estimate.
+It's only sent for `model: "auto"`: when you name a model, the choice was yours, so Triage claims no saving for it
+(here or in any stats).
 
-Anything else is a 400 that names the header.
+**Streams report their cost.** On a stream, the headers go out once the first token exists, so model, tier and
+fallback are real, but cost isn't known yet: `X-Triage-Cost`, `-Strong-Cost` and `-Saved` are left out rather than
+guessed. The cost arrives in the stream itself: the `triage` object has the routing on the first chunk and is
+complete (with `cost`, `strong_cost` and `saved`) on the `finish_reason` chunk. Both chunks keep `choices[0]`, and
+the openai SDKs expose it as `chunk.triage`. The same figures are in `GET /v1/requests/<request id>` once the
+stream ends. If the client disconnects part-way (a Stop button), Triage closes the model's stream so it stops
+generating, and logs an estimated cost for what it produced (`tokens_estimated: true`, status `stopped`). Stopped
+requests count in spend and savings, but not as errors.
 
-**Response headers:** `X-Triage-Request-Id`, `X-Triage-Model` (the model that answered), `X-Triage-Tier`,
-`X-Triage-Reason`, `X-Triage-Fallback` (`primary->backup`, or `none`), `X-Triage-Cache` (`hit`, `miss`,
-`bypass`), `X-Triage-Verified`, `X-Triage-Escalated`, `X-Triage-Check` (the check that decided: `format`,
-`ai_checker`, `ai_checker_error` or `none`), and on non-streaming responses `X-Triage-Cost` and
-`X-Triage-Saved` (US dollars at paid prices). The full list, including the routing probabilities, is in
-"Accounts: a guide for developers" below. On a stream, the headers go out once the first token exists,
-so model, tier and fallback are real, but cost isn't known yet. Those two headers are left out rather than
-guessed. The stream itself carries the same `triage` object as a non-streaming response: routing only on its
-first chunk, complete (with `cost`, `strong_cost` and `saved`) on its `finish_reason` chunk. Both chunks keep
-`choices[0]`, and the openai SDKs expose it as `chunk.triage`. If the client disconnects part-way (a Stop button),
-Triage closes the model's stream so it stops generating, and logs an estimated cost for what it produced
-(`tokens_estimated: true`, status `stopped`). Stopped requests count in spend and savings, but not as errors. The figures are also in
-`GET /v1/requests/<request id>` once the stream ends. `Saved` assumes the
-strong model would have used the same number of tokens, so it's an estimate. It's only sent for `model: "auto"`:
-when you name a model, the choice was yours, so Triage claims no saving for it (here or in any stats).
+**Cache:** every `temperature` 0 request is cached (the default temperature is 0), **streamed or not**: streamed
+and non-streamed requests share entries, so either can be answered from the other's saved answer. A hit says
+`X-Triage-Cache: hit` and costs nothing; `bypass` means `temperature` above 0. Entries expire after 24 hours, and
+BYOK and account answers are kept per provider key (an HMAC of it), never shared between keys. `TRIAGE_CACHE=off`
+turns it off.
 
-**Other endpoints:** `GET /v1/models` (with prices), `GET /v1/stats` (savings for your key),
+**Answer checking (`X-Triage-Verify: sync`):** for the tier that answered, `verification.sync.tiers` in
+`config/routing.yaml` lists the checks and where a bad answer escalates: low gets the free format check, medium
+the format check and then the AI checker (`config/checker.yaml`, which runs on `groq-small`), and high is never
+checked. `X-Triage-Check` says which check decided:
+
+| Value | When |
+|---|---|
+| `format` | The format check decided |
+| `ai_checker` | The AI checker decided |
+| `ai_checker_error` | The AI checker failed or gave no verdict; `on_error: escalate` sent it to a stronger model |
+| `skipped_confident` | Medium's `skip_check_above` (0.90): the classifier's `p_medium` was at least that, so the AI check was skipped |
+| `skipped_short` | Medium's `min_answer_tokens`: the answer was shorter (currently 0, so never) |
+| `skipped_no_key` | A BYOK or account request with **no Groq key**: the AI checker runs on Groq, so it's skipped (the format check and escalation still run) |
+| `none` | No check ran: verification off, or the high tier answered |
+
+**Other endpoints:** `GET /v1/models` (with prices; only models a caller can reach: every model on a provider that takes
+the caller's own key, plus the server's own providers in `server_providers`, so no Ollama model on a host without
+it. Models marked `retired: true` in `config/models.yaml` stay there for evaluation but are neither listed nor
+served: naming one is a 404 `model_not_found`), `GET /v1/stats` (savings for your key),
 `GET /v1/stats/public` (no key: live totals across everyone's routed requests, once a range has 100 of them),
 `GET /v1/requests/{id}` (one of your own requests; with public access on, a request made without a key can be
 read without one, by its id, for 10 minutes (`TRIAGE_KEYLESS_LOOKUP_MINUTES`), but only its outcome and cost), and for admin keys `GET`/`PUT /v1/routing-config`, which
@@ -104,7 +131,9 @@ An `Authorization` header that is sent but invalid is always a 401. Every other 
 - No sync verification.
 
 Refusals are 429s with `Retry-After`: `demo_limit_reached` and `demo_busy` suggest adding a provider key, and
-`demo_paused` means the demo is paused until 00:00 UTC. A prompt over the limit is a 413 `demo_prompt_too_long`.
+`demo_paused` means the demo is paused until 00:00 UTC. A prompt over the limit is a 413 `demo_prompt_too_long`,
+and `X-Triage-Verify: sync` in the demo is a 400 `demo_unsupported`. Public BYOK (provider key headers, no Triage
+key) over its 200 a day per visitor is a 429 `public_limit_reached`.
 
 Demo responses carry `X-Triage-Demo-Remaining`, `-Limit` and `-Resets`. `GET /v1/demo/status` (public) returns
 the visitor's allowance and whether the demo is paused, so a website can show it before the first request.
@@ -161,7 +190,7 @@ client = OpenAI(base_url="https://your-triage-server/v1", api_key="trk_...")
 reply = client.chat.completions.create(
     model="auto",                                     # or a model name from GET /v1/models
     messages=[{"role": "user", "content": "What is 2 + 3?"}],
-    extra_headers={"X-Triage-Quality": "balanced"},   # optional; see the headers below
+    extra_headers={"X-Triage-Quality": "balanced"},   # optional; see docs/DOCS.md
 )
 print(reply.choices[0].message.content)
 ```
@@ -213,79 +242,25 @@ always. These requests say `small_talk` in `X-Triage-Routed-By`, the response's 
 request log, and are left out of classifier training data, background labels and the `GET /v1/stats` numbers
 (counted on their own as `small_talk_requests`).
 
-### Headers
+### Headers, limits and error codes
 
-**Request** (all optional):
+The headers an account request can send and gets back, the limits and every error code are in the
+[developer docs](DOCS.md): [headers](DOCS.md#3-reading-the-response),
+[provider keys](DOCS.md#6-using-your-own-provider-keys), [errors](DOCS.md#7-errors) and
+[limits](DOCS.md#8-limits). Account requests say `X-Triage-Mode: account`. Errors use OpenAI's shape,
+`{"error": {"message", "type", "param", "code"}}`, and never echo what was sent.
 
-| Header | Values | Effect |
-|---|---|---|
-| `X-Triage-Quality` | `cheap`, `balanced`, `high`, or a number from 0 to 1 | The quality bar (tau). Higher means stronger, pricier models. Default `balanced` |
-| `X-Triage-Task` | `qa`, `coding`, `reasoning`, `extraction`, `summarization`, `classification`, `creative`, `open_ended` | Skips the task-type guess |
-| `X-Triage-Verify` | `off`, `sync` | `sync` checks the answer before sending it and escalates a bad one (`model: "auto"`, non-streaming only) |
-| `X-Triage-Prefer-Provider` | `openai`, `anthropic`, `groq`, `gemini` | Try that provider's models first (see above) |
-| `X-OpenAI-Key`, `X-Anthropic-Key`, `X-Groq-Key`, `X-Gemini-Key` | a provider key | Use it instead of your saved key for that provider |
+Where the limits live: chat (60 a minute, 10,000 a day per account) in `config/accounts.yaml`; sign-up, log-in,
+password reset and key changes in `app/accounts/ratelimit.py`; 20 active Triage API keys in
+`app/accounts/api_keys.py`. The per-minute chat limit is kept in memory by each instance, the rest in the database.
 
-**Response** (also exposed to browsers through CORS):
-
-| Header | Meaning |
-|---|---|
-| `X-Triage-Request-Id` | Look the request up later with `GET /v1/requests/{id}` |
-| `X-Triage-Mode` | `account` for your requests (`api`, `byok`, `demo` otherwise) |
-| `X-Triage-Model`, `X-Triage-Tier` | The model that answered and its tier (`low`, `medium`, `high`) |
-| `X-Triage-Reason` | Why, in words, e.g. `cheap 0.400 < tau 0.860; medium 0.950 >= tau` |
-| `X-Triage-P-Low`, `X-Triage-P-Medium`, `X-Triage-Tau` | The predicted pass chances and the bar used (6 decimals; `model: "auto"` only, not for small talk) |
-| `X-Triage-Routed-By` | What decided the tier: `classifier`, `small_talk` (see below) or `requested_model` |
-| `X-Triage-Preferred-Provider` | The preferred provider applied, or `none` |
-| `X-Triage-Fallback` | `primary->backup` when a backup answered, else `none` |
-| `X-Triage-Cache` | `hit`, `miss` or `bypass` (only `temperature: 0`, non-streaming answers are cached) |
-| `X-Triage-Verified`, `X-Triage-Check`, `X-Triage-Escalated` | Sync verification: on or off, which check decided, whether a stronger model was used |
-| `X-Triage-Cost`, `X-Triage-Strong-Cost`, `X-Triage-Saved` | US dollars at list prices: this answer, the strong model at the same tokens, and the difference (non-streaming only; left out when unknown) |
-
-Non-streaming responses also carry the same facts as a `triage` object in the body.
-
-### Limits
-
-| What | Limit | Over it |
-|---|---|---|
-| Chat | 60 requests a minute and 10,000 a day per account (`config/accounts.yaml`) | 429 `account_rate_limited` with `Retry-After` |
-| Saving or re-checking provider keys | 20 per account per hour | 429 `too_many_attempts` with `Retry-After` |
-| Triage API keys | 20 active per account; 10 new per hour | 409 `too_many_api_keys`; 429 `too_many_attempts` |
-| Sign-up | 5 per IP per hour | 429 `too_many_attempts` |
-| Log-in | 10 per IP per 15 minutes; 5 wrong passwords per account per 15 minutes | 429; for wrong passwords, the same 401 as a wrong password |
-| Password reset codes | 3 requests per email and 10 per IP per hour; one email per address per 60 seconds | 429 `too_many_attempts`; inside the 60 seconds, the usual 202 but no email |
-| Checking reset codes | 10 per IP per 15 minutes; 5 tries per code; 10 wrong codes per email per day | 429 `too_many_attempts`; after 5 wrong tries the code is dead (request a new one) |
-
-### Error codes
-
-Errors use OpenAI's shape, `{"error": {"message", "type", "param", "code"}}`.
+Codes the developer docs don't list, because only an operator meets them:
 
 | Status | `code` | When |
 |---|---|---|
-| 400 | `invalid_request`, `invalid_value`, `unsupported_parameter`, `unsupported_combination` | A malformed body or header; `param` names it. Errors never echo what was sent |
-| 400 | `no_provider_keys` | Account chat with no usable saved key and no key header |
-| 400 | `no_usable_model` | Your keys reach no model |
-| 400 | `max_tokens_too_low` | A named reasoning model spent every token thinking; send a higher `max_tokens` |
-| 400 | `invalid_provider_key` | Saving a key the provider rejected (nothing is stored) |
-| 400 | `invalid_code` | A password reset code that's wrong, expired, used or dead, or an email with no account (always the same message) |
-| 400 | `invalid_reset_token` | A password reset token that's unknown, expired or already used |
-| 401 | `invalid_api_key` | A missing, unknown or revoked Triage key or session |
-| 401 | `invalid_provider_key` | A provider rejected your key during chat |
-| 401 | `invalid_credentials` | Log-in failed (always the same message) |
-| 401 | `invalid_session` | Account endpoints need a session token: log in again |
-| 403 | `incorrect_password` | The current password was wrong (password change, account deletion) |
-| 403 | `model_not_allowed` | A named model on a provider you have no key for |
-| 403 | `admin_key_required` | Admin endpoints (`/v1/routing-config`) |
-| 404 | `model_not_found`, `not_found` | Unknown model; a request, key or provider key that isn't yours or doesn't exist |
-| 409 | `email_taken`, `too_many_api_keys`, `key_unreadable` | Sign-up with a used email; the key cap; a saved key that can no longer be decrypted (save it again) |
-| 429 | `account_rate_limited`, `too_many_attempts` | See "Limits"; wait `Retry-After` seconds |
-| 500 | `internal_error` | A bug on our side; the response never contains internal details |
-| 502 | `model_error` | The model failed while answering |
-| 503 | `all_models_failed` | No model could answer; try again |
-| 503 | `email_unavailable` | Password reset: the server has no email settings |
-| 503 | `provider_overloaded` | Every model that was tried was too busy (e.g. Gemini's "high demand" 503); the message names the provider |
-| 503 | `provider_unavailable` | Every model that was tried was busy or too slow (a mix of the two cases above and below) |
-| 504 | `provider_timeout` | Every model that was tried ran out of time (its timeout in `config/routing.yaml`); the message names the provider |
-| (in a stream) | `stream_interrupted` | The model failed after text was sent |
+| 400 | `invalid_json`, `invalid_config` | `PUT /v1/routing-config` with a body that isn't JSON, or a change that fails validation (nothing changes) |
+| 403 | `admin_key_required` | Admin endpoints (`/v1/routing-config`, `/v1/admin/forwarded-for`) without an admin key; account keys are never admins |
+| 503 | `encryption_unavailable` | Saving a provider key on a server without encryption keys. With `TRIAGE_ACCOUNTS=on` the server refuses to start without valid `TRIAGE_ENCRYPTION_KEYS`, so a correctly started server never returns it |
 
 ### Reference: account endpoints
 
@@ -535,7 +510,6 @@ Sessions (`trs_`), passwords and saved provider keys don't use it and keep worki
 - Session tokens are bearer tokens the website keeps in the browser, so the website must avoid third-party
   scripts (a strict Content-Security-Policy).
 - The per-minute limits (demo and account) are kept in memory by each server instance.
-- Streams don't report their cost in the response; fetch it with `GET /v1/requests/{id}` once the stream ends.
 - `PUT /v1/routing-config` changes are kept in memory only, not persisted.
 
 ## Privacy: what the request log keeps

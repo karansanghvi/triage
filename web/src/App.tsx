@@ -18,8 +18,9 @@ import BenchmarkPage from "./pages/dashboard/BenchmarkPage";
 import OverviewPage from "./pages/dashboard/OverviewPage";
 import UsagePage from "./pages/dashboard/UsagePage";
 
-// Loaded on its own: it carries the whole case study (and lazily, mermaid), which no other page needs
+// Loaded on their own: each carries a whole document (the case study also, lazily, mermaid), which no other page needs
 const CaseStudyPage = lazy(() => import("./pages/CaseStudyPage"))
+const DocsPage = lazy(() => import("./pages/DocsPage"))
 
 export default function App() {
   return (
@@ -35,6 +36,14 @@ export default function App() {
         element={
           <Suspense fallback={<div className="min-h-screen bg-[#07070B]" />}>
             <CaseStudyPage />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/docs"
+        element={
+          <Suspense fallback={<div className="min-h-screen bg-[#07070B]" />}>
+            <DocsPage />
           </Suspense>
         }
       />

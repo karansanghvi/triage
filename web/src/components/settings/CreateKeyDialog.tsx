@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import CopyButton from "@/components/common/CopyButton"
 import { useAccountApi } from "@/hooks/useAccountApi"
 import type { ApiKey } from "@/lib/account"
+import { minutesFrom } from "@/lib/time"
 import { TriageError } from "@/lib/errors"
 
 type CreateKeyDialogProps = {
@@ -49,7 +50,7 @@ export default function CreateKeyDialog({ open, onClose, onCreated }: CreateKeyD
       if (err instanceof TriageError && err.code === "too_many_api_keys") {
         setError("You've reached the limit of 20 active keys. Revoke one you no longer use first.")
       } else if (err instanceof TriageError && err.retryAfter) {
-        setError(`You've created a lot of keys recently. Try again in ${Math.ceil(err.retryAfter / 60)} minutes.`)
+        setError(`You've created a lot of keys recently. Try again in ${minutesFrom(err.retryAfter)}.`)
       } else if (err instanceof TriageError) {
         setError(err.message)
       } else {

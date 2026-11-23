@@ -48,8 +48,8 @@ def make_deps(script=None, *, predictor=None, first_token=None, cache=None, mode
               account_limits=None):
     """Real registry, real routing.yaml (optionally a short first-token limit), real ReliableClient
     (backoff sleeps skipped), fake models."""
-    from app.registry import load_registry
-    registry = load_registry()
+    from app.registry import load_registry, serving_registry
+    registry = serving_registry(load_registry())     # as the API loads it (load_deps)
     fake = FakeModels(script, sleep=model_sleep)
     raw = raw or routing_raw(first_token)
     raw.setdefault("verification", copy.deepcopy(DEFAULT_VERIFICATION))

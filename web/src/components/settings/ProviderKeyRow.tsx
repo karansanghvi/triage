@@ -1,7 +1,7 @@
 import { useAccountApi } from "@/hooks/useAccountApi";
 import type { Provider, ProviderKey } from "@/lib/account";
 import { TriageError } from "@/lib/errors";
-import { relativeTime } from "@/lib/time";
+import { minutesFrom, relativeTime } from "@/lib/time";
 import { useState, type FormEvent } from "react";
 import StatusBadge from "./StatusBadge";
 import { Loader2, RefreshCw, Trash2 } from "lucide-react";
@@ -27,7 +27,7 @@ function describe(key: ProviderKey): { text: string; tone: "muted" | "warn" | "b
 function errorText(err: unknown, providerName: string): string {
   if (err instanceof TriageError && err.code === "invalid_provider_key") return err.message
   if (err instanceof TriageError && err.retryAfter) {
-    return `Too many key changes recently. Try again in ${Math.ceil(err.retryAfter / 60)} minutes.`
+    return `Too many key changes recently. Try again in ${minutesFrom(err.retryAfter)}.`
   }
   if (err instanceof TriageError) return err.message
   return `Couldn't reach ${providerName}. Please try again.`

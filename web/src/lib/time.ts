@@ -11,3 +11,9 @@ export function relativeTime(iso: string): string {
 export function shortDate(iso: string): string {
   return new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
 }
+// A Retry-After wait in whole minutes, for "Try again in ...": "1 minute", "3 minutes"; "a few minutes" if unknown
+export function minutesFrom(seconds?: number): string {
+  if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return "a few minutes"
+  const minutes = Math.ceil(seconds / 60)
+  return minutes === 1 ? "1 minute" : `${minutes} minutes`
+}
