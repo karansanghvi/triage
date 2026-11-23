@@ -120,8 +120,10 @@ On Render: 2R only. On a VM: 2A or 2B, then 2C.
    the `triage-api` package > Package settings > Change visibility > **Public**. Render pulls it without credentials.
 2. **Create the service from the Blueprint:** Render Dashboard > New > Blueprint, pick this repository. It reads
    `render.yaml`: a **free** web service named `triage-api` in **Oregon** (next to Neon's AWS US West 2), running
-   `ghcr.io/karansanghvi/triage-api:main`, with health check `/healthz` and the start command (one uvicorn worker on
-   Render's `$PORT`; the server upgrades the database itself when it's behind).
+   `ghcr.io/karansanghvi/triage-api:main`, with health check `/healthz`. There's no start command in it on purpose:
+   Render runs the image's own `CMD`, which listens on Render's `$PORT` (10000) with one uvicorn worker and no access
+   log, and is the exact command CI's smoke test runs (with `PORT=10000`). Don't set a Docker Command in the
+   Dashboard either: one with quotes reached the shell as a single word and the deploy failed with exit 127.
 3. **Fill in the environment variables** it asks for (names only in `render.yaml`; values and formats in section 4).
    Set `TRIAGE_TRUSTED_PROXY_HOPS` to `1` for now (section 8 measures the right value).
 4. **Custom domain:** the service's Settings > Custom Domains > add `api.gettriage.dev`, then at your DNS provider

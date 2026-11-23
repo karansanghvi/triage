@@ -5,9 +5,10 @@
 #
 # 1. Offline model check, with networking off: the embedding model loads from the image's own cache and gives a
 #    384-number vector; onnxruntime's telemetry is off; torch and transformers aren't installed; it runs as uid 10001.
-# 2. Startup smoke test, the way docker-compose.yml runs it (read-only, no capabilities): fake models, a throwaway
-#    SQLite database and throwaway secrets (nothing real, nothing sent anywhere). /healthz and /readyz report ok, a
-#    short and a long (~18,000-character) prompt are routed and answered, and the logs show no traceback.
+# 2. Startup smoke test: the image's own CMD with PORT=10000, exactly as Render runs it (so a CMD that ignored $PORT
+#    fails here), read-only with no capabilities, as docker-compose.yml runs it. Fake models, a throwaway SQLite
+#    database and throwaway secrets (nothing real, nothing sent anywhere). /healthz and /readyz report ok, a short
+#    and a long (~18,000-character) prompt are routed and answered, and the logs show no traceback.
 set -euo pipefail
 image=${1:?usage: deploy/smoke_test_image.sh <image>}
 name="triage-smoke-$$"
@@ -34,7 +35,7 @@ print("offline model check ok")
 
 echo "== startup smoke test"
 docker run -d --name "$name" --read-only --tmpfs /tmp --tmpfs /app/data/cache:uid=10001,gid=10001 \
-  --cap-drop ALL --security-opt no-new-privileges:true -p "127.0.0.1:$port:8000" \
+  --cap-drop ALL --security-opt no-new-privileges:true -e PORT=10000 -p "127.0.0.1:$port:10000" \
   -e TRIAGE_FAKE_MODELS=1 -e TRIAGE_FAKE_DB=/app/data/cache/fake.sqlite3 \
   -e DATABASE_URL=sqlite:////app/data/cache/smoke.sqlite3 \
   -e TRIAGE_HASH_SECRET="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')" \

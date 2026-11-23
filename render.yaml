@@ -13,8 +13,9 @@ services:
     plan: free
     region: oregon
     healthCheckPath: /healthz          # liveness only: never touches the database, so Neon can sleep
-    # One worker on Render's $PORT (it upgrades the schema itself when behind); no access log (it would print IPs)
-    dockerCommand: sh -c 'exec uvicorn app.api.main:app --host 0.0.0.0 --port $PORT --workers 1 --no-access-log'
+    # No dockerCommand: Render runs the image's own CMD (the Dockerfile's last line), which listens on Render's $PORT
+    # with one worker and no access log, and is the exact command CI's smoke test runs. A dockerCommand here once
+    # reached sh as a single word and the deploy failed (exit 127); Render doesn't document how it splits one.
     envVars:
       - key: DATABASE_URL
         sync: false

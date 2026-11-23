@@ -109,11 +109,28 @@ def test_render_runs_the_tested_image_on_the_free_plan_in_oregon():
     assert RENDER_API["healthCheckPath"] == "/healthz"
 
 
-def test_render_starts_one_worker_on_its_port():
-    command = RENDER_API["dockerCommand"]
-    assert "alembic" not in command and "exec uvicorn app.api.main:app" in command
-    for part in ("--port $PORT", "--host 0.0.0.0", "--workers 1", "--no-access-log"):
+def test_render_runs_the_images_own_command():
+    """No start command in render.yaml: a dockerCommand once reached sh as one word (exit 127), and Render doesn't
+    document how it splits one. The image's CMD is what Render runs, and what CI's smoke test runs."""
+    assert "dockerCommand" not in RENDER_API and "startCommand" not in RENDER_API
+
+
+def test_the_images_command_listens_on_the_hosts_port_through_a_shell():
+    cmd = [l for l in DOCKERFILE.splitlines() if l.startswith("CMD ")]
+    assert len(cmd) == 1
+    command = cmd[0][len("CMD "):]
+    assert not command.startswith("[")          # shell form: /bin/sh -c expands ${PORT:-8000} (exec form wouldn't)
+    assert command.startswith("exec uvicorn app.api.main:app ")
+    for part in ("--host 0.0.0.0", "--port ${PORT:-8000}", "--workers 1", "--no-access-log"):
         assert part in command
+
+
+def test_the_smoke_test_runs_that_command_with_renders_port():
+    script = (PROJECT_ROOT / "deploy" / "smoke_test_image.sh").read_text()
+    start = script[script.index('echo "== startup smoke test"'):]
+    run = start[:start.index('"$image" >/dev/null')]
+    assert "--entrypoint" not in run                                  # the image's own CMD
+    assert "-e PORT=10000" in run and ':10000"' in run                # reached only on $PORT, as on Render
 
 
 def test_render_lists_variable_names_only():
@@ -125,9 +142,6 @@ def test_render_lists_variable_names_only():
     assert "TRIAGE_TRUSTED_PROXY_HOPS" in names and not names & DEV_ONLY
 
 
-def test_the_image_listens_on_the_hosts_port():
-    cmd = [l for l in DOCKERFILE.splitlines() if l.startswith("CMD ")][0]
-    assert "--port ${PORT:-8000}" in cmd
 
 
 def test_the_api_memory_cap_is_set_per_host():
