@@ -40,3 +40,12 @@ def test_only_an_admin_key_can_read_it():
     with _client() as client:
         assert client.get(PATH).status_code == 401
         assert client.get(PATH, headers={"Authorization": f"Bearer {API_KEY}"}).status_code == 403
+
+
+def test_renders_measured_chain_with_three_hops_and_a_spoofed_entry():
+    headers = {"Authorization": f"Bearer {ADMIN_KEY}",
+               "X-Forwarded-For": "1.1.1.1, 203.0.113.7, 104.22.0.1, 10.0.0.1"}
+    with _client(hops=3) as client:
+        body = client.get(PATH, headers=headers).json()
+    assert body["x_forwarded_for"] == ["1.1.1.1", "203.0.113.7", "104.22.0.1", "10.0.0.1"]
+    assert body["client_ip_used"] == "203.0.113.7"

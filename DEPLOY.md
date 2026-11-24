@@ -125,7 +125,7 @@ On Render: 2R only. On a VM: 2A or 2B, then 2C.
    log, and is the exact command CI's smoke test runs (with `PORT=10000`). Don't set a Docker Command in the
    Dashboard either: one with quotes reached the shell as a single word and the deploy failed with exit 127.
 3. **Fill in the environment variables** it asks for (names only in `render.yaml`; values and formats in section 4).
-   Set `TRIAGE_TRUSTED_PROXY_HOPS` to `1` for now (section 8 measures the right value).
+   Set `TRIAGE_TRUSTED_PROXY_HOPS` to `3` (measured: section 8).
 4. **Custom domain:** the service's Settings > Custom Domains > add `api.gettriage.dev`, then at your DNS provider
    add the CNAME record Render shows. Render issues the certificate itself.
 5. **Deploys from GitHub:** copy the service's **Deploy Hook** URL (Settings > Deploy Hook) into a GitHub Actions
@@ -324,7 +324,7 @@ Check usage now and then in the Neon console's usage page, especially after laun
 | `TRIAGE_REQUEST_LOG_RETENTION_DAYS` | Request-log retention | empty (365) | Keep the default; the privacy policy says 12 months |
 | `TRIAGE_PUBLIC_STATS_MIN_REQUESTS` | Overview tab threshold | empty (100) | Keep the default in production |
 | `TRIAGE_KEYLESS_LOOKUP_MINUTES` | How long a keyless request's cost can be read back | empty (10) | |
-| `TRIAGE_TRUSTED_PROXY_HOPS` | Which `X-Forwarded-For` entry is the visitor | `1` | **Render only** (a VM's compose file sets it). `1` until measured: section 8 |
+| `TRIAGE_TRUSTED_PROXY_HOPS` | Which `X-Forwarded-For` entry is the visitor | `3` | **Render only** (a VM's compose file sets it). Measured: section 8 |
 | `TRIAGE_API_MEM_LIMIT` | The API container's memory cap | `640m` on a 1 GB VM | Empty: `1536m` (a 3 GB VM). Section 7 |
 
 Set in the image (or, on a VM, the compose file), not by you: `TRIAGE_TRUSTED_PROXY_HOPS=1` on a VM (section 8),
@@ -608,28 +608,42 @@ The demo's per-visitor limit and sign-in rate limits use the visitor's IP (store
 the API sees the proxy's address, and the visitor's arrives in `X-Forwarded-For`. `TRIAGE_TRUSTED_PROXY_HOPS=N` takes
 the N-th address from the right, so anything a client adds itself (further left) can't choose the address.
 
-**On Render: measure it.** Render's docs don't say how its proxies set `X-Forwarded-For` (checked 2026-11-22: not
-described anywhere in them; Cloudflare sits in front of Render for DDoS protection, so there may be more than one
-hop). Start with `1`: if that's too few, visitors share an allowance (annoying, not unsafe); too many would let a
-visitor pick their own address. After the first deploy, from your own machine:
+**On Render: measure it.** Render**On Render: `3` (measured 2026-11-23).** Render's docs don't say how its proxies set `X-Forwarded-For`, so it was
+measured with the admin endpoint, from a home connection:
 
 ```bash
 curl -s -H "Authorization: Bearer <an admin key>" https://api.gettriage.dev/v1/admin/forwarded-for
 ```
 
 It returns this request's `x_forwarded_for` list (and any `cf-connecting-ip` or `true-client-ip`), as the API saw it.
-Find your own public IP (`curl -s https://api.ipify.org`) in the list and count its position from the right: last is
-`1`, second-to-last is `2`. Set `TRIAGE_TRUSTED_PROXY_HOPS` to that in the Render Dashboard (it restarts the
-service), call the endpoint again (`client_ip_used` should be your IP), then do the two checks below. The endpoint
-needs an admin key and logs nothing.
+Both ways into the service gave the same three-entry chain (addresses here are examples):
 
-**On a VM: `1`, set by `docker-compose.yml`.** Caddy is the only proxy in front of the API, and it sets
+| Route | `x_forwarded_for` |
+|---|---|
+| `https://api.gettriage.dev` | `["203.0.113.7", "104.22.0.1", "10.0.0.1"]` |
+| the service's own `https://<name>.onrender.com` | `["203.0.113.7", "104.22.0.1", "10.0.0.1"]` |
+
+That is `[client, Cloudflare edge, Render internal]`: Cloudflare (in front of every Render service) adds the address
+that connected to it, then Render's proxies add Cloudflare's address and their own. The visitor is third from the
+right, so the value is `3`. With `3`, `client_ip_used` was the real IP; `cf-connecting-ip` and `true-client-ip` also
+held it, but they aren't used (they're only trustworthy if Cloudflare is guaranteed in front).
+
+**Why `3` can't be spoofed.** A client that sends its own `X-Forwarded-For: 1.1.1.1, 2.2.2.2` only adds entries on
+the left: Cloudflare appends after them, giving `[1.1.1.1, 2.2.2.2, client, Cloudflare edge, Render internal]`, and
+the third from the right is still the client. A chain with fewer than 3 entries (a request that skipped a proxy) falls
+back to the direct connection, so the worst case is visitors sharing an allowance, never choosing one. This holds only
+while **every** route in has the same 3 hops; both routes above were checked, so no Host restriction is needed. If
+Render or Cloudflare changes, or a custom domain is added behind another proxy, measure again: the endpoint needs an
+admin key and logs nothing. (`1`, the earlier placeholder, read Render's internal proxy, so every visitor shared one
+allowance.) `tests/test_demo_identity.py` checks this chain shape.
+
+mpose.yml`.** Caddy is the only proxy in front of the API, and it sets
 `X-Forwarded-For` to the address it received the connection from, ignoring any value the client sent (Caddy trusts no
 upstream proxies by default). So the rightmost entry is the visitor, which is what `1` reads. `0` would make every
 visitor look like Caddy's container and share one allowance; `2` would let a client pick its own address. If you ever
 put another proxy or CDN in front of Caddy, this changes.
 
-Check it after the first deploy:
+Check it after the first deploy (on Render, both passed with `3` on 2026-11-23):
 
 1. **A made-up header isn't trusted:** send one demo chat message from your computer, then compare
    `curl -s https://api.gettriage.dev/v1/demo/status` with

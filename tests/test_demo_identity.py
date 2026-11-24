@@ -35,6 +35,35 @@ def test_two_hops_take_the_second_from_the_right():
     assert client_ip(request("1.1.1.1, 203.0.113.9, 10.1.1.1"), 2) == "203.0.113.9"
 
 
+# Render, measured (DEPLOY.md section 8): [client, Cloudflare edge, Render internal], so 3 hops
+RENDER_CLIENT, CLOUDFLARE_EDGE, RENDER_INTERNAL = "203.0.113.7", "104.22.0.1", "10.0.0.1"
+RENDER_CHAIN = f"{RENDER_CLIENT}, {CLOUDFLARE_EDGE}, {RENDER_INTERNAL}"
+
+
+def test_render_three_hops_find_the_client_in_the_measured_chain():
+    assert client_ip(request(RENDER_CHAIN), 3) == RENDER_CLIENT
+
+
+@pytest.mark.parametrize("spoofed", ["1.1.1.1", "1.1.1.1, 2.2.2.2", "1.1.1.1, 2.2.2.2, 3.3.3.3",
+                                     f"{CLOUDFLARE_EDGE}, {RENDER_INTERNAL}", "garbage, , not-an-ip"])
+def test_render_three_hops_a_clients_own_forwarded_for_cant_choose_the_address(spoofed):
+    # Cloudflare appends after whatever the client sent, then Render's proxies append theirs
+    assert client_ip(request(f"{spoofed}, {RENDER_CHAIN}"), 3) == RENDER_CLIENT
+    # the same, with the client's value arriving as a separate header line
+    assert client_ip(request(xff_headers=[spoofed, RENDER_CHAIN]), 3) == RENDER_CLIENT
+
+
+def test_render_three_hops_a_short_chain_falls_back_to_the_connection():
+    # a request that skipped a proxy: visitors may share an allowance, but nobody picks their own address
+    assert client_ip(request(f"{CLOUDFLARE_EDGE}, {RENDER_INTERNAL}"), 3) == "10.0.0.1"
+    assert client_ip(request(RENDER_INTERNAL), 3) == "10.0.0.1"
+
+
+def test_one_hop_on_render_would_read_renders_own_proxy():
+    # the earlier placeholder: every visitor looked like Render's internal proxy and shared one allowance
+    assert client_ip(request(RENDER_CHAIN), 1) == RENDER_INTERNAL
+
+
 def test_too_few_entries_falls_back_to_the_connection():
     assert client_ip(request(), 1) == "10.0.0.1"                    # no header: the request skipped the proxy
     assert client_ip(request("203.0.113.9"), 2) == "10.0.0.1"
