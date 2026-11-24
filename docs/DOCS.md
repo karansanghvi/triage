@@ -519,6 +519,9 @@ total; when that is used up, the demo pauses until 00:00 UTC. A demo response sa
 in `X-Triage-Demo-Remaining`, `X-Triage-Demo-Limit` and `X-Triage-Demo-Resets`, and `X-Triage-Max-Tokens` shows the
 answer length it used.
 
+Each message counts once, however many models Triage tries. Stopped answers count; if a request fails on Triage's
+side (every model failed, or the answer broke off part-way), it doesn't count.
+
 Account limits:
 
 | What | Limit |
