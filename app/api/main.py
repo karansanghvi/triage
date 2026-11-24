@@ -603,6 +603,26 @@ def demo_usage(row: RequestRow, reserved: int) -> tuple:
     return served + truncated, calls
 
 
+# Errors after admission that aren't the visitor's doing: the routing found nothing it could run (these cost no
+# model call), or a named model thought through its whole demo-capped max_tokens and wrote nothing
+REFUNDED_CLIENT_ERRORS = frozenset({"model_not_found", "model_not_allowed", "no_usable_model", "truncated"})
+
+
+def demo_refund(row: RequestRow) -> bool:
+    """Whether an admitted demo request gives the visitor's request back (DemoLimiter.settle(refund=True)): it
+    failed on the server's side, so the visitor got no answer through no fault of theirs.
+
+    Refunded: any 5xx (every model failed, timed out or was overloaded; a model failed before a non-streamed
+    answer was complete), a stream that broke part-way (stream_interrupted:*, sent as a 200 stream), and
+    REFUNDED_CLIENT_ERRORS. Still counted: answers (cache hits too), and stopped requests (the answer was
+    streaming, and refunding a Stop would make "read it, then press Stop" free). Requests refused before
+    admission (validation, 413, 429, ...) were never counted."""
+    if row.status != "error":
+        return False
+    kind = row.error_kind or ""
+    return (row.http_status or 0) >= 500 or kind.startswith("stream_interrupted:") or kind in REFUNDED_CLIENT_ERRORS
+
+
 # ---------- the app ----------
 
 SDK_IMPORT_DELAY = 0.5      # seconds after startup: uvicorn binds the port first
@@ -842,14 +862,14 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
         recorder = _RecordingPredictor(deps.predictor)
         request_deps = dataclasses.replace(deps, predictor=recorder)    # same client, registry and log
 
-        def persist():
+        def persist(refund: bool):
             deps.log.write(row)
             request_logger.info(json_log_line(row))
             for provider, detail in invalidate:
                 deps.provider_keys.set_status(user_id, provider, "invalid", detail, verified=True)
             if admitted:                   # replace the token reservation with what it really used
                 tokens, calls = demo_usage(row, admitted[0].reserved_tokens)
-                deps.demo_limiter.settle(admitted[0], tokens=tokens, calls=calls)
+                deps.demo_limiter.settle(admitted[0], tokens=tokens, calls=calls, refund=refund)
 
         async def finish(status="ok", http_status=200, error_kind=None):
             if logged:
@@ -860,8 +880,12 @@ def create_app(deps=None, auth: Optional[Auth] = None, public: Optional[bool] = 
             row.latency_ms = round((time.perf_counter() - started) * 1000, 1)
             _apply_inputs(row, recorder.prediction)
             row.training_eligible = is_training_eligible(row)
+            # Decided once, here, so a request is settled (and maybe refunded) exactly once, whatever path ends it
+            refunded = bool(admitted) and admitted[0].kind == "demo" and demo_refund(row)
             # A worker thread: a database round trip (Postgres over the network) must not stall the event loop
-            await anyio.to_thread.run_sync(persist)
+            await anyio.to_thread.run_sync(persist, refunded)
+            if refunded:                   # an error response sent after this shows the request given back
+                request.state.triage_headers["X-Triage-Demo-Remaining"] = str(admitted[0].remaining + 1)
 
         if not auto and body.model not in deps.registry:              # logged, then an OpenAI-style 404
             await finish("error", 404, "model_not_found")

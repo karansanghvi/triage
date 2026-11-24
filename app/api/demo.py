@@ -322,22 +322,32 @@ class DemoLimiter:
                 self._count_visitor(db, day, "byok", visitor)
         return Admission("byok", visitor, day, 0, limit - (used + 1), limit)
 
-    def settle(self, admission: Admission, tokens: int, calls: int) -> None:
+    def settle(self, admission: Admission, tokens: int, calls: int, refund: bool = False) -> None:
         """Record what an admitted request actually used, once, when it has finished (or failed).
 
         demo: the reservation is replaced by `tokens` (the day's tokens change by tokens - reserved_tokens), and
         `calls` (every model call it made: retries, fallbacks, truncated attempts) is added to the day's calls.
+        refund=True (the visitor got no answer because of the server or its providers: app/api/main.py's
+        demo_refund) also gives the request back: the visitor's and the demo-wide request counts go down by 1
+        (never below 0). Tokens and calls are still recorded, and the per-minute window keeps its entry, because
+        the providers were still asked. Everything happens in one transaction.
         Applied to admission.day, so a request that ends after midnight doesn't count against the new day.
-        byok: nothing to record (a no-op).
+        byok: nothing to record (a no-op), refund or not.
         """
         if admission.kind != "demo":
             return
-        d = self._days
+        d, v = self._days, self._visitors
         with self._lock:
             with self._transaction() as db:
                 # UPDATE only: if that day's row is gone (cleaned up), there's nothing left to correct
                 db.execute(update(d).where(d.c.day == admission.day).values(
                     tokens=d.c.tokens + (tokens - admission.reserved_tokens), calls=d.c.calls + calls))
+                if refund:
+                    db.execute(update(d).where(d.c.day == admission.day, d.c.requests > 0)
+                               .values(requests=d.c.requests - 1))
+                    db.execute(update(v).where(v.c.day == admission.day, v.c.kind == "demo",
+                                               v.c.visitor == admission.visitor, v.c.requests > 0)
+                               .values(requests=v.c.requests - 1))
 
     def status(self, visitor: str) -> DemoStatus:
         """Today's demo state for `visitor` (see DemoStatus). Counts nothing and needs no window slot."""

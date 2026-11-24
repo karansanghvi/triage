@@ -130,6 +130,13 @@ An `Authorization` header that is sent but invalid is always a 401. Every other 
   `max_tokens` is lowered to 2,048, and the response says so in `X-Triage-Max-Tokens`.
 - No sync verification.
 
+**What counts:** one request per message sent, however many model calls it takes (retries, fallbacks; those count
+toward the 600 model calls). Cache hits and stopped answers count. A request that fails on the server's side is
+given back: every model failed, timed out or was overloaded (503/504), a model failed mid-answer (502, or a stream
+broken part-way), or no model could run it (`no_usable_model`, `model_not_allowed`, `model_not_found`, `truncated`).
+Its model calls and tokens still count toward the demo-wide budgets. Requests refused before they start (400, 413,
+429) never count, and neither do `/healthz`, `/readyz` or `GET /v1/demo/status`.
+
 Refusals are 429s with `Retry-After`: `demo_limit_reached` and `demo_busy` suggest adding a provider key, and
 `demo_paused` means the demo is paused until 00:00 UTC. A prompt over the limit is a 413 `demo_prompt_too_long`,
 and `X-Triage-Verify: sync` in the demo is a 400 `demo_unsupported`. Public BYOK (provider key headers, no Triage
@@ -139,8 +146,9 @@ Demo responses carry `X-Triage-Demo-Remaining`, `-Limit` and `-Resets`. `GET /v1
 the visitor's allowance and whether the demo is paused, so a website can show it before the first request.
 
 **Visitors** are identified by IP. Set `TRIAGE_TRUSTED_PROXY_HOPS` to the number of proxies in front of the
-server; the default 0 ignores `X-Forwarded-For`, which any client can fake. IPs are stored only as an HMAC with
-`TRIAGE_HASH_SECRET` (IPv6 grouped by /64), and the request log only ever sees `key_id` `demo` or `public`.
+server (Render: `3`, measured in DEPLOY.md section 8); the default 0 ignores `X-Forwarded-For`, which any client
+can fake. IPs are stored only as an HMAC with `TRIAGE_HASH_SECRET` (IPv6 grouped by /64), and the request log
+only ever sees `key_id` `demo` or `public`.
 
 Demo and BYOK requests are never used for retraining and get no background labels.
 

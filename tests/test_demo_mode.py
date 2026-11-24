@@ -106,6 +106,17 @@ def test_with_one_trusted_hop_a_faked_left_entry_doesnt_matter():
     assert chat(http, ip="8.8.8.8, 203.0.113.7").status_code == 429
 
 
+RENDER_PROXIES = "104.22.0.1, 10.0.0.1"           # Cloudflare edge, Render internal (DEPLOY.md section 8)
+
+
+def test_with_renders_three_hops_spoofed_entries_share_the_real_visitors_allowance():
+    http, _ = app(hops=3, visitor_daily_requests=1)
+    assert chat(http, ip=f"203.0.113.7, {RENDER_PROXIES}").status_code == 200
+    assert chat(http, ip=f"9.9.9.9, 203.0.113.7, {RENDER_PROXIES}").status_code == 429
+    assert chat(http, ip=f"9.9.9.9, 8.8.8.8, 203.0.113.7, {RENDER_PROXIES}").status_code == 429
+    assert chat(http, ip=f"198.51.100.4, {RENDER_PROXIES}").status_code == 200      # another visitor
+
+
 def test_the_allowance_comes_back_the_next_utc_day():
     clock = Clock()
     http, _ = app(clock=clock, visitor_daily_requests=1)
@@ -355,9 +366,9 @@ class ThreadRecordingLimiter(DemoLimiter):
         self._record("admit_public_byok")
         return super().admit_public_byok(visitor)
 
-    def settle(self, admission, tokens, calls):
+    def settle(self, admission, tokens, calls, refund=False):
         self._record("settle")
-        return super().settle(admission, tokens, calls)
+        return super().settle(admission, tokens, calls, refund=refund)
 
 
 def test_every_limiter_call_from_the_api_runs_in_a_worker_thread():
