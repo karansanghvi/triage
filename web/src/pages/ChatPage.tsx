@@ -15,6 +15,7 @@ import { isUsableKey, useProviderKeys } from "@/context/ProviderKeysContext"
 import { fetchStoppedCost, streamChat } from "@/lib/api"
 import { server } from "@/lib/server"
 import { isLongPrompt } from "@/lib/wake"
+import { createSendGuard, type SendGuard } from "@/lib/sendGuard"
 import { TriageError } from "@/lib/errors"
 import { DEFAULT_QUALITY } from "@/lib/quality"
 import { PROVIDERS, type ProviderKey } from "@/lib/account"
@@ -64,6 +65,11 @@ export default function ChatPage() {
   // The answer arriving now: shown as it streams, saved to the chat only once it finishes, stops or fails
   const [live, setLive] = useState<{ id: string; content: string } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  // One request at a time, claimed synchronously: `busy` is React state and lags a render behind, so it alone
+  // can't stop a second send in the same moment (src/lib/sendGuard.ts)
+  const guardRef = useRef<SendGuard | null>(null)
+  if (guardRef.current === null) guardRef.current = createSendGuard()
+  const sendGuard = guardRef.current
 
   const isEmpty = messages.length === 0
 
@@ -192,21 +198,25 @@ export default function ChatPage() {
     abortRef.current?.abort()
   }
 
+  // Every request goes through the guard: one POST per message sent, never a second for the same one
+  function send(history: Message[]): boolean {
+    return sendGuard.run(() => requestAnswer(history, activeId, currentMode())) !== null
+  }
+
   function handleSend() {
     const content = input.trim()
-    if (!content || busy) return
+    if (!content || busy || sendGuard.busy()) return
 
     const userMessage: UserMessage = { id: crypto.randomUUID(), role: "user", content }
-    setInput("")
-    requestAnswer([...messages, userMessage], activeId, currentMode())
+    if (send([...messages, userMessage])) setInput("")
   }
 
   // Resend the conversation up to the failed answer
   function handleRetry(failedId: string) {
-    if (busy) return
+    if (busy || sendGuard.busy()) return
     const index = messages.findIndex((m) => m.id === failedId)
     if (index === -1) return
-    requestAnswer(messages.slice(0, index), activeId, currentMode())
+    send(messages.slice(0, index))
   }
 
   // Tapping an answer's footer: select it, and below lg (no side panel) open the details as a sheet
@@ -238,6 +248,7 @@ export default function ChatPage() {
             onSend={handleSend}
             quality={quality}
             onQualityChange={setQuality}
+            disabled={busy}
             streaming={busy && live !== null}
             onStop={handleStop}
         />
